@@ -266,31 +266,6 @@ async function loadSkills() {
   }
 }
 
-async function loadLogs() {
-  try {
-    const current = await API.get('/api/runs/current');
-    const logEl = document.getElementById('log-output');
-    if (current && current.stdout) {
-      logEl.classList.remove('empty');
-      logEl.textContent = current.stdout;
-      logEl.scrollTop = logEl.scrollHeight;
-    } else if (current) {
-      logEl.classList.remove('empty');
-      logEl.textContent = 'Running... waiting for output...';
-    } else {
-      // Show most recent run's output
-      const runs = await API.get('/api/runs?limit=1');
-      if (runs.length > 0 && runs[0].stdout) {
-        logEl.classList.remove('empty');
-        logEl.textContent = `[Last run: ${runs[0].status}]\n\n${formatClaudeOutput(runs[0].stdout)}`;
-      } else {
-        logEl.classList.add('empty');
-        logEl.textContent = 'Waiting for a running job...';
-      }
-    }
-  } catch { /* silent */ }
-}
-
 // === Render ===
 function renderJobs() {
   const body = document.getElementById('jobs-body');
@@ -357,7 +332,7 @@ function renderRuns(runs) {
       <tr class="run-detail${isExpanded ? ' show' : ''}" id="run-detail-${r.id}">
         <td colspan="6">
           ${r.error_msg ? `<div class="log-label">ERROR</div><div class="log-box" style="color:var(--red)">${esc(r.error_msg)}</div>` : ''}
-          ${r.stdout ? `<div class="log-label">STDOUT</div><div class="log-box">${esc(formatClaudeOutput(r.stdout))}</div>` : ''}
+          ${r.stdout ? `<div class="log-label">OUTPUT</div><div class="log-box">${esc(formatClaudeOutput(r.stdout))}</div>` : ''}
           ${r.stderr ? `<div class="log-label">STDERR</div><div class="log-box" style="color:var(--red)">${esc(r.stderr)}</div>` : ''}
           ${!r.stdout && !r.stderr && !r.error_msg ? '<div style="color:var(--text-dim);font-size:11px">No output</div>' : ''}
         </td>
@@ -526,48 +501,76 @@ function esc(str) {
   return el.innerHTML;
 }
 
-// === Parse Claude JSON output into readable text ===
+// === Parse Claude stream-json output into readable text ===
+function formatToolUse(block) {
+  const name = block.name || 'tool';
+  const input = block.input || {};
+  switch (name) {
+    case 'Edit':
+    case 'Write':
+    case 'Read':
+      return `⚙️ ${name}: ${input.file_path || ''}`;
+    case 'Bash':
+      return `⚙️ ${(input.description || input.command || name).slice(0, 80)}`;
+    case 'Skill':
+      return `⚙️ Skill: /${input.skill || ''} ${input.args || ''}`.trim();
+    case 'Agent':
+      return `⚙️ Agent: ${(input.description || '').slice(0, 80)}`;
+    case 'Grep':
+    case 'Glob':
+      return `⚙️ ${name}: ${input.pattern || ''}`;
+    default:
+      return `⚙️ ${name}`;
+  }
+}
+
 function formatClaudeOutput(raw) {
   if (!raw || !raw.trim()) return '';
-  try {
-    let entries;
-    const trimmed = raw.trim();
-    if (trimmed.startsWith('[')) {
-      entries = JSON.parse(trimmed);
-    } else {
-      entries = trimmed.split('\n').filter(l => l.trim()).map(l => JSON.parse(l));
+
+  const lines = raw.trim().split('\n');
+  const parts = [];
+  let hasJsonLine = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let entry;
+    try {
+      entry = JSON.parse(trimmed);
+    } catch {
+      continue; // skip non-JSON lines
     }
 
-    const parts = [];
-    for (const entry of entries) {
-      if (entry.type === 'assistant' && entry.message?.content) {
-        for (const block of entry.message.content) {
-          if (block.type === 'text' && block.text?.trim()) {
-            parts.push(block.text.trim());
-          }
-          if (block.type === 'tool_use') {
-            const name = block.name || 'tool';
-            if (name === 'Write' || name === 'Edit') {
-              parts.push(`⚙️ ${name}: ${block.input?.file_path || ''}`);
-            } else if (name === 'Bash') {
-              parts.push(`⚙️ ${block.input?.description || block.input?.command || name}`);
-            } else if (name === 'Skill') {
-              parts.push(`⚙️ Skill: /${block.input?.skill || ''} ${block.input?.args || ''}`);
-            }
-          }
+    hasJsonLine = true;
+
+    if (entry.type === 'assistant' && entry.message?.content) {
+      for (const block of entry.message.content) {
+        if (block.type === 'text' && block.text?.trim()) {
+          parts.push(block.text.trim());
+        }
+        if (block.type === 'tool_use') {
+          parts.push(formatToolUse(block));
         }
       }
-      if (entry.type === 'result' && entry.result) {
-        parts.push('─'.repeat(40));
-        parts.push(`✅ RESULT (${entry.duration_ms ? Math.round(entry.duration_ms/1000) + 's' : ''})`);
-        parts.push(entry.result);
-      }
     }
 
-    return parts.length > 0 ? parts.join('\n\n') : raw;
-  } catch {
-    return raw; // fallback: show raw if parsing fails
+    if (entry.type === 'result') {
+      parts.push('─'.repeat(40));
+      const dur = entry.duration_ms ? Math.round(entry.duration_ms / 1000) + 's' : '';
+      const cost = entry.cost_usd ? '$' + entry.cost_usd.toFixed(2) : '';
+      const tokens = entry.input_tokens && entry.output_tokens
+        ? `${entry.input_tokens}→${entry.output_tokens} tokens` : '';
+      const meta = [dur, cost, tokens].filter(Boolean).join(' | ');
+      parts.push(`✅ DONE${meta ? ' (' + meta + ')' : ''}`);
+      if (entry.result) parts.push(entry.result);
+    }
   }
+
+  // Fallback: if no JSON lines parsed, return raw text (backward compat)
+  if (!hasJsonLine) return raw;
+
+  return parts.length > 0 ? parts.join('\n\n') : raw;
 }
 
 // === Polling ===
@@ -577,7 +580,6 @@ function poll() {
   const activeTab = document.querySelector('.tab.active')?.dataset.tab;
   if (activeTab === 'jobs') loadJobs();
   if (activeTab === 'history') loadRuns();
-  if (activeTab === 'logs') loadLogs();
 }
 
 // === Init ===

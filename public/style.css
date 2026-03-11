@@ -526,25 +526,6 @@ tr:hover {
   box-shadow: 0 0 20px var(--red-glow);
 }
 
-/* === Logs === */
-.log-output {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  padding: 14px;
-  font-size: 12px;
-  line-height: 1.7;
-  max-height: 500px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--green);
-}
-
-.log-output.empty {
-  color: var(--text-dim);
-  font-style: italic;
-}
-
 /* === Toolbar === */
 .toolbar {
   display: flex;
