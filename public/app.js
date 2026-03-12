@@ -427,6 +427,7 @@ function openCreateModal() {
   document.getElementById('form-timeout').value = '600000';
   document.getElementById('form-retries').value = '1';
   document.getElementById('form-wake').checked = false;
+  document.getElementById('form-discord').checked = false;
   onFreqChange();
   populateSkillSelect();
   showModal();
@@ -442,6 +443,7 @@ function openEditModal(id) {
   document.getElementById('form-timeout').value = job.timeout_ms;
   document.getElementById('form-retries').value = job.max_retries;
   document.getElementById('form-wake').checked = !!job.run_on_wake;
+  document.getElementById('form-discord').checked = !!job.discord_notify;
   populateSkillSelect(job.skill_name);
   parseCronToForm(job.cron_expr);
   showModal();
@@ -476,6 +478,7 @@ async function saveJob(e) {
     timeout_ms: parseInt(document.getElementById('form-timeout').value, 10),
     max_retries: parseInt(document.getElementById('form-retries').value, 10),
     run_on_wake: document.getElementById('form-wake').checked,
+    discord_notify: document.getElementById('form-discord').checked,
   };
 
   try {
