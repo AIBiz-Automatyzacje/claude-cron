@@ -30,8 +30,7 @@ Kolejność:
 Jeśli chcesz harmonogram lecący 24/7 — postaw claude-cron na VPS-ie i podłącz dashboard przez Tailscale.
 
 ### Wymagania
-- Serwer VPS z Linuxem (Hostinger, DigitalOcean, Hetzner, etc.)
-- Tailscale na obu urządzeniach (VPS + Twój komputer) — [pobierz](https://tailscale.com/download)
+- Serwer VPS z Linuxem (Hostinger, DigitalOcean, Hetzner, etc.) — installer instaluje Tailscale automatycznie
 
 ### 1.1 — SSH na VPS
 
@@ -57,7 +56,7 @@ Installer zrobi wszystko automatycznie. Po drodze zapyta:
 
 | Pytanie | Co wpisać |
 |---------|-----------|
-| **Log in to Claude CLI** | `Y` — przeniesie Cię na usera `claude`. Auto-odpali `claude`, zaloguj się w przeglądarce, wyjdź (`/exit`), potem `exit` żeby wrócić do installera |
+| **Log in to Claude CLI** | `Y` — auto-odpali `claude` jako user `claude`. Zaloguj się w przeglądarce, wyjdź przez `/exit` — installer automatycznie kontynuuje |
 | **Workspace** | Np. `/home/claude/vault` |
 | **Port** | Enter (domyślny 7777) |
 | **Discord webhook** | URL albo puste |
@@ -110,17 +109,22 @@ claude --version
 - Jeśli działa — masz ✅
 - Jeśli `command not found` — zainstaluj:
   ```bash
-  npm install -g @anthropic-ai/claude-code
+  curl -fsSL https://claude.ai/install.sh | bash
   claude   # pierwsze uruchomienie poprosi o logowanie w przeglądarce
   ```
 
+Zainstaluj też **Tailscale** jeśli używasz VPS-a:
+```bash
+brew install --cask tailscale
+```
+Albo pobierz z [tailscale.com/download](https://tailscale.com/download).
+
 #### Krok 2 — Stwórz folder na projekt
 
-Wybierz gdzie chcesz trzymać claude-cron. Zalecane: `~/Documents/Kodowanie/`:
+Wybierz folder w którym chcesz trzymać claude-cron i wejdź do niego w terminalu. Przykład:
 
 ```bash
-mkdir -p ~/Documents/Kodowanie
-cd ~/Documents/Kodowanie
+cd ~/Documents
 ```
 
 #### Krok 3 — Sklonuj repo
@@ -152,13 +156,13 @@ source ~/.zshrc
 node server.js
 ```
 
+> **To pierwszy i ostatni raz kiedy uruchamiasz serwer ręcznie.** Jeśli włączyłeś autostart — od następnej sesji Claude Code serwer odpali się sam w tle. Nie musisz nic robić.
+
 #### Krok 6 — Sprawdź dashboard
 
 Otwórz w przeglądarce: **[http://localhost:7777](http://localhost:7777)**
 
 Powinieneś zobaczyć retro arcade dashboard. Gotowe! 🎉
-
-> Następnym razem serwer odpali się sam przy starcie Claude Code (jeśli włączyłeś autostart). Nie musisz nic robić.
 
 ---
 
@@ -217,6 +221,12 @@ claude --version
   ```
   Po instalacji **najpewniej dostaniesz info że Claude nie jest w PATH** — zobacz [Rozwiązywanie problemów](#-windows-claude-nie-jest-rozpoznawany).
 
+**Tailscale** (jeśli używasz VPS-a):
+```powershell
+winget install Tailscale.Tailscale
+```
+Albo pobierz z [tailscale.com/download](https://tailscale.com/download).
+
 #### Krok 2 — Stwórz folder na projekt
 
 W Eksploratorze plików stwórz folder gdzie chcesz, np. `C:\Users\<ty>\Documents\Kodowanie\`. Potem **kliknij prawym przyciskiem na folder → "Open in Terminal"** (Windows 11) lub otwórz PowerShell i wejdź do folderu:
@@ -254,17 +264,17 @@ Setup pyta o 4 rzeczy:
 #### Krok 6 — Odpal serwer
 
 ```powershell
-cd $env:USERPROFILE\Documents\Kodowanie\claude-cron
+cd claude-cron
 node server.js
 ```
+
+> **To pierwszy i ostatni raz kiedy uruchamiasz serwer ręcznie.** Jeśli włączyłeś autostart — od następnej sesji Claude Code serwer odpali się sam w tle. Nie musisz nic robić.
 
 #### Krok 7 — Sprawdź dashboard
 
 Otwórz w przeglądarce: **[http://localhost:7777](http://localhost:7777)**
 
 Gotowe! 🎉
-
-> Następnym razem serwer odpali się sam przy starcie Claude Code w Twoim workspace'cie.
 
 ---
 
