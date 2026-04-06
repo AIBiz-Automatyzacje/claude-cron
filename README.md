@@ -14,41 +14,72 @@ Automatyczny scheduler dla [Claude Code](https://claude.ai/code). Ustawiasz co i
 
 ---
 
-## ⚡ Quick Start (dla niecierpliwych)
+## 📋 Instalacja
 
-Jeśli wiesz co robisz i masz już Node.js + Claude CLI:
+Kolejność:
 
-### 🍎 Mac
+1. **Krok 1 — VPS** (jeśli go używasz, opcjonalne)
+2. **Krok 2 — Komputer lokalny** — wybierz swoją platformę: 🍎 Mac lub 🪟 Windows
 
-```bash
-cd ~/Documents  # albo gdzie chcesz
-git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git
-cd claude-cron
-bash setup.sh
-source ~/.zshrc
-node server.js
-```
-
-### 🪟 Windows (PowerShell)
-
-```powershell
-cd $env:USERPROFILE\Documents  # albo gdzie chcesz
-git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git
-cd claude-cron
-powershell -ExecutionPolicy Bypass -File setup-windows.ps1
-# zamknij i otwórz nowy terminal
-node server.js
-```
-
-Otwórz `http://localhost:7777` 🎉
-
-> Coś nie działa? Przewiń do [Rozwiązywanie problemów](#rozwiązywanie-problemów).
+> *Nie masz VPS-a?* Pomiń krok 1 — claude-cron zadziała tylko lokalnie. Joby będą lecieć tylko gdy komputer nie śpi.
 
 ---
 
-## 📋 Pełna instrukcja
+## ☁️ Krok 1 — Instalacja na VPS (opcjonalne)
 
-Jeśli to Twój pierwszy raz — leć po kolei.
+Jeśli chcesz harmonogram lecący 24/7 — postaw claude-cron na VPS-ie i podłącz dashboard przez Tailscale.
+
+### Wymagania
+- Serwer VPS z Linuxem (Hostinger, DigitalOcean, Hetzner, etc.)
+- Tailscale na obu urządzeniach (VPS + Twój komputer) — [pobierz](https://tailscale.com/download)
+
+### 1.1 — SSH na VPS
+
+```bash
+ssh root@TWOJE_IP_SERWERA
+```
+
+> **Gdzie znaleźć IP serwera?** W panelu hostingu (np. Hostinger → VPS → IPv4).
+
+### 1.2 — Zainstaluj prereqs
+
+```bash
+apt update && apt install -y git curl
+```
+
+### 1.3 — Odpal installer
+
+```bash
+git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git /tmp/claude-cron-install && bash /tmp/claude-cron-install/scripts/install-vps.sh
+```
+
+Installer zrobi wszystko automatycznie. Po drodze zapyta:
+
+| Pytanie | Co wpisać |
+|---------|-----------|
+| **Log in to Claude CLI** | `Y` — przeniesie Cię na usera `claude`. Auto-odpali `claude`, zaloguj się w przeglądarce, wyjdź (`/exit`), potem `exit` żeby wrócić do installera |
+| **Workspace** | Np. `/home/claude/vault` |
+| **Port** | Enter (domyślny 7777) |
+| **Discord webhook** | URL albo puste |
+| **Timezone** | Enter (Warsaw) |
+| **Tailscale Funnel** | `Y` jeśli chcesz webhoki |
+| **Auto-update cron** | `Y` — codzienny git pull o 6:00 |
+
+### 1.4 — Zapisz Tailscale IP
+
+Na końcu installer pokaże **Tailscale IP VPS-a**. **Zapisz to IP** — będziesz go potrzebować w kroku 2! Jeśli nie widzisz:
+
+```bash
+tailscale ip -4
+```
+
+Przykład: `100.86.100.113`
+
+---
+
+## 💻 Krok 2 — Instalacja lokalna
+
+Wybierz swoją platformę:
 
 ### 🍎 Mac — instalacja krok po kroku
 
@@ -61,7 +92,14 @@ node -v
 ```
 
 - Jeśli widzisz np. `v20.11.0` — masz ✅
-- Jeśli widzisz `command not found` lub wersja < 18 — pobierz z [nodejs.org](https://nodejs.org)
+- Jeśli `command not found` lub wersja < 18 — zainstaluj jedną z tych opcji:
+  ```bash
+  # Opcja A: przez Homebrew (zalecane)
+  brew install node
+
+  # Opcja B: pobierz instalator
+  # https://nodejs.org → LTS
+  ```
 
 Sprawdź Claude Code:
 
@@ -70,7 +108,11 @@ claude --version
 ```
 
 - Jeśli działa — masz ✅
-- Jeśli `command not found` — zainstaluj: `npm install -g @anthropic-ai/claude-code`, potem `claude` (pierwsze uruchomienie poprosi o logowanie w przeglądarce)
+- Jeśli `command not found` — zainstaluj:
+  ```bash
+  npm install -g @anthropic-ai/claude-code
+  claude   # pierwsze uruchomienie poprosi o logowanie w przeglądarce
+  ```
 
 #### Krok 2 — Stwórz folder na projekt
 
@@ -98,7 +140,7 @@ Setup pyta o 4 rzeczy:
 
 | Krok | Co wpisać |
 |------|-----------|
-| **1. Tailscale IP VPS-a** | Puste — Enter (jeśli nie masz VPS-a). Jeśli masz — wklej IP z [sekcji VPS](#vps---joby-247-opcjonalnie) |
+| **1. Tailscale IP VPS-a** | Puste — Enter (jeśli nie masz VPS-a). Jeśli masz — wklej IP zapisane w kroku 1.4 |
 | **2. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). **Tip:** przeciągnij folder z Findera do terminala — automatycznie wklei ścieżkę |
 | **3. Autostart** | `Y` — serwer startuje automatycznie z każdą sesją Claude Code |
 | **4. Discord** | URL webhooka albo puste — Enter |
@@ -132,7 +174,14 @@ node -v
 ```
 
 - Jeśli widzisz np. `v20.11.0` — masz ✅
-- Jeśli `not recognized` lub wersja < 18 — pobierz z [nodejs.org](https://nodejs.org)
+- Jeśli `not recognized` lub wersja < 18 — zainstaluj jedną z tych opcji:
+  ```powershell
+  # Opcja A: przez winget (Windows 10/11)
+  winget install OpenJS.NodeJS
+
+  # Opcja B: pobierz instalator
+  # https://nodejs.org → LTS
+  ```
 
 **Git:**
 ```powershell
@@ -140,10 +189,18 @@ git --version
 ```
 
 - Jeśli działa — masz ✅
-- Jeśli nie — pobierz [Git for Windows](https://git-scm.com/download/win)
+- Jeśli `not recognized` — zainstaluj:
+  ```powershell
+  winget install Git.Git
+  ```
 
 **Visual Studio Build Tools** — wymagane przez `better-sqlite3`. Bez tego `npm install` się wywali.
 
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+Albo ręcznie:
 1. Pobierz: [visualstudio.microsoft.com/visual-cpp-build-tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
 2. Podczas instalacji **zaznacz "Desktop development with C++"**
 3. Zainstaluj (~3-5 GB)
@@ -185,7 +242,7 @@ Setup pyta o 4 rzeczy:
 
 | Krok | Co wpisać |
 |------|-----------|
-| **1. Tailscale IP VPS-a** | Puste — Enter (jeśli nie masz VPS-a). Jeśli masz — wklej IP z [sekcji VPS](#vps---joby-247-opcjonalnie) |
+| **1. Tailscale IP VPS-a** | Puste — Enter (jeśli nie masz VPS-a). Jeśli masz — wklej IP zapisane w kroku 1.4 |
 | **2. Workspace** | **Wklej pełną ścieżkę** do folderu, np. `C:\Users\kacpe\OneDrive\Obsidian\Vault`. Drag & drop z Eksploratora **nie działa** w PowerShell — musisz wkleić ścieżkę ręcznie |
 | **3. Autostart** | `Y` — serwer startuje automatycznie z Claude Code |
 | **4. Discord** | URL webhooka albo puste — Enter |
@@ -208,66 +265,6 @@ Otwórz w przeglądarce: **[http://localhost:7777](http://localhost:7777)**
 Gotowe! 🎉
 
 > Następnym razem serwer odpali się sam przy starcie Claude Code w Twoim workspace'cie.
-
----
-
-## ☁️ VPS — joby 24/7 (opcjonalnie)
-
-Bez VPS-a joby działają tylko gdy Twój komputer nie śpi. Jeśli chcesz harmonogram lecący 24/7 — postaw claude-cron na VPS-ie i podłącz dashboard przez Tailscale.
-
-### Wymagania
-- Serwer VPS z Linuxem (Hostinger, DigitalOcean, Hetzner, etc.)
-- Tailscale na obu urządzeniach (VPS + Twój komputer) — [pobierz](https://tailscale.com/download)
-
-### Krok 1 — SSH na VPS
-
-```bash
-ssh root@TWOJE_IP_SERWERA
-```
-
-> **Gdzie znaleźć IP serwera?** W panelu hostingu (np. Hostinger → VPS → IPv4).
-
-### Krok 2 — Zainstaluj prereqs
-
-```bash
-apt update && apt install -y git curl
-```
-
-### Krok 3 — Odpal installer
-
-```bash
-git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git /tmp/claude-cron-install && bash /tmp/claude-cron-install/scripts/install-vps.sh
-```
-
-Installer zrobi wszystko automatycznie. Po drodze zapyta:
-
-| Pytanie | Co wpisać |
-|---------|-----------|
-| **Log in to Claude CLI** | `Y` — przeniesie Cię na usera `claude`. Auto-odpali `claude`, zaloguj się w przeglądarce, wyjdź (`/exit`), potem `exit` żeby wrócić do installera |
-| **Workspace** | Np. `/home/claude/vault` |
-| **Port** | Enter (domyślny 7777) |
-| **Discord webhook** | URL albo puste |
-| **Timezone** | Enter (Warsaw) |
-| **Tailscale Funnel** | `Y` jeśli chcesz webhoki |
-| **Auto-update cron** | `Y` — codzienny git pull o 6:00 |
-
-### Krok 4 — Zapisz Tailscale IP
-
-Na końcu installer pokaże **Tailscale IP VPS-a**. Zapisz! Jeśli nie widzisz:
-
-```bash
-tailscale ip -4
-```
-
-### Krok 5 — Połącz dashboard z VPS-em
-
-Wracasz na swój komputer i robisz instalację lokalną (Mac lub Windows wyżej). W kroku setup'u "Tailscale IP VPS-a" wklej IP z VPS-a.
-
-W dashboardzie zobaczysz przełącznik **LOCAL / VPS** na górze:
-- **LOCAL** (zielony) — joby lokalne
-- **VPS** (magenta) — joby na serwerze
-
-Kliknij **VPS** — jeśli widzisz dane z serwera, działa! 🎉
 
 ---
 
