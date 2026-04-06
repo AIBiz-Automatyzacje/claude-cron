@@ -169,8 +169,16 @@ echo -e "  Serwer claude-cron może startować automatycznie"
 echo -e "  przy każdym uruchomieniu Claude Code."
 echo ""
 
-HOOKS_DIR="$HOME/.claude/hooks"
+HOOKS_DIR="$WORKSPACE/.claude/hooks"
 HOOK_FILE="$HOOKS_DIR/claude-cron-autostart.js"
+SETTINGS_FILE="$WORKSPACE/.claude/settings.json"
+
+# Cleanup: remove old global hook from previous installations
+OLD_HOOK="$HOME/.claude/hooks/claude-cron-autostart.js"
+if [ -f "$OLD_HOOK" ]; then
+  rm -f "$OLD_HOOK"
+  info "Usunięto stary globalny hook: $OLD_HOOK"
+fi
 
 ask "Zainstalować autostart? [Y/n]: "
 read -r INSTALL_HOOK
@@ -216,20 +224,45 @@ HOOKEOF
 
   ok "Hook: $HOOK_FILE"
 
-  # Check if hook is registered in settings.json
-  SETTINGS_FILE="$HOME/.claude/settings.json"
-  if [ -f "$SETTINGS_FILE" ]; then
-    if grep -q "claude-cron-autostart" "$SETTINGS_FILE"; then
-      ok "Hook zarejestrowany w settings.json"
-    else
-      warn "Hook utworzony, ale NIE zarejestrowany w Claude Code."
-      warn "Dodaj to do $SETTINGS_FILE w sekcji hooks.UserPromptSubmit:"
-      echo ""
-      echo -e "  ${CYAN}{\"type\": \"command\", \"command\": \"node $HOOK_FILE\"}${NC}"
-      echo ""
-    fi
+  # Auto-register hook in workspace settings.json (using Node.js for JSON manipulation)
+  mkdir -p "$WORKSPACE/.claude"
+  node -e "
+    const fs = require('fs');
+    const path = '$SETTINGS_FILE';
+    const hookCmd = 'node \"$HOOK_FILE\"';
+    let settings = {};
+    if (fs.existsSync(path)) {
+      try { settings = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch { settings = {}; }
+    }
+    settings.hooks = settings.hooks || {};
+    settings.hooks.UserPromptSubmit = settings.hooks.UserPromptSubmit || [];
+    const already = settings.hooks.UserPromptSubmit.some(item =>
+      item && item.hooks && item.hooks.some(h => h && h.command && h.command.includes('claude-cron-autostart'))
+    );
+    if (!already) {
+      settings.hooks.UserPromptSubmit.push({
+        matcher: '',
+        hooks: [{ type: 'command', command: hookCmd }]
+      });
+      fs.writeFileSync(path, JSON.stringify(settings, null, 2), 'utf-8');
+      console.log('registered');
+    } else {
+      console.log('already');
+    }
+  " > /tmp/claude-cron-hook-status 2>/dev/null
+
+  HOOK_STATUS=$(cat /tmp/claude-cron-hook-status 2>/dev/null || echo "error")
+  rm -f /tmp/claude-cron-hook-status
+
+  if [ "$HOOK_STATUS" = "registered" ]; then
+    ok "Hook zarejestrowany w $SETTINGS_FILE"
+  elif [ "$HOOK_STATUS" = "already" ]; then
+    ok "Hook już zarejestrowany w settings.json"
   else
-    warn "Brak settings.json Claude Code. Zarejestruj hook ręcznie."
+    warn "Nie udało się automatycznie zarejestrować hooka. Dodaj ręcznie do $SETTINGS_FILE:"
+    echo ""
+    echo -e "  ${CYAN}{\"type\": \"command\", \"command\": \"node $HOOK_FILE\"}${NC}"
+    echo ""
   fi
 else
   info "Pominięto autostart"
