@@ -8,6 +8,7 @@ const scheduler = require('./lib/scheduler');
 const executor = require('./lib/executor');
 const skills = require('./lib/skills');
 const platform = require('./lib/platform');
+const keepAwake = require('./lib/keep-awake');
 
 // === MIME types ===
 const MIME = {
@@ -366,15 +367,20 @@ server.listen(PORT, () => {
   console.log(`   Press Ctrl+C to stop\n`);
 });
 
+// Prevent Windows sleep (no-op on Mac/Linux)
+keepAwake.start();
+
 // Graceful shutdown
 process.on('SIGINT', () => {
   console.log('\n[shutdown] Stopping...');
+  keepAwake.stop();
   scheduler.stop();
   db.close();
   server.close(() => process.exit(0));
 });
 
 process.on('SIGTERM', () => {
+  keepAwake.stop();
   scheduler.stop();
   db.close();
   server.close(() => process.exit(0));
