@@ -14,76 +14,83 @@ Automatyczny scheduler dla [Claude Code](https://claude.ai/code). Ustawiasz co i
 
 ---
 
-## Czego potrzebujesz?
+## ⚡ Quick Start (dla niecierpliwych)
 
-### Wspólne dla obu platform
-1. **Node.js 18+** — [pobierz tutaj](https://nodejs.org)
-2. **Claude Code** zainstalowany i zalogowany — `npm install -g @anthropic-ai/claude-code`, potem `claude` żeby się zalogować
-3. **Tailscale** (opcjonalnie) — jeśli chcesz połączyć się z VPS-em ([pobierz tutaj](https://tailscale.com/download))
-4. **Serwer VPS** z Linuxem (opcjonalnie) — jeśli chcesz joby 24/7
+Jeśli wiesz co robisz i masz już Node.js + Claude CLI:
 
-### Dodatkowo na 🪟 Windows
-5. **Git for Windows** — [pobierz tutaj](https://git-scm.com/download/win)
-6. **Visual Studio Build Tools** — wymagane przez `better-sqlite3` ([pobierz tutaj](https://visualstudio.microsoft.com/visual-cpp-build-tools/) — zaznacz "Desktop development with C++")
-7. **Claude CLI w PATH** — jeśli `claude` nie działa po instalacji, wklej w PowerShell:
-   ```powershell
-   $claudePath = "$env:USERPROFILE\.local\bin"
-   [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$claudePath", "User")
-   $env:Path += ";$claudePath"
-   ```
+### 🍎 Mac
+
+```bash
+cd ~/Documents  # albo gdzie chcesz
+git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git
+cd claude-cron
+bash setup.sh
+source ~/.zshrc
+node server.js
+```
+
+### 🪟 Windows (PowerShell)
+
+```powershell
+cd $env:USERPROFILE\Documents  # albo gdzie chcesz
+git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git
+cd claude-cron
+powershell -ExecutionPolicy Bypass -File setup-windows.ps1
+# zamknij i otwórz nowy terminal
+node server.js
+```
+
+Otwórz `http://localhost:7777` 🎉
+
+> Coś nie działa? Przewiń do [Rozwiązywanie problemów](#rozwiązywanie-problemów).
 
 ---
 
-## Instalacja
+## 📋 Pełna instrukcja
 
-> Najpierw VPS (jeśli go używasz), potem komputer lokalny.
->
-> *Nie masz VPS-a?* Pomiń krok 1 — claude-cron zadziała tylko lokalnie.
+Jeśli to Twój pierwszy raz — leć po kolei.
 
-### Krok 1 — Instalacja na VPS (Linux)
+### 🍎 Mac — instalacja krok po kroku
 
-Połącz się z VPS-em:
+#### Krok 1 — Sprawdź wymagania
 
-```bash
-ssh root@TWOJE_IP_SERWERA
-```
-
-Zainstaluj wymagane narzędzia i uruchom installer:
+Otwórz terminal (Cmd+Space → "Terminal") i sprawdź czy masz Node.js:
 
 ```bash
-apt update && apt install -y git curl
-git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git /tmp/claude-cron-install && bash /tmp/claude-cron-install/scripts/install-vps.sh
+node -v
 ```
 
-Installer zrobi wszystko automatycznie. Po drodze zapyta Cię o:
+- Jeśli widzisz np. `v20.11.0` — masz ✅
+- Jeśli widzisz `command not found` lub wersja < 18 — pobierz z [nodejs.org](https://nodejs.org)
 
-| Pytanie | Co wpisać |
-|---------|-----------|
-| **Log in to Claude CLI** | `Y` — przejdź logowanie w przeglądarce, potem `/exit` i `exit` |
-| **Ścieżka do workspace** | Np. `/home/claude/vault` |
-| **Port** | Enter (domyślny 7777) |
-| **Discord webhook** | URL webhooka albo puste — Enter |
-| **Timezone** | Enter (domyślnie Europe/Warsaw) |
-| **Tailscale Funnel** | `Y` jeśli chcesz webhoki |
-| **Auto-update cron** | `Y` — codzienna aktualizacja kodu o 6:00 |
-
-**Na końcu installer pokaże Tailscale IP** — zapisz je! Potrzebujesz go w kroku 2.
+Sprawdź Claude Code:
 
 ```bash
-tailscale ip -4
+claude --version
 ```
 
----
+- Jeśli działa — masz ✅
+- Jeśli `command not found` — zainstaluj: `npm install -g @anthropic-ai/claude-code`, potem `claude` (pierwsze uruchomienie poprosi o logowanie w przeglądarce)
 
-### Krok 2 — Instalacja lokalna
+#### Krok 2 — Stwórz folder na projekt
 
-Stwórz folder gdzie chcesz trzymać projekt (np. `~/Documents/Kodowanie/`), otwórz tam terminal i sklonuj repo:
+Wybierz gdzie chcesz trzymać claude-cron. Zalecane: `~/Documents/Kodowanie/`:
 
-#### 🍎 Mac
+```bash
+mkdir -p ~/Documents/Kodowanie
+cd ~/Documents/Kodowanie
+```
+
+#### Krok 3 — Sklonuj repo
 
 ```bash
 git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git
 cd claude-cron
+```
+
+#### Krok 4 — Uruchom setup
+
+```bash
 bash setup.sh
 ```
 
@@ -91,45 +98,176 @@ Setup pyta o 4 rzeczy:
 
 | Krok | Co wpisać |
 |------|-----------|
-| **1. Tailscale IP VPS-a** | Wklej IP z kroku 1, np. `100.86.100.113` (puste = tryb lokalny) |
-| **2. Workspace** | Przeciągnij folder z Findera do terminala |
-| **3. Autostart** | `Y` — serwer startuje automatycznie z Claude Code |
+| **1. Tailscale IP VPS-a** | Puste — Enter (jeśli nie masz VPS-a). Jeśli masz — wklej IP z [sekcji VPS](#vps---joby-247-opcjonalnie) |
+| **2. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). **Tip:** przeciągnij folder z Findera do terminala — automatycznie wklei ścieżkę |
+| **3. Autostart** | `Y` — serwer startuje automatycznie z każdą sesją Claude Code |
 | **4. Discord** | URL webhooka albo puste — Enter |
 
-Po zakończeniu wklej:
+#### Krok 5 — Załaduj zmienne i odpal serwer
 
 ```bash
 source ~/.zshrc
+node server.js
 ```
 
-#### 🪟 Windows
+#### Krok 6 — Sprawdź dashboard
 
-W **PowerShell**:
+Otwórz w przeglądarce: **[http://localhost:7777](http://localhost:7777)**
+
+Powinieneś zobaczyć retro arcade dashboard. Gotowe! 🎉
+
+> Następnym razem serwer odpali się sam przy starcie Claude Code (jeśli włączyłeś autostart). Nie musisz nic robić.
+
+---
+
+### 🪟 Windows — instalacja krok po kroku
+
+#### Krok 1 — Sprawdź wymagania
+
+Otwórz **PowerShell** (Win+X → "Windows PowerShell" lub "Terminal"):
+
+**Node.js:**
+```powershell
+node -v
+```
+
+- Jeśli widzisz np. `v20.11.0` — masz ✅
+- Jeśli `not recognized` lub wersja < 18 — pobierz z [nodejs.org](https://nodejs.org)
+
+**Git:**
+```powershell
+git --version
+```
+
+- Jeśli działa — masz ✅
+- Jeśli nie — pobierz [Git for Windows](https://git-scm.com/download/win)
+
+**Visual Studio Build Tools** — wymagane przez `better-sqlite3`. Bez tego `npm install` się wywali.
+
+1. Pobierz: [visualstudio.microsoft.com/visual-cpp-build-tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+2. Podczas instalacji **zaznacz "Desktop development with C++"**
+3. Zainstaluj (~3-5 GB)
+
+**Claude Code:**
+```powershell
+claude --version
+```
+
+- Jeśli działa — masz ✅
+- Jeśli `not recognized`:
+  ```powershell
+  irm https://claude.ai/install.ps1 | iex
+  ```
+  Po instalacji **najpewniej dostaniesz info że Claude nie jest w PATH** — zobacz [Rozwiązywanie problemów](#-windows-claude-nie-jest-rozpoznawany).
+
+#### Krok 2 — Stwórz folder na projekt
+
+W Eksploratorze plików stwórz folder gdzie chcesz, np. `C:\Users\<ty>\Documents\Kodowanie\`. Potem **kliknij prawym przyciskiem na folder → "Open in Terminal"** (Windows 11) lub otwórz PowerShell i wejdź do folderu:
+
+```powershell
+cd $env:USERPROFILE\Documents\Kodowanie
+```
+
+#### Krok 3 — Sklonuj repo
 
 ```powershell
 git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git
 cd claude-cron
+```
+
+#### Krok 4 — Uruchom setup
+
+```powershell
 powershell -ExecutionPolicy Bypass -File setup-windows.ps1
 ```
 
-Setup pyta o te same 4 rzeczy. Po zakończeniu **otwórz nowy terminal** (zmienne środowiskowe załadują się dopiero w nowej sesji).
+Setup pyta o 4 rzeczy:
+
+| Krok | Co wpisać |
+|------|-----------|
+| **1. Tailscale IP VPS-a** | Puste — Enter (jeśli nie masz VPS-a). Jeśli masz — wklej IP z [sekcji VPS](#vps---joby-247-opcjonalnie) |
+| **2. Workspace** | **Wklej pełną ścieżkę** do folderu, np. `C:\Users\kacpe\OneDrive\Obsidian\Vault`. Drag & drop z Eksploratora **nie działa** w PowerShell — musisz wkleić ścieżkę ręcznie |
+| **3. Autostart** | `Y` — serwer startuje automatycznie z Claude Code |
+| **4. Discord** | URL webhooka albo puste — Enter |
+
+#### Krok 5 — Otwórz nowy terminal
+
+**To jest ważne** — zmienne środowiskowe załadują się dopiero w nowej sesji. Zamknij PowerShell i otwórz go ponownie.
+
+#### Krok 6 — Odpal serwer
+
+```powershell
+cd $env:USERPROFILE\Documents\Kodowanie\claude-cron
+node server.js
+```
+
+#### Krok 7 — Sprawdź dashboard
+
+Otwórz w przeglądarce: **[http://localhost:7777](http://localhost:7777)**
+
+Gotowe! 🎉
+
+> Następnym razem serwer odpali się sam przy starcie Claude Code w Twoim workspace'cie.
 
 ---
 
-### Krok 3 — Sprawdź czy działa
+## ☁️ VPS — joby 24/7 (opcjonalnie)
 
-Otwórz przeglądarkę:
+Bez VPS-a joby działają tylko gdy Twój komputer nie śpi. Jeśli chcesz harmonogram lecący 24/7 — postaw claude-cron na VPS-ie i podłącz dashboard przez Tailscale.
 
+### Wymagania
+- Serwer VPS z Linuxem (Hostinger, DigitalOcean, Hetzner, etc.)
+- Tailscale na obu urządzeniach (VPS + Twój komputer) — [pobierz](https://tailscale.com/download)
+
+### Krok 1 — SSH na VPS
+
+```bash
+ssh root@TWOJE_IP_SERWERA
 ```
-http://localhost:7777
+
+> **Gdzie znaleźć IP serwera?** W panelu hostingu (np. Hostinger → VPS → IPv4).
+
+### Krok 2 — Zainstaluj prereqs
+
+```bash
+apt update && apt install -y git curl
 ```
 
-Powinieneś zobaczyć dashboard z przełącznikiem **LOCAL / VPS** na górze:
+### Krok 3 — Odpal installer
 
-- **LOCAL** (zielony) — joby lecą lokalnie na Twoim komputerze
-- **VPS** (magenta) — joby lecą na serwerze 24/7
+```bash
+git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git /tmp/claude-cron-install && bash /tmp/claude-cron-install/scripts/install-vps.sh
+```
 
-Kliknij **VPS** i sprawdź czy się łączy. Jeśli widzisz dane z serwera — wszystko działa! 🎉
+Installer zrobi wszystko automatycznie. Po drodze zapyta:
+
+| Pytanie | Co wpisać |
+|---------|-----------|
+| **Log in to Claude CLI** | `Y` — przeniesie Cię na usera `claude`. Auto-odpali `claude`, zaloguj się w przeglądarce, wyjdź (`/exit`), potem `exit` żeby wrócić do installera |
+| **Workspace** | Np. `/home/claude/vault` |
+| **Port** | Enter (domyślny 7777) |
+| **Discord webhook** | URL albo puste |
+| **Timezone** | Enter (Warsaw) |
+| **Tailscale Funnel** | `Y` jeśli chcesz webhoki |
+| **Auto-update cron** | `Y` — codzienny git pull o 6:00 |
+
+### Krok 4 — Zapisz Tailscale IP
+
+Na końcu installer pokaże **Tailscale IP VPS-a**. Zapisz! Jeśli nie widzisz:
+
+```bash
+tailscale ip -4
+```
+
+### Krok 5 — Połącz dashboard z VPS-em
+
+Wracasz na swój komputer i robisz instalację lokalną (Mac lub Windows wyżej). W kroku setup'u "Tailscale IP VPS-a" wklej IP z VPS-a.
+
+W dashboardzie zobaczysz przełącznik **LOCAL / VPS** na górze:
+- **LOCAL** (zielony) — joby lokalne
+- **VPS** (magenta) — joby na serwerze
+
+Kliknij **VPS** — jeśli widzisz dane z serwera, działa! 🎉
 
 ---
 
@@ -208,15 +346,16 @@ sudo tailscale funnel --bg 7777
 
 | Co chcesz zrobić | Komenda |
 |------------------|---------|
-| Uruchomić ręcznie | `cd ~/<sciezka>/claude-cron && node server.js` |
-| Otworzyć dashboard | `http://localhost:7777` w przeglądarce |
+| Uruchomić ręcznie | `cd ~/Documents/Kodowanie/claude-cron && node server.js` |
+| Zaktualizować kod | `cd ~/Documents/Kodowanie/claude-cron && git pull` |
+| Sprawdzić co zajmuje port | `lsof -i :7777` |
 
 ### 🪟 Windows
 
 | Co chcesz zrobić | Komenda |
 |------------------|---------|
-| Uruchomić ręcznie | `cd $env:USERPROFILE\<sciezka>\claude-cron; node server.js` |
-| Otworzyć dashboard | `http://localhost:7777` w przeglądarce |
+| Uruchomić ręcznie | `cd $env:USERPROFILE\Documents\Kodowanie\claude-cron; node server.js` |
+| Zaktualizować kod | `cd $env:USERPROFILE\Documents\Kodowanie\claude-cron; git pull` |
 | Sprawdzić co zajmuje port | `netstat -ano \| findstr :7777` |
 | Uruchomić na innym porcie | `$env:CLAUDE_CRON_PORT=7778; node server.js` |
 
@@ -227,10 +366,10 @@ sudo tailscale funnel --bg 7777
 | Sprawdzić czy działa | `systemctl status claude-cron` |
 | Zobaczyć logi na żywo | `journalctl -u claude-cron -f` |
 | Zrestartować serwis | `systemctl restart claude-cron` |
-| Zaktualizować kod | `su - claude -c 'cd ~/claude-cron && git pull'` + `systemctl restart claude-cron` |
+| Zaktualizować kod | `su - claude -c 'cd ~/claude-cron && git pull' && systemctl restart claude-cron` |
 | Sprawdzić Tailscale IP | `tailscale ip -4` |
 
-> Jeśli zainstalowałeś autostart — serwer startuje sam przy każdym uruchomieniu Claude Code w Twoim workspace'cie. Nie musisz nic robić.
+> Auto-update cron na VPS robi `git pull` codziennie o 6:00 i restartuje serwis. Nie musisz pamiętać.
 
 ---
 
@@ -238,7 +377,7 @@ sudo tailscale funnel --bg 7777
 
 ### 🪟 Windows: `claude` nie jest rozpoznawany
 
-Claude CLI nie został dodany do PATH. Wklej w PowerShell:
+Claude CLI nie został dodany do PATH. Wklej w PowerShell (3 linijki, działają na każdym Windowsie):
 
 ```powershell
 $claudePath = "$env:USERPROFILE\.local\bin"
@@ -246,23 +385,36 @@ $claudePath = "$env:USERPROFILE\.local\bin"
 $env:Path += ";$claudePath"
 ```
 
-Zamknij i otwórz nowy terminal.
+Linia 1: ścieżka do Claude. Linia 2: dodaje na stałe. Linia 3: dodaje do bieżącej sesji.
 
-### 🪟 Windows: `npm install` nie działa (node-gyp / MSBuild error)
+Zamknij i otwórz nowy terminal — `claude` powinno działać.
 
-Potrzebujesz Visual Studio Build Tools:
+### 🪟 Windows: `npm install` wywala się (node-gyp / MSBuild error)
 
-1. Pobierz: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+Brakuje Visual Studio Build Tools:
+
+1. Pobierz: [visualstudio.microsoft.com/visual-cpp-build-tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
 2. Zaznacz **Desktop development with C++**
 3. Zainstaluj i uruchom `npm install` ponownie
 
+### 🪟 Windows: `setup-windows.ps1` nie chce się odpalić
+
+Execution Policy blokuje skrypt. Użyj flagi `-ExecutionPolicy Bypass`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup-windows.ps1
+```
+
 ### Dashboard nie wczytuje danych z VPS-a
 
-Sprawdź czy Tailscale działa na obu urządzeniach. Na Mac:
+Sprawdź czy Tailscale działa na obu urządzeniach.
+
+🍎 Mac:
 ```bash
 tailscale status
 ```
-Na Windows otwórz aplikację Tailscale i sprawdź czy VPS jest widoczny.
+
+🪟 Windows: otwórz aplikację Tailscale i sprawdź czy VPS jest na liście.
 
 ### Joby się nie odpalają na VPS-ie
 
@@ -271,7 +423,7 @@ Sprawdź logi:
 journalctl -u claude-cron -n 30
 ```
 
-Najczęstsza przyczyna: Claude CLI nie jest zalogowany. Napraw tak:
+Najczęstsza przyczyna: Claude CLI nie jest zalogowany. Napraw:
 ```bash
 su - claude
 claude
@@ -280,11 +432,10 @@ exit
 sudo systemctl restart claude-cron
 ```
 
-### Joby odpalają się o złej godzinie
+### Joby odpalają się o złej godzinie (VPS)
 
-Serwer może mieć inną strefę czasową:
+Serwer ma inną strefę czasową:
 ```bash
-timedatectl
 timedatectl set-timezone Europe/Warsaw
 sudo systemctl restart claude-cron
 ```
@@ -310,21 +461,22 @@ node server.js
 
 ### 🍎 Mac
 
-Usuń hook z `{workspace}/.claude/settings.json` (sekcja `hooks.UserPromptSubmit`) i z `~/.zshrc` zmienne `CLAUDE_CRON_VPS_URL`, `CLAUDE_CRON_WORKSPACE`, `DISCORD_WEBHOOK_URL`. Potem:
-
-```bash
-rm -rf ~/<sciezka>/claude-cron
-```
+1. Usuń hook z `{workspace}/.claude/settings.json` (sekcja `hooks.UserPromptSubmit`, wpis z `claude-cron-autostart`)
+2. Usuń z `~/.zshrc` zmienne `CLAUDE_CRON_VPS_URL`, `CLAUDE_CRON_WORKSPACE`, `DISCORD_WEBHOOK_URL`
+3. Usuń folder repo:
+   ```bash
+   rm -rf ~/Documents/Kodowanie/claude-cron
+   ```
 
 ### 🪟 Windows
 
-Usuń hook z `{workspace}\.claude\settings.json`, potem:
+1. Usuń hook z `{workspace}\.claude\settings.json`
+2. Usuń zmienne i pliki:
+   ```powershell
+   [Environment]::SetEnvironmentVariable('CLAUDE_CRON_WORKSPACE', $null, 'User')
+   [Environment]::SetEnvironmentVariable('CLAUDE_CRON_VPS_URL', $null, 'User')
+   [Environment]::SetEnvironmentVariable('DISCORD_WEBHOOK_URL', $null, 'User')
+   Remove-Item -Recurse -Force $env:USERPROFILE\Documents\Kodowanie\claude-cron
+   ```
 
-```powershell
-[Environment]::SetEnvironmentVariable('CLAUDE_CRON_WORKSPACE', $null, 'User')
-[Environment]::SetEnvironmentVariable('CLAUDE_CRON_VPS_URL', $null, 'User')
-[Environment]::SetEnvironmentVariable('DISCORD_WEBHOOK_URL', $null, 'User')
-Remove-Item -Recurse -Force $env:USERPROFILE\<sciezka>\claude-cron
-```
-
-Dane (historia jobów, baza SQLite) są w folderze `data/` wewnątrz repo — usuwane razem z nim.
+> Dane (historia jobów, baza SQLite) są w folderze `data/` wewnątrz repo — usuwane razem z nim.
