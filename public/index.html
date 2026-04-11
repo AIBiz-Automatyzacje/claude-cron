@@ -11,23 +11,23 @@
   <!-- Header -->
   <div class="header">
     <h1>CLAUDE-CRON</h1>
-    <div class="subtitle">skill scheduler</div>
+    <div class="subtitle">scheduler skilli</div>
     <div class="env-toggle" id="env-toggle" style="display:none">
       <button class="env-btn active" data-env="local" onclick="switchEnv('local')">LOCAL</button>
       <button class="env-btn" data-env="vps" onclick="switchEnv('vps')">VPS</button>
     </div>
     <div class="status-bar">
-      <span class="stat">JOBS <span class="val" id="stat-jobs">-</span></span>
-      <span class="stat">QUEUE <span class="val" id="stat-queue">-</span></span>
+      <span class="stat">JOBY <span class="val" id="stat-jobs">-</span></span>
+      <span class="stat">KOLEJKA <span class="val" id="stat-queue">-</span></span>
       <span class="stat">UPTIME <span class="val" id="stat-uptime">-</span></span>
     </div>
   </div>
 
   <!-- Tabs -->
   <div class="tabs">
-    <button class="tab active" data-tab="jobs">JOBS</button>
-    <button class="tab" data-tab="history">HISTORY</button>
-    <button class="tab" data-tab="skills">SKILLS</button>
+    <button class="tab active" data-tab="jobs">JOBY</button>
+    <button class="tab" data-tab="history">HISTORIA</button>
+    <button class="tab" data-tab="skills">SKILLE</button>
   </div>
 
   <!-- Content -->
@@ -36,19 +36,19 @@
     <!-- Jobs Tab -->
     <div class="tab-panel active" id="panel-jobs">
       <div class="toolbar">
-        <h2>SCHEDULED JOBS</h2>
-        <button class="btn btn-primary" onclick="openCreateModal()">+ NEW JOB</button>
+        <h2>ZAPLANOWANE JOBY</h2>
+        <button class="btn btn-primary" onclick="openCreateModal()">+ NOWY JOB</button>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>NAME</th>
+              <th>NAZWA</th>
               <th>SKILL / PROMPT</th>
-              <th>SCHEDULE</th>
-              <th>NEXT RUN</th>
+              <th>HARMONOGRAM</th>
+              <th>NASTĘPNY</th>
               <th>STATUS</th>
-              <th>ACTIONS</th>
+              <th>AKCJE</th>
             </tr>
           </thead>
           <tbody id="jobs-body"></tbody>
@@ -56,15 +56,15 @@
       </div>
       <div class="empty-state" id="jobs-empty" style="display:none">
         <div class="icon">🎮</div>
-        <div>No jobs yet. Create your first scheduled skill!</div>
+        <div>Brak jobów. Stwórz pierwszy!</div>
       </div>
     </div>
 
     <!-- History Tab -->
     <div class="tab-panel" id="panel-history">
       <div class="toolbar">
-        <h2>RUN HISTORY</h2>
-        <button class="btn btn-small" onclick="loadRuns()">REFRESH</button>
+        <h2>HISTORIA URUCHOMIEŃ</h2>
+        <button class="btn btn-small" onclick="loadRuns()">ODŚWIEŻ</button>
       </div>
       <div class="table-wrap">
         <table>
@@ -73,9 +73,9 @@
               <th>ID</th>
               <th>JOB</th>
               <th>STATUS</th>
-              <th>TRIGGER</th>
-              <th>STARTED</th>
-              <th>DURATION</th>
+              <th>WYZWALACZ</th>
+              <th>START</th>
+              <th>CZAS</th>
             </tr>
           </thead>
           <tbody id="runs-body"></tbody>
@@ -83,15 +83,15 @@
       </div>
       <div class="empty-state" id="runs-empty" style="display:none">
         <div class="icon">📜</div>
-        <div>No runs yet. Trigger a job to see history.</div>
+        <div>Brak uruchomień.</div>
       </div>
     </div>
 
     <!-- Skills Tab -->
     <div class="tab-panel" id="panel-skills">
       <div class="toolbar">
-        <h2>AVAILABLE SKILLS</h2>
-        <button class="btn btn-small" onclick="loadSkills()">REFRESH</button>
+        <h2>DOSTĘPNE SKILLE</h2>
+        <button class="btn btn-small" onclick="loadSkills()">ODŚWIEŻ</button>
       </div>
       <div class="skills-filters" id="skills-filters">
         <button class="skill-filter active" data-filter="all" onclick="filterSkills('all')">ALL <span class="filter-count" id="count-all">0</span></button>
@@ -102,7 +102,7 @@
       <div class="skills-grid" id="skills-grid"></div>
       <div class="empty-state" id="skills-empty" style="display:none">
         <div class="icon">🔧</div>
-        <div>No skills found</div>
+        <div>Nie znaleziono skilli</div>
       </div>
     </div>
 
@@ -112,25 +112,25 @@
   <!-- Kill Bar -->
   <div class="kill-bar" id="kill-bar">
     <div class="run-info">
-      <span class="badge badge-running">RUNNING</span>
+      <span class="badge badge-running">DZIAŁA</span>
       &nbsp;
       <span class="job-name" id="kill-job-name">-</span>
     </div>
-    <button class="kill-btn" onclick="killCurrent()">■ KILL</button>
+    <button class="kill-btn" onclick="killCurrent()">■ ZATRZYMAJ</button>
   </div>
 
   <!-- Create/Edit Modal -->
   <div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
     <div class="modal" onclick="event.stopPropagation()">
-      <h2 id="modal-title">NEW JOB</h2>
+      <h2 id="modal-title">NOWY JOB</h2>
       <form id="job-form" onsubmit="saveJob(event)">
         <input type="hidden" id="form-id">
         <div class="form-group">
-          <label>NAME</label>
-          <input type="text" id="form-name" required placeholder="Daily update">
+          <label>NAZWA</label>
+          <input type="text" id="form-name" required placeholder="Nazwa joba">
         </div>
         <div class="form-group">
-          <label>SKILL (optional)</label>
+          <label>SKILL (opcjonalnie)</label>
           <select id="form-skill"></select>
         </div>
         <div class="form-group">
@@ -167,8 +167,8 @@
         <div id="schedule-preview" class="hint" style="margin-top:-6px;margin-bottom:12px"></div>
         <input type="hidden" id="form-cron">
         <div class="form-group">
-          <label>PROMPT / ARGUMENTS</label>
-          <input type="text" id="form-args" placeholder="Treść promptu lub dodatkowe argumenty do skilla">
+          <label>PROMPT / ARGUMENTY</label>
+          <textarea id="form-args" rows="3" placeholder="Treść promptu lub dodatkowe argumenty do skilla"></textarea>
         </div>
         <div class="form-row">
           <div class="form-group">
@@ -176,20 +176,20 @@
             <input type="number" id="form-timeout" value="600000" min="10000" step="1000">
           </div>
           <div class="form-group">
-            <label>MAX RETRIES</label>
+            <label>MAKS. POWTÓRZEŃ</label>
             <input type="number" id="form-retries" value="1" min="0" max="5">
           </div>
         </div>
         <div class="form-group">
           <label class="form-check">
             <input type="checkbox" id="form-wake">
-            Run on wake (missed job detection)
+            Uruchom po przebudzeniu (nadrobienie pominiętych)
           </label>
         </div>
         <div class="form-group">
           <label class="form-check">
             <input type="checkbox" id="form-discord">
-            Discord notification
+            Powiadomienie Discord
           </label>
         </div>
         <div class="webhook-section" id="webhook-section">
@@ -209,8 +209,8 @@
           </div>
         </div>
         <div class="modal-actions">
-          <button type="button" class="btn" onclick="hideModal()">CANCEL</button>
-          <button type="submit" class="btn btn-primary">SAVE</button>
+          <button type="button" class="btn" onclick="hideModal()">ANULUJ</button>
+          <button type="submit" class="btn btn-primary">ZAPISZ</button>
         </div>
       </form>
     </div>

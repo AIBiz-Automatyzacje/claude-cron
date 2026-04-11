@@ -222,7 +222,7 @@ function updateSchedulePreview() {
   const cron = buildCronFromForm();
   const preview = document.getElementById('schedule-preview');
   if (!cron) {
-    preview.textContent = 'Uruchamiany tylko przez webhook';
+    preview.textContent = 'Tylko webhook (bez harmonogramu)';
     preview.style.color = 'var(--cyan)';
     return;
   }
@@ -257,7 +257,7 @@ async function loadJobs() {
     allJobs.forEach(j => jobsMap[j.id] = j);
     renderJobs();
   } catch (e) {
-    toast('Failed to load jobs', true);
+    toast('Błąd ładowania jobów', true);
   }
 }
 
@@ -266,7 +266,7 @@ async function loadRuns() {
     const runs = await API.get('/api/runs?limit=100');
     renderRuns(runs);
   } catch (e) {
-    toast('Failed to load runs', true);
+    toast('Błąd ładowania historii', true);
   }
 }
 
@@ -275,7 +275,7 @@ async function loadSkills() {
     allSkills = await API.get('/api/skills');
     renderSkills();
   } catch (e) {
-    toast('Failed to load skills', true);
+    toast('Błąd ładowania skilli', true);
   }
 }
 
@@ -298,16 +298,21 @@ function renderJobs() {
     return `
     <tr>
       <td><strong>${triggerIcons ? triggerIcons + ' ' : ''}${esc(j.name)}</strong></td>
-      <td><code>${j.skill_name ? '/' + esc(j.skill_name) : esc(j.arguments || 'prompt')}</code></td>
-      <td>${j.cron_expr ? esc(cronToHuman(j.cron_expr)) : '<span style="color:var(--cyan)">webhook only</span>'}</td>
+      <td>${j.skill_name
+        ? `<code>/${esc(j.skill_name)}</code>`
+        : j.arguments && j.arguments.length > 60
+          ? `<code class="prompt-truncated" onclick="showPromptPopup(jobsMap[${j.id}].arguments)">${esc(truncate(j.arguments, 60))}</code>`
+          : `<code>${esc(j.arguments || 'prompt')}</code>`
+      }</td>
+      <td>${j.cron_expr ? esc(cronToHuman(j.cron_expr)) : '<span style="color:var(--cyan)">tylko webhook</span>'}</td>
       <td>
         ${j.enabled && j.next_run
           ? `<span class="next-run">${formatDateTime(j.next_run)}</span><br><span class="countdown">${formatCountdown(j.next_run)}</span>`
-          : '<span style="color:var(--text-dim)">-</span>'}
+          : '<span style="color:var(--text-dim)">—</span>'}
       </td>
       <td>
         <span class="badge ${j.enabled ? 'badge-enabled' : 'badge-disabled'}">
-          ${j.enabled ? 'ON' : 'OFF'}
+          ${j.enabled ? 'WŁ.' : 'WYŁ.'}
         </span>
       </td>
       <td>
@@ -351,7 +356,7 @@ function renderRuns(runs) {
           ${r.error_msg ? `<div class="log-label">ERROR</div><div class="log-box" style="color:var(--red)">${esc(r.error_msg)}</div>` : ''}
           ${r.stdout ? `<div class="log-label">OUTPUT</div><div class="log-box">${esc(formatClaudeOutput(r.stdout))}</div>` : ''}
           ${r.stderr ? `<div class="log-label">STDERR</div><div class="log-box" style="color:var(--red)">${esc(r.stderr)}</div>` : ''}
-          ${!r.stdout && !r.stderr && !r.error_msg ? '<div style="color:var(--text-dim);font-size:11px">No output</div>' : ''}
+          ${!r.stdout && !r.stderr && !r.error_msg ? '<div style="color:var(--text-dim);font-size:11px">Brak outputu</div>' : ''}
         </td>
       </tr>
     `;
@@ -418,42 +423,42 @@ function toggleRunDetail(id) {
 async function triggerJob(id) {
   try {
     await API.post(`/api/jobs/${id}/trigger`);
-    toast('Job triggered!');
+    toast('Job uruchomiony!');
     loadStatus();
     loadRuns();
   } catch {
-    toast('Failed to trigger job', true);
+    toast('Błąd uruchamiania joba', true);
   }
 }
 
 async function toggleJob(id) {
   try {
     const result = await API.post(`/api/jobs/${id}/toggle`);
-    toast(result.enabled ? 'Job enabled' : 'Job disabled');
+    toast(result.enabled ? 'Job włączony' : 'Job wyłączony');
     loadJobs();
   } catch {
-    toast('Failed to toggle job', true);
+    toast('Błąd przełączania joba', true);
   }
 }
 
 async function deleteJob(id) {
-  if (!confirm('Delete this job?')) return;
+  if (!confirm('Usunąć ten job?')) return;
   try {
     await API.del(`/api/jobs/${id}`);
-    toast('Job deleted');
+    toast('Job usunięty');
     loadJobs();
   } catch {
-    toast('Failed to delete job', true);
+    toast('Błąd usuwania joba', true);
   }
 }
 
 async function killCurrent() {
   try {
     await API.post('/api/runs/current/kill');
-    toast('Kill signal sent');
+    toast('Sygnał zatrzymania wysłany');
     loadStatus();
   } catch {
-    toast('Failed to kill', true);
+    toast('Błąd zatrzymywania', true);
   }
 }
 
@@ -480,7 +485,7 @@ function openCreateModal() {
 function openEditModal(id) {
   const job = jobsMap[id];
   if (!job) return;
-  document.getElementById('modal-title').textContent = 'EDYCJA JOBA';
+  document.getElementById('modal-title').textContent = 'EDYTUJ JOB';
   document.getElementById('form-id').value = job.id;
   document.getElementById('form-name').value = job.name;
   document.getElementById('form-args').value = job.arguments || '';
@@ -501,7 +506,7 @@ function populateSkillSelect(selected) {
   allSkills.forEach(s => { if (groups[s.source]) groups[s.source].push(s); });
 
   const groupLabels = { project: '📁 Project', user: '👤 User', plugin: '🔌 Plugin' };
-  let html = '<option value="">-- select skill --</option>';
+  let html = '<option value="">-- wybierz skill --</option>';
   for (const [source, skills] of Object.entries(groups)) {
     if (skills.length === 0) continue;
     html += `<optgroup label="${groupLabels[source] || source}">`;
@@ -540,15 +545,15 @@ async function saveJob(e) {
   try {
     if (id) {
       await API.put(`/api/jobs/${id}`, body);
-      toast('Job updated');
+      toast('Job zaktualizowany');
     } else {
       await API.post('/api/jobs', body);
-      toast('Job created!');
+      toast('Job utworzony!');
     }
     hideModal();
     loadJobs();
   } catch {
-    toast('Failed to save job', true);
+    toast('Błąd zapisu joba', true);
   }
 }
 
@@ -558,6 +563,31 @@ function esc(str) {
   const el = document.createElement('span');
   el.textContent = String(str);
   return el.innerHTML;
+}
+
+// === Truncate ===
+function truncate(str, max) {
+  if (!str || str.length <= max) return str;
+  return str.slice(0, max) + '…';
+}
+
+// === Prompt popup ===
+function showPromptPopup(text) {
+  const existing = document.getElementById('prompt-popup-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'prompt-popup-overlay';
+  overlay.className = 'prompt-popup-overlay';
+  overlay.onclick = () => overlay.remove();
+
+  const box = document.createElement('div');
+  box.className = 'prompt-popup';
+  box.onclick = (e) => e.stopPropagation();
+  box.textContent = text;
+
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
 }
 
 // === Parse Claude stream-json output into readable text ===
@@ -658,10 +688,10 @@ async function generateWebhook() {
     const job = await API.post(`/api/jobs/${id}/webhook`);
     updateWebhookUI(job.webhook_token);
     jobsMap[id] = job;
-    toast('Webhook generated!');
+    toast('Webhook wygenerowany!');
     loadJobs();
   } catch {
-    toast('Failed to generate webhook', true);
+    toast('Błąd generowania webhooka', true);
   }
 }
 
@@ -672,22 +702,22 @@ async function removeWebhook() {
     const job = await API.del(`/api/jobs/${id}/webhook`);
     updateWebhookUI(null);
     jobsMap[id] = job;
-    toast('Webhook removed');
+    toast('Webhook usunięty');
     loadJobs();
   } catch {
-    toast('Failed to remove webhook', true);
+    toast('Błąd usuwania webhooka', true);
   }
 }
 
 function copyWebhookUrl() {
   const url = document.getElementById('webhook-url').value;
   navigator.clipboard.writeText(url).then(() => {
-    toast('URL copied!');
+    toast('URL skopiowano!');
   }).catch(() => {
     // Fallback for non-HTTPS
     document.getElementById('webhook-url').select();
     document.execCommand('copy');
-    toast('URL copied!');
+    toast('URL skopiowano!');
   });
 }
 

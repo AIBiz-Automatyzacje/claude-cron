@@ -799,3 +799,49 @@ tr:hover {
   display: flex;
   gap: 8px;
 }
+
+/* === Prompt truncate + popup === */
+.prompt-truncated {
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.prompt-truncated:hover {
+  color: var(--cyan);
+  text-shadow: 0 0 6px var(--cyan-glow);
+}
+
+.prompt-popup-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 2000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+}
+
+.prompt-popup {
+  background: var(--bg);
+  border: 1px solid var(--cyan-dim);
+  box-shadow: 0 0 30px var(--cyan-glow);
+  padding: 24px;
+  max-width: 600px;
+  width: 90vw;
+  max-height: 70vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+  cursor: default;
+}
+
+/* === Textarea auto-height === */
+#form-args {
+  resize: vertical;
+  min-height: 60px;
+}
