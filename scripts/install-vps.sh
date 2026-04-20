@@ -185,9 +185,10 @@ ask "Ścieżka do workspace [$CLAUDE_HOME/workspace]: "
 read -r WORKSPACE_INPUT
 WORKSPACE="${WORKSPACE_INPUT:-$CLAUDE_HOME/workspace}"
 
-# Strip quotes and spaces
+# Strip quotes, backslash-escapes and spaces (drag & drop dodaje escapy)
 WORKSPACE="${WORKSPACE//\'/}"
 WORKSPACE="${WORKSPACE//\"/}"
+WORKSPACE="${WORKSPACE//\\/}"
 WORKSPACE="${WORKSPACE%% }"
 WORKSPACE="${WORKSPACE## }"
 WORKSPACE="${WORKSPACE/#\~/$CLAUDE_HOME}"

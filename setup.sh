@@ -133,9 +133,10 @@ ask "Ścieżka do workspace [$HOME]: "
 read -r WORKSPACE_INPUT
 WORKSPACE="${WORKSPACE_INPUT:-$HOME}"
 
-# Strip quotes and trailing spaces (drag & drop from Finder adds them)
+# Strip quotes, backslash-escapes and trailing spaces (drag & drop from Finder adds them)
 WORKSPACE="${WORKSPACE//\'/}"
 WORKSPACE="${WORKSPACE//\"/}"
+WORKSPACE="${WORKSPACE//\\/}"
 WORKSPACE="${WORKSPACE%% }"
 WORKSPACE="${WORKSPACE## }"
 
