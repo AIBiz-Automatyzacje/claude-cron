@@ -176,6 +176,10 @@
             <input type="number" id="form-timeout" value="600000" min="10000" step="1000">
           </div>
           <div class="form-group">
+            <label>IDLE TIMEOUT (ms)</label>
+            <input type="number" id="form-idle-timeout" value="300000" min="10000" step="1000" title="Maks. czas bez outputu na stdout zanim job zostanie zabity. Domyślnie 5 min (300000 ms). Dla jobów z subagentami zwiększ np. do 1800000 (30 min).">
+          </div>
+          <div class="form-group">
             <label>MAKS. POWTÓRZEŃ</label>
             <input type="number" id="form-retries" value="1" min="0" max="5">
           </div>
