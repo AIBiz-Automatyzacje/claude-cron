@@ -472,6 +472,7 @@ function openCreateModal() {
   document.getElementById('form-time').value = '09:00';
   document.getElementById('form-args').value = '';
   document.getElementById('form-timeout').value = '600000';
+  document.getElementById('form-idle-timeout').value = '300000';
   document.getElementById('form-retries').value = '1';
   document.getElementById('form-wake').checked = false;
   document.getElementById('form-discord').checked = false;
@@ -490,6 +491,7 @@ function openEditModal(id) {
   document.getElementById('form-name').value = job.name;
   document.getElementById('form-args').value = job.arguments || '';
   document.getElementById('form-timeout').value = job.timeout_ms;
+  document.getElementById('form-idle-timeout').value = job.idle_timeout_ms ?? 300000;
   document.getElementById('form-retries').value = job.max_retries;
   document.getElementById('form-wake').checked = !!job.run_on_wake;
   document.getElementById('form-discord').checked = !!job.discord_notify;
@@ -537,6 +539,7 @@ async function saveJob(e) {
     cron_expr: buildCronFromForm(),
     arguments: document.getElementById('form-args').value,
     timeout_ms: parseInt(document.getElementById('form-timeout').value, 10),
+    idle_timeout_ms: parseInt(document.getElementById('form-idle-timeout').value, 10),
     max_retries: parseInt(document.getElementById('form-retries').value, 10),
     run_on_wake: document.getElementById('form-wake').checked,
     discord_notify: document.getElementById('form-discord').checked,
