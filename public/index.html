@@ -64,6 +64,10 @@
     <div class="tab-panel" id="panel-history">
       <div class="toolbar">
         <h2>HISTORIA URUCHOMIEŃ</h2>
+        <label class="form-check" style="margin:0 auto 0 12px">
+          <input type="checkbox" id="runs-hide-routine" checked onchange="loadRuns()">
+          Ukryj rutynowe (script success)
+        </label>
         <button class="btn btn-small" onclick="loadRuns()">ODŚWIEŻ</button>
       </div>
       <div class="table-wrap">

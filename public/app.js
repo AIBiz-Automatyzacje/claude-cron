@@ -268,7 +268,8 @@ async function loadJobs() {
 
 async function loadRuns() {
   try {
-    const runs = await API.get('/api/runs?limit=100');
+    const hideRoutine = document.getElementById('runs-hide-routine')?.checked ? '&hide_routine=1' : '';
+    const runs = await API.get(`/api/runs?limit=100${hideRoutine}`);
     renderRuns(runs);
   } catch (e) {
     toast('Błąd ładowania historii', true);

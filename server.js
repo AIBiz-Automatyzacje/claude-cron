@@ -262,7 +262,8 @@ async function handleApi(req, res) {
     const limit = parseInt(params.get('limit') || '50', 10);
     const offset = parseInt(params.get('offset') || '0', 10);
     const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
-    return json(res, db.getRuns({ limit, offset, job_id }));
+    const hideRoutine = params.get('hide_routine') === '1';
+    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine }));
   }
 
   // GET /api/runs/current
@@ -281,7 +282,8 @@ async function handleApi(req, res) {
     const limit = parseInt(params.get('limit') || '50', 10);
     const offset = parseInt(params.get('offset') || '0', 10);
     const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
-    return json(res, db.getRuns({ limit, offset, job_id }));
+    const hideRoutine = params.get('hide_routine') === '1';
+    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine }));
   }
 
   error(res, 'Not found', 404);
