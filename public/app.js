@@ -152,10 +152,15 @@ function onFreqChange() {
   dayGroup.style.display = freq === 'weekly' ? 'block' : 'none';
   intervalGroup.style.display = (freq === 'hours' || freq === 'minutes') ? 'block' : 'none';
 
+  const intervalLabel = document.getElementById('interval-label');
   if (freq === 'hours') {
-    intervalSel.innerHTML = [1,2,3,4,6,8,12].map(n => `<option value="${n}">Co ${n} godz.</option>`).join('');
+    intervalLabel.textContent = 'CO ILE GODZIN';
+    intervalSel.max = 23;
+    if (!intervalSel.value || intervalSel.value < 1) intervalSel.value = 1;
   } else if (freq === 'minutes') {
-    intervalSel.innerHTML = [5,10,15,20,30,45].map(n => `<option value="${n}">Co ${n} min</option>`).join('');
+    intervalLabel.textContent = 'CO ILE MINUT';
+    intervalSel.max = 59;
+    if (!intervalSel.value || intervalSel.value < 1) intervalSel.value = 1;
   }
   updateSchedulePreview();
 }
