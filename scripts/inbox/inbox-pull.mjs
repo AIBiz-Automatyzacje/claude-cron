@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Team OS — inbox pull job
-// - Pełne callouts → Zadania/Inbox.md (rebuild bloku między markerami)
+// - Pełne callouts → Zadania/Skrzynka.md (dwie sekcje: Otrzymane + Wysłane, rebuild bloków między markerami)
 // - Banner + top 3 skondensowane → Zadania/to_do.md (rebuild bloku między markerami)
 // - Oznacza pending → delivered w DB
 // Odpalane co 1 min przez launchd/cron. Zero Claude CLI.
@@ -23,9 +23,8 @@ async function loadEnv() {
     }
   } catch {}
   const workspace = path.resolve(process.env.HOME, 'Documents/kacper_trzepiecinski_workspace');
-  if (!process.env.INBOX_TODO_PATH)      process.env.INBOX_TODO_PATH      = path.join(workspace, 'Zadania/to_do.md');
-  if (!process.env.INBOX_INBOX_PATH)     process.env.INBOX_INBOX_PATH     = path.join(workspace, 'Zadania/Inbox.md');
-  if (!process.env.INBOX_DELEGATED_PATH) process.env.INBOX_DELEGATED_PATH = path.join(workspace, 'Zadania/Delegowane.md');
+  if (!process.env.INBOX_TODO_PATH)     process.env.INBOX_TODO_PATH     = path.join(workspace, 'Zadania/to_do.md');
+  if (!process.env.INBOX_SKRZYNKA_PATH) process.env.INBOX_SKRZYNKA_PATH = path.join(workspace, 'Zadania/Skrzynka.md');
 }
 
 // ──────── rendering ────────
@@ -103,32 +102,31 @@ function replaceBetweenMarkers(source, startMarker, endMarker, newContent) {
   return before + '\n' + newContent + (newContent && !newContent.endsWith('\n') ? '\n' : '') + after;
 }
 
-// ──────── Inbox.md writer ────────
-async function updateInboxFile(inboxPath, items) {
-  const raw = await fs.readFile(inboxPath, 'utf8');
-  const count = items.length;
-  const body = items.length ? items.map(renderCallout).join('\n\n') : '';
-  let updated = replaceBetweenMarkers(raw, '%% inbox:items:start %%', '%% inbox:items:end %%', body);
-  updated = updated.replace(/^\*\d+ now[a-z]+\*$/m, `*${count} ${count === 1 ? 'nowa' : 'nowych'}*`);
-  updated = updated.replace(/^_Brak nowych wiadomości\._\s*$/m, items.length ? '' : '_Brak nowych wiadomości._');
-  await fs.writeFile(inboxPath, updated, 'utf8');
-}
-
-// ──────── Delegowane.md writer ────────
-async function updateDelegatedFile(filePath, items) {
+// ──────── Skrzynka.md writer (oba bloki w jednym pliku) ────────
+async function updateSkrzynkaFile(filePath, inboxItems, delegatedItems) {
   const raw = await fs.readFile(filePath, 'utf8');
-  const count = items.length;
-  const body = items.length ? items.map(renderDelegatedCallout).join('\n\n') : '';
-  let updated = replaceBetweenMarkers(raw, '%% delegated:items:start %%', '%% delegated:items:end %%', body);
-  updated = updated.replace(/^\*\d+ w toku\*$/m, `*${count} w toku*`);
-  updated = updated.replace(/^_Brak wysłanych delegacji\._\s*$/m, items.length ? '' : '_Brak wysłanych delegacji._');
+  const inboxCount = inboxItems.length;
+  const delegatedCount = delegatedItems.length;
+
+  const inboxBody = inboxItems.length
+    ? inboxItems.map(renderCallout).join('\n\n')
+    : '_Brak nowych wiadomości._';
+  const delegatedBody = delegatedItems.length
+    ? delegatedItems.map(renderDelegatedCallout).join('\n\n')
+    : '_Brak wysłanych delegacji._';
+
+  let updated = replaceBetweenMarkers(raw, '%% inbox:items:start %%', '%% inbox:items:end %%', inboxBody);
+  updated = replaceBetweenMarkers(updated, '%% delegated:items:start %%', '%% delegated:items:end %%', delegatedBody);
+  updated = updated.replace(/^\*\d+ now[a-z]+\*$/m, `*${inboxCount} ${inboxCount === 1 ? 'nowa' : 'nowych'}*`);
+  updated = updated.replace(/^\*\d+ w toku\*$/m, `*${delegatedCount} w toku*`);
+
   await fs.writeFile(filePath, updated, 'utf8');
 }
 
 // ──────── to_do.md banner writer ────────
 function buildBanner(inboxCount, topInbox, delegatedCount, topDelegated) {
   const lines = [];
-  lines.push(`📥 **Inbox:** ${inboxCount} ${inboxCount === 1 ? 'nowa' : 'nowych'} · [[Inbox|otwórz]]   📤 **Delegowane:** ${delegatedCount} w toku`);
+  lines.push(`📥 **Inbox:** ${inboxCount} ${inboxCount === 1 ? 'nowa' : 'nowych'} · [[Skrzynka|otwórz]]   📤 **Delegowane:** ${delegatedCount} w toku`);
 
   if (topInbox.length > 0) {
     lines.push('');
@@ -136,7 +134,7 @@ function buildBanner(inboxCount, topInbox, delegatedCount, topDelegated) {
     const rest = inboxCount - topInbox.length;
     if (rest > 0) {
       lines.push('');
-      lines.push(`_...i ${rest} ${rest === 1 ? 'starsza' : 'starszych'} → [[Inbox]]_`);
+      lines.push(`_...i ${rest} ${rest === 1 ? 'starsza' : 'starszych'} → [[Skrzynka]]_`);
     }
   }
 
@@ -148,7 +146,7 @@ function buildBanner(inboxCount, topInbox, delegatedCount, topDelegated) {
     const rest = delegatedCount - topDelegated.length;
     if (rest > 0) {
       lines.push('');
-      lines.push(`_...i ${rest} ${rest === 1 ? 'starsza' : 'starszych'} → [[Delegowane|zobacz]]_`);
+      lines.push(`_...i ${rest} ${rest === 1 ? 'starsza' : 'starszych'} → [[Skrzynka|zobacz]]_`);
     }
   }
 
@@ -157,6 +155,10 @@ function buildBanner(inboxCount, topInbox, delegatedCount, topDelegated) {
 
 async function updateDashboard(todoPath, inboxCount, topInbox, delegatedCount, topDelegated) {
   const raw = await fs.readFile(todoPath, 'utf8');
+  if (!raw.includes('%% inbox:banner:start %%')) {
+    console.warn('[inbox-pull] banner markers missing in to_do.md — skipping banner update');
+    return;
+  }
   const banner = buildBanner(inboxCount, topInbox, delegatedCount, topDelegated);
   const updated = replaceBetweenMarkers(raw, '%% inbox:banner:start %%', '%% inbox:banner:end %%', banner);
   await fs.writeFile(todoPath, updated, 'utf8');
@@ -165,7 +167,7 @@ async function updateDashboard(todoPath, inboxCount, topInbox, delegatedCount, t
 // ──────── main ────────
 async function main() {
   await loadEnv();
-  const { INBOX_DB_URL, INBOX_USER, INBOX_TODO_PATH, INBOX_INBOX_PATH, INBOX_DELEGATED_PATH } = process.env;
+  const { INBOX_DB_URL, INBOX_USER, INBOX_TODO_PATH, INBOX_SKRZYNKA_PATH } = process.env;
   if (!INBOX_DB_URL || !INBOX_USER) {
     console.error('Missing INBOX_DB_URL or INBOX_USER');
     process.exit(1);
@@ -196,9 +198,8 @@ async function main() {
     const delegated = delegRes.rows;
     const topDelegated = delegated.slice(0, TOP_N_IN_DASHBOARD);
 
-    // Write to Inbox.md + Delegowane.md + to_do.md banner
-    await updateInboxFile(INBOX_INBOX_PATH, active);
-    await updateDelegatedFile(INBOX_DELEGATED_PATH, delegated);
+    // Write to Skrzynka.md (oba bloki) + to_do.md banner
+    await updateSkrzynkaFile(INBOX_SKRZYNKA_PATH, active, delegated);
     await updateDashboard(INBOX_TODO_PATH, active.length, topItems, delegated.length, topDelegated);
 
     // Mark pending → delivered
