@@ -298,11 +298,13 @@ function renderJobs() {
     return `
     <tr>
       <td><strong>${triggerIcons ? triggerIcons + ' ' : ''}${esc(j.name)}</strong></td>
-      <td>${j.skill_name
-        ? `<code>/${esc(j.skill_name)}</code>`
-        : j.arguments && j.arguments.length > 60
-          ? `<code class="prompt-truncated" onclick="showPromptPopup(jobsMap[${j.id}].arguments)">${esc(truncate(j.arguments, 60))}</code>`
-          : `<code>${esc(j.arguments || 'prompt')}</code>`
+      <td>${j.job_type === 'script'
+        ? `<code title="${esc(j.command || '')}">📜 ${esc(truncate(j.command || 'script', 60))}</code>`
+        : j.skill_name
+          ? `<code>/${esc(j.skill_name)}</code>`
+          : j.arguments && j.arguments.length > 60
+            ? `<code class="prompt-truncated" onclick="showPromptPopup(jobsMap[${j.id}].arguments)">${esc(truncate(j.arguments, 60))}</code>`
+            : `<code>${esc(j.arguments || 'prompt')}</code>`
       }</td>
       <td>${j.cron_expr ? esc(cronToHuman(j.cron_expr)) : '<span style="color:var(--cyan)">tylko webhook</span>'}</td>
       <td>
@@ -475,11 +477,22 @@ function openCreateModal() {
   document.getElementById('form-retries').value = '1';
   document.getElementById('form-wake').checked = false;
   document.getElementById('form-discord').checked = false;
+  document.getElementById('form-job-type').value = 'claude';
+  document.getElementById('form-command').value = '';
+  onJobTypeChange();
   updateWebhookUI(null);
   document.getElementById('webhook-section').style.display = 'none'; // hide for new jobs
   onFreqChange();
   populateSkillSelect();
   showModal();
+}
+
+function onJobTypeChange() {
+  const type = document.getElementById('form-job-type').value;
+  const isScript = type === 'script';
+  document.getElementById('skill-group').style.display = isScript ? 'none' : '';
+  document.getElementById('args-group').style.display = isScript ? 'none' : '';
+  document.getElementById('command-group').style.display = isScript ? '' : 'none';
 }
 
 function openEditModal(id) {
@@ -493,6 +506,9 @@ function openEditModal(id) {
   document.getElementById('form-retries').value = job.max_retries;
   document.getElementById('form-wake').checked = !!job.run_on_wake;
   document.getElementById('form-discord').checked = !!job.discord_notify;
+  document.getElementById('form-job-type').value = job.job_type || 'claude';
+  document.getElementById('form-command').value = job.command || '';
+  onJobTypeChange();
   document.getElementById('webhook-section').style.display = 'block';
   updateWebhookUI(job.webhook_token);
   populateSkillSelect(job.skill_name);
@@ -531,11 +547,14 @@ function closeModal(e) {
 async function saveJob(e) {
   e.preventDefault();
   const id = document.getElementById('form-id').value;
+  const jobType = document.getElementById('form-job-type').value;
   const body = {
     name: document.getElementById('form-name').value,
-    skill_name: document.getElementById('form-skill').value,
+    job_type: jobType,
+    skill_name: jobType === 'script' ? '' : document.getElementById('form-skill').value,
+    command: jobType === 'script' ? document.getElementById('form-command').value : null,
     cron_expr: buildCronFromForm(),
-    arguments: document.getElementById('form-args').value,
+    arguments: jobType === 'script' ? '' : document.getElementById('form-args').value,
     timeout_ms: parseInt(document.getElementById('form-timeout').value, 10),
     max_retries: parseInt(document.getElementById('form-retries').value, 10),
     run_on_wake: document.getElementById('form-wake').checked,

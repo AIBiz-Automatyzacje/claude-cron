@@ -184,7 +184,10 @@ async function handleApi(req, res) {
     if (!body.name) {
       return error(res, 'name is required');
     }
-    if (!body.skill_name && !body.arguments) {
+    const jobType = body.job_type || 'claude';
+    if (jobType === 'script') {
+      if (!body.command) return error(res, 'command is required for script jobs');
+    } else if (!body.skill_name && !body.arguments) {
       return error(res, 'skill_name or arguments (prompt) is required');
     }
     const job = db.createJob(body);
