@@ -28,8 +28,15 @@ async function loadEnv() {
 }
 
 // ──────── rendering ────────
-const TYPE_EMOJI = { task: '📝', reply: '💬', close: '✅' };
-const TYPE_LABEL = { task: 'Prośba', reply: 'Odpowiedź', close: 'Zamknięcie' };
+const TYPE_EMOJI = { task: '📝', query: '❓', reply: '💬', close: '✅' };
+const TYPE_LABEL = { task: 'Zadanie', query: 'Pytanie', reply: 'Odpowiedź', close: 'Zamknięcie' };
+// Callout tag per typ — task wymaga akcji wykonawczej, query wymaga odpowiedzi, reply jest info
+const CALLOUT_TAG = {
+  task: '[!todo]-',
+  query: '[!question]-',
+  reply: '[!tip]-',
+  close: '[!note]-',
+};
 
 function fmtTime(iso) {
   return new Date(iso).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -59,14 +66,30 @@ function renderCallout(row) {
   const quoted = (row.content || '').split('\n').map(l => '> > ' + l).join('\n');
   const isFresh = row.status === 'pending';
   const badge = isFresh ? '🆕 ' : '';
-  const tag = isFresh ? '[!tip]-' : '[!note]-'; // collapsible, default folded
+  const tag = CALLOUT_TAG[row.type] || '[!note]-';
+
+  // Checkbox zależny od typu — task czeka na "Zrobione", reszta na "Zapoznane"
+  const checkboxLabel = row.type === 'task' ? 'Zrobione' : 'Zapoznane';
+
+  // Reply: pokazuje quote oryginału (na co odpowiada)
+  const replyContext = row.type === 'reply' && row.original_title
+    ? `> **W odpowiedzi na:** _${row.original_title}_`
+    : null;
+
+  // Query: hint jak odpowiedzieć
+  const queryHint = row.type === 'query'
+    ? '> _Odpowiedz przez `/deleguj reply --thread-id <id z dołu>` lub czeknij ✅ Zapoznane._'
+    : null;
+
   return [
     `> ${tag} ${badge}${emoji} @${row.from_user} · ${fmtTime(row.created_at)}`,
     `> **${label}:** ${row.title}`,
+    replyContext,
     quoted ? '>\n' + quoted : null,
+    queryHint ? '>\n' + queryHint : null,
     '>',
-    '> - [ ] Zapoznane',
-    `> %% thread:${threadId} %%`,
+    `> - [ ] ${checkboxLabel}`,
+    `> %% id:${row.id} thread:${threadId} %%`,
   ].filter(Boolean).join('\n');
 }
 
@@ -176,22 +199,42 @@ async function main() {
   const client = new pg.Client({ connectionString: INBOX_DB_URL });
   await client.connect();
   try {
-    // Wszystkie aktywne (nieprzeczytane + dostarczone) dla mnie — idą do Inbox.md
+    // Auto-close: moje task/query w threadach gdzie ktoś inny odpisał replym
+    const closeRes = await client.query(
+      `UPDATE inbox SET status='done'
+       WHERE from_user = $1
+         AND type IN ('task','query')
+         AND status != 'done'
+         AND thread_id IN (
+           SELECT thread_id FROM inbox
+           WHERE type = 'reply' AND from_user != $1
+         )
+       RETURNING id`,
+      [INBOX_USER]
+    );
+
+    // Wszystkie aktywne dla mnie + tytuł oryginału (LATERAL — wyciągnięty raz, potem reply ma kontekst)
     const activeRes = await client.query(
-      `SELECT id, thread_id, from_user, type, title, content, status, created_at
-       FROM inbox
-       WHERE to_user = $1 AND status IN ('pending', 'delivered')
-       ORDER BY created_at DESC`,
+      `SELECT i.id, i.thread_id, i.from_user, i.type, i.title, i.content, i.status, i.created_at,
+              orig.title AS original_title
+       FROM inbox i
+       LEFT JOIN LATERAL (
+         SELECT title FROM inbox o
+         WHERE o.thread_id = i.thread_id AND o.type IN ('task','query')
+         ORDER BY o.created_at ASC LIMIT 1
+       ) orig ON i.type = 'reply'
+       WHERE i.to_user = $1 AND i.status IN ('pending','delivered')
+       ORDER BY i.created_at DESC`,
       [INBOX_USER]
     );
     const active = activeRes.rows;
     const topItems = active.slice(0, TOP_N_IN_DASHBOARD);
 
-    // Moje delegowane w toku (wysłane przeze mnie, jeszcze nieobsłużone)
+    // Moje delegowane w toku (task + query wysłane przeze mnie, jeszcze nieobsłużone)
     const delegRes = await client.query(
-      `SELECT id, thread_id, to_user, title, created_at, status
+      `SELECT id, thread_id, to_user, title, type, created_at, status
        FROM inbox
-       WHERE from_user = $1 AND type = 'task' AND status IN ('pending', 'delivered', 'read')
+       WHERE from_user = $1 AND type IN ('task','query') AND status != 'done'
        ORDER BY created_at ASC`,
       [INBOX_USER]
     );
@@ -210,7 +253,8 @@ async function main() {
 
     console.log(
       `[inbox-pull] ${new Date().toISOString()} — ` +
-      `user=${INBOX_USER} inbox=${active.length} (new=${pendingIds.length}) delegated=${delegated.length}`
+      `user=${INBOX_USER} inbox=${active.length} (new=${pendingIds.length}) ` +
+      `delegated=${delegated.length} auto-closed=${closeRes.rows.length}`
     );
   } finally {
     await client.end();
