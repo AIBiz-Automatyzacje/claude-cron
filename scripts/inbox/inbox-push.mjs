@@ -110,7 +110,7 @@ async function appendToArchive(archiveDir, row, closedBy) {
 }
 
 // ──────── main ────────
-async function main() {
+export async function main() {
   await loadEnv();
   const { INBOX_DB_URL, INBOX_USER, INBOX_SKRZYNKA_PATH, INBOX_ARCHIVE_DIR } = process.env;
   if (!INBOX_DB_URL || !INBOX_USER) {
@@ -183,4 +183,7 @@ async function main() {
   }
 }
 
-main().catch(e => { console.error('[inbox-push] FATAL:', e.message); process.exit(1); });
+// Run only when executed directly (not when imported by inbox-sync.mjs)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(e => { console.error('[inbox-push] FATAL:', e.message); process.exit(1); });
+}

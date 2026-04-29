@@ -188,7 +188,7 @@ async function updateDashboard(todoPath, inboxCount, topInbox, delegatedCount, t
 }
 
 // ──────── main ────────
-async function main() {
+export async function main() {
   await loadEnv();
   const { INBOX_DB_URL, INBOX_USER, INBOX_TODO_PATH, INBOX_SKRZYNKA_PATH } = process.env;
   if (!INBOX_DB_URL || !INBOX_USER) {
@@ -261,4 +261,7 @@ async function main() {
   }
 }
 
-main().catch(e => { console.error('[inbox-pull] FATAL:', e.message); process.exit(1); });
+// Run only when executed directly (not when imported by inbox-sync.mjs)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(e => { console.error('[inbox-pull] FATAL:', e.message); process.exit(1); });
+}
