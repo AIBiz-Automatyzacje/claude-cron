@@ -225,8 +225,8 @@ export async function main() {
   const client = new pg.Client({ connectionString: INBOX_DB_URL });
   await client.connect();
   try {
-    // Auto-close: moje task/query w threadach gdzie ktoś inny odpisał replym
-    const closeRes = await client.query(
+    // Auto-close 1: MOJE WYSŁANE task/query w threadach gdzie ktoś INNY odpisał replym
+    const closeSentRes = await client.query(
       `UPDATE inbox SET status='done'
        WHERE from_user = $1
          AND type IN ('task','query')
@@ -238,6 +238,23 @@ export async function main() {
        RETURNING id`,
       [INBOX_USER]
     );
+
+    // Auto-close 2 (Faza 3 IU2): MOJE OTRZYMANE task/query w threadach gdzie JA dałem reply
+    // Eliminuje friction po custom replym przez /deleguj reply — task znika ze Skrzynki bez ręcznego [x]
+    const closeRecvRes = await client.query(
+      `UPDATE inbox SET status='done'
+       WHERE to_user = $1
+         AND type IN ('task','query')
+         AND status != 'done'
+         AND thread_id IN (
+           SELECT thread_id FROM inbox
+           WHERE type = 'reply' AND from_user = $1
+         )
+       RETURNING id`,
+      [INBOX_USER]
+    );
+
+    const autoClosedTotal = closeSentRes.rows.length + closeRecvRes.rows.length;
 
     // Wszystkie aktywne dla mnie + tytuł oryginału (LATERAL — wyciągnięty raz, potem reply ma kontekst)
     const activeRes = await client.query(
@@ -299,7 +316,7 @@ export async function main() {
     console.log(
       `[inbox-pull] ${new Date().toISOString()} — ` +
       `user=${INBOX_USER} inbox=${active.length} (task=${taskCount} query=${queryCount} new=${pendingIds.length}) ` +
-      `delegated=${delegated.length} (stale=${staleDelegatedCount}) auto-closed=${closeRes.rows.length}`
+      `delegated=${delegated.length} (stale=${staleDelegatedCount}) auto-closed=${autoClosedTotal} (sent=${closeSentRes.rows.length} recv=${closeRecvRes.rows.length})`
     );
   } finally {
     await client.end();
