@@ -147,9 +147,35 @@ async function updateSkrzynkaFile(filePath, inboxItems, delegatedItems) {
 }
 
 // ──────── to_do.md banner writer ────────
-function buildBanner(inboxCount, topInbox, delegatedCount, topDelegated) {
+// Polski plural — uproszczona reguła (1 / 2-4 / 5+). Dla MVP wystarczy.
+function plural(n, one, few, many) {
+  if (n === 1) return one;
+  if (n >= 2 && n < 5) return few;
+  return many;
+}
+
+function buildBanner({ inboxCount, taskCount, queryCount, topInbox, delegatedCount, staleDelegatedCount, topDelegated }) {
   const lines = [];
-  lines.push(`📥 **Inbox:** ${inboxCount} ${inboxCount === 1 ? 'nowa' : 'nowych'} · [[Skrzynka|otwórz]]   📤 **Delegowane:** ${delegatedCount} w toku`);
+
+  // Inbox label — rozbicie na typy gdy są task/query, fallback total dla samych reply/close
+  let inboxLabel;
+  if (inboxCount === 0) {
+    inboxLabel = '0 nowych';
+  } else if (taskCount > 0 && queryCount > 0) {
+    inboxLabel = `${taskCount} ${plural(taskCount, 'zadanie', 'zadania', 'zadań')}, ${queryCount} ${plural(queryCount, 'pytanie', 'pytania', 'pytań')}`;
+  } else if (taskCount > 0) {
+    inboxLabel = `${taskCount} ${plural(taskCount, 'zadanie', 'zadania', 'zadań')}`;
+  } else if (queryCount > 0) {
+    inboxLabel = `${queryCount} ${plural(queryCount, 'pytanie', 'pytania', 'pytań')}`;
+  } else {
+    inboxLabel = `${inboxCount} ${plural(inboxCount, 'nowa', 'nowe', 'nowych')}`;
+  }
+
+  // Delegated label — stale count w nawiasie gdy >0
+  const stalePart = staleDelegatedCount > 0 ? ` (${staleDelegatedCount} stale ⚠️)` : '';
+  const delegatedLabel = `${delegatedCount} w toku${stalePart}`;
+
+  lines.push(`📥 **Inbox:** ${inboxLabel} · [[Skrzynka|otwórz]]   📤 **Delegowane:** ${delegatedLabel}`);
 
   if (topInbox.length > 0) {
     lines.push('');
@@ -176,13 +202,13 @@ function buildBanner(inboxCount, topInbox, delegatedCount, topDelegated) {
   return lines.join('\n');
 }
 
-async function updateDashboard(todoPath, inboxCount, topInbox, delegatedCount, topDelegated) {
+async function updateDashboard(todoPath, args) {
   const raw = await fs.readFile(todoPath, 'utf8');
   if (!raw.includes('%% inbox:banner:start %%')) {
     console.warn('[inbox-pull] banner markers missing in to_do.md — skipping banner update');
     return;
   }
-  const banner = buildBanner(inboxCount, topInbox, delegatedCount, topDelegated);
+  const banner = buildBanner(args);
   const updated = replaceBetweenMarkers(raw, '%% inbox:banner:start %%', '%% inbox:banner:end %%', banner);
   await fs.writeFile(todoPath, updated, 'utf8');
 }
@@ -230,6 +256,10 @@ export async function main() {
     const active = activeRes.rows;
     const topItems = active.slice(0, TOP_N_IN_DASHBOARD);
 
+    // Agregat typów dla bannera (Faza 3 — rozbicie task/query)
+    const taskCount = active.filter(r => r.type === 'task').length;
+    const queryCount = active.filter(r => r.type === 'query').length;
+
     // Moje delegowane w toku (task + query wysłane przeze mnie, jeszcze nieobsłużone)
     const delegRes = await client.query(
       `SELECT id, thread_id, to_user, title, type, created_at, status
@@ -241,9 +271,24 @@ export async function main() {
     const delegated = delegRes.rows;
     const topDelegated = delegated.slice(0, TOP_N_IN_DASHBOARD);
 
+    // Stale count w Delegowanych (Faza 3 — sygnał kogo trzeba pingnąć)
+    const STALE_HOURS = 48;
+    const staleDelegatedCount = delegated.filter(r => {
+      const hours = (Date.now() - new Date(r.created_at).getTime()) / 3600000;
+      return hours >= STALE_HOURS;
+    }).length;
+
     // Write to Skrzynka.md (oba bloki) + to_do.md banner
     await updateSkrzynkaFile(INBOX_SKRZYNKA_PATH, active, delegated);
-    await updateDashboard(INBOX_TODO_PATH, active.length, topItems, delegated.length, topDelegated);
+    await updateDashboard(INBOX_TODO_PATH, {
+      inboxCount: active.length,
+      taskCount,
+      queryCount,
+      topInbox: topItems,
+      delegatedCount: delegated.length,
+      staleDelegatedCount,
+      topDelegated,
+    });
 
     // Mark pending → delivered
     const pendingIds = active.filter(r => r.status === 'pending').map(r => r.id);
@@ -253,8 +298,8 @@ export async function main() {
 
     console.log(
       `[inbox-pull] ${new Date().toISOString()} — ` +
-      `user=${INBOX_USER} inbox=${active.length} (new=${pendingIds.length}) ` +
-      `delegated=${delegated.length} auto-closed=${closeRes.rows.length}`
+      `user=${INBOX_USER} inbox=${active.length} (task=${taskCount} query=${queryCount} new=${pendingIds.length}) ` +
+      `delegated=${delegated.length} (stale=${staleDelegatedCount}) auto-closed=${closeRes.rows.length}`
     );
   } finally {
     await client.end();
