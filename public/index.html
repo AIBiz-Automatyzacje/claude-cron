@@ -64,6 +64,10 @@
     <div class="tab-panel" id="panel-history">
       <div class="toolbar">
         <h2>HISTORIA URUCHOMIEŃ</h2>
+        <label class="form-check" style="margin:0 auto 0 12px">
+          <input type="checkbox" id="runs-hide-routine" checked onchange="loadRuns()">
+          Ukryj rutynowe (script success)
+        </label>
         <button class="btn btn-small" onclick="loadRuns()">ODŚWIEŻ</button>
       </div>
       <div class="table-wrap">
@@ -130,8 +134,20 @@
           <input type="text" id="form-name" required placeholder="Nazwa joba">
         </div>
         <div class="form-group">
+          <label>TYP JOBA</label>
+          <select id="form-job-type" onchange="onJobTypeChange()">
+            <option value="claude">Claude skill / prompt</option>
+            <option value="script">Skrypt Node.js</option>
+          </select>
+        </div>
+        <div class="form-group" id="skill-group">
           <label>SKILL (opcjonalnie)</label>
           <select id="form-skill"></select>
+        </div>
+        <div class="form-group" id="command-group" style="display:none">
+          <label>ŚCIEŻKA SKRYPTU</label>
+          <input type="text" id="form-command" placeholder="/absolute/path/to/script.mjs">
+          <div class="hint">Odpalane jako <code>node &lt;ścieżka&gt;</code> z cwd = workspace</div>
         </div>
         <div class="form-group">
           <label>KIEDY URUCHAMIAĆ</label>
@@ -161,12 +177,12 @@
           </select>
         </div>
         <div class="form-group" id="interval-group" style="display:none">
-          <label>CO ILE</label>
-          <select id="form-interval"></select>
+          <label id="interval-label">CO ILE</label>
+          <input type="number" id="form-interval" min="1" value="1" step="1">
         </div>
         <div id="schedule-preview" class="hint" style="margin-top:-6px;margin-bottom:12px"></div>
         <input type="hidden" id="form-cron">
-        <div class="form-group">
+        <div class="form-group" id="args-group">
           <label>PROMPT / ARGUMENTY</label>
           <textarea id="form-args" rows="3" placeholder="Treść promptu lub dodatkowe argumenty do skilla"></textarea>
         </div>

@@ -152,10 +152,15 @@ function onFreqChange() {
   dayGroup.style.display = freq === 'weekly' ? 'block' : 'none';
   intervalGroup.style.display = (freq === 'hours' || freq === 'minutes') ? 'block' : 'none';
 
+  const intervalLabel = document.getElementById('interval-label');
   if (freq === 'hours') {
-    intervalSel.innerHTML = [1,2,3,4,6,8,12].map(n => `<option value="${n}">Co ${n} godz.</option>`).join('');
+    intervalLabel.textContent = 'CO ILE GODZIN';
+    intervalSel.max = 23;
+    if (!intervalSel.value || intervalSel.value < 1) intervalSel.value = 1;
   } else if (freq === 'minutes') {
-    intervalSel.innerHTML = [5,10,15,20,30,45].map(n => `<option value="${n}">Co ${n} min</option>`).join('');
+    intervalLabel.textContent = 'CO ILE MINUT';
+    intervalSel.max = 59;
+    if (!intervalSel.value || intervalSel.value < 1) intervalSel.value = 1;
   }
   updateSchedulePreview();
 }
@@ -263,7 +268,8 @@ async function loadJobs() {
 
 async function loadRuns() {
   try {
-    const runs = await API.get('/api/runs?limit=100');
+    const hideRoutine = document.getElementById('runs-hide-routine')?.checked ? '&hide_routine=1' : '';
+    const runs = await API.get(`/api/runs?limit=100${hideRoutine}`);
     renderRuns(runs);
   } catch (e) {
     toast('Błąd ładowania historii', true);
@@ -298,11 +304,13 @@ function renderJobs() {
     return `
     <tr>
       <td><strong>${triggerIcons ? triggerIcons + ' ' : ''}${esc(j.name)}</strong></td>
-      <td>${j.skill_name
-        ? `<code>/${esc(j.skill_name)}</code>`
-        : j.arguments && j.arguments.length > 60
-          ? `<code class="prompt-truncated" onclick="showPromptPopup(jobsMap[${j.id}].arguments)">${esc(truncate(j.arguments, 60))}</code>`
-          : `<code>${esc(j.arguments || 'prompt')}</code>`
+      <td>${j.job_type === 'script'
+        ? `<code title="${esc(j.command || '')}">📜 ${esc(truncate(j.command || 'script', 60))}</code>`
+        : j.skill_name
+          ? `<code>/${esc(j.skill_name)}</code>`
+          : j.arguments && j.arguments.length > 60
+            ? `<code class="prompt-truncated" onclick="showPromptPopup(jobsMap[${j.id}].arguments)">${esc(truncate(j.arguments, 60))}</code>`
+            : `<code>${esc(j.arguments || 'prompt')}</code>`
       }</td>
       <td>${j.cron_expr ? esc(cronToHuman(j.cron_expr)) : '<span style="color:var(--cyan)">tylko webhook</span>'}</td>
       <td>
@@ -476,11 +484,22 @@ function openCreateModal() {
   document.getElementById('form-retries').value = '1';
   document.getElementById('form-wake').checked = false;
   document.getElementById('form-discord').checked = false;
+  document.getElementById('form-job-type').value = 'claude';
+  document.getElementById('form-command').value = '';
+  onJobTypeChange();
   updateWebhookUI(null);
   document.getElementById('webhook-section').style.display = 'none'; // hide for new jobs
   onFreqChange();
   populateSkillSelect();
   showModal();
+}
+
+function onJobTypeChange() {
+  const type = document.getElementById('form-job-type').value;
+  const isScript = type === 'script';
+  document.getElementById('skill-group').style.display = isScript ? 'none' : '';
+  document.getElementById('args-group').style.display = isScript ? 'none' : '';
+  document.getElementById('command-group').style.display = isScript ? '' : 'none';
 }
 
 function openEditModal(id) {
@@ -495,6 +514,9 @@ function openEditModal(id) {
   document.getElementById('form-retries').value = job.max_retries;
   document.getElementById('form-wake').checked = !!job.run_on_wake;
   document.getElementById('form-discord').checked = !!job.discord_notify;
+  document.getElementById('form-job-type').value = job.job_type || 'claude';
+  document.getElementById('form-command').value = job.command || '';
+  onJobTypeChange();
   document.getElementById('webhook-section').style.display = 'block';
   updateWebhookUI(job.webhook_token);
   populateSkillSelect(job.skill_name);
@@ -533,11 +555,14 @@ function closeModal(e) {
 async function saveJob(e) {
   e.preventDefault();
   const id = document.getElementById('form-id').value;
+  const jobType = document.getElementById('form-job-type').value;
   const body = {
     name: document.getElementById('form-name').value,
-    skill_name: document.getElementById('form-skill').value,
+    job_type: jobType,
+    skill_name: jobType === 'script' ? '' : document.getElementById('form-skill').value,
+    command: jobType === 'script' ? document.getElementById('form-command').value : null,
     cron_expr: buildCronFromForm(),
-    arguments: document.getElementById('form-args').value,
+    arguments: jobType === 'script' ? '' : document.getElementById('form-args').value,
     timeout_ms: parseInt(document.getElementById('form-timeout').value, 10),
     idle_timeout_ms: parseInt(document.getElementById('form-idle-timeout').value, 10),
     max_retries: parseInt(document.getElementById('form-retries').value, 10),

@@ -184,7 +184,10 @@ async function handleApi(req, res) {
     if (!body.name) {
       return error(res, 'name is required');
     }
-    if (!body.skill_name && !body.arguments) {
+    const jobType = body.job_type || 'claude';
+    if (jobType === 'script') {
+      if (!body.command) return error(res, 'command is required for script jobs');
+    } else if (!body.skill_name && !body.arguments) {
       return error(res, 'skill_name or arguments (prompt) is required');
     }
     const job = db.createJob(body);
@@ -259,7 +262,8 @@ async function handleApi(req, res) {
     const limit = parseInt(params.get('limit') || '50', 10);
     const offset = parseInt(params.get('offset') || '0', 10);
     const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
-    return json(res, db.getRuns({ limit, offset, job_id }));
+    const hideRoutine = params.get('hide_routine') === '1';
+    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine }));
   }
 
   // GET /api/runs/current
@@ -278,7 +282,8 @@ async function handleApi(req, res) {
     const limit = parseInt(params.get('limit') || '50', 10);
     const offset = parseInt(params.get('offset') || '0', 10);
     const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
-    return json(res, db.getRuns({ limit, offset, job_id }));
+    const hideRoutine = params.get('hide_routine') === '1';
+    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine }));
   }
 
   error(res, 'Not found', 404);
