@@ -66,7 +66,7 @@
         <h2>HISTORIA URUCHOMIEŃ</h2>
         <label class="form-check" style="margin:0 auto 0 12px">
           <input type="checkbox" id="runs-hide-routine" checked onchange="loadRuns()">
-          Ukryj rutynowe (script success)
+          Ukryj rutynowe runy
         </label>
         <button class="btn btn-small" onclick="loadRuns()">ODŚWIEŻ</button>
       </div>
@@ -210,6 +210,12 @@
           <label class="form-check">
             <input type="checkbox" id="form-discord">
             Powiadomienie Discord
+          </label>
+        </div>
+        <div class="form-group">
+          <label class="form-check">
+            <input type="checkbox" id="form-routine">
+            Rutynowy — ukrywaj udane runy w historii (np. sync co minutę). Fails zawsze widoczne.
           </label>
         </div>
         <div class="webhook-section" id="webhook-section">
