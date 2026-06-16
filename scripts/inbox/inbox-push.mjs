@@ -10,11 +10,10 @@
 import pg from 'pg';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // ──────── env loader ────────
-async function loadEnv() {
-  const envPath = process.env.INBOX_ENV_FILE
-    || path.resolve(process.env.HOME, 'Documents/kacper_trzepiecinski_workspace/.env');
+async function readEnvFile(envPath) {
   try {
     const raw = await fs.readFile(envPath, 'utf8');
     for (const line of raw.split('\n')) {
@@ -22,9 +21,41 @@ async function loadEnv() {
       if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
     }
   } catch {}
-  const workspace = path.resolve(process.env.HOME, 'Documents/kacper_trzepiecinski_workspace');
-  if (!process.env.INBOX_SKRZYNKA_PATH) process.env.INBOX_SKRZYNKA_PATH = path.join(workspace, 'Zadania/Skrzynka.md');
-  if (!process.env.INBOX_ARCHIVE_DIR)   process.env.INBOX_ARCHIVE_DIR   = path.join(workspace, 'Zasoby/inbox-archive');
+}
+
+function resolveSkrzynkaPath() {
+  if (process.env.INBOX_SKRZYNKA_PATH) return process.env.INBOX_SKRZYNKA_PATH;
+  if (process.env.CLAUDE_CRON_WORKSPACE) {
+    return path.join(process.env.CLAUDE_CRON_WORKSPACE, 'Zadania/Skrzynka.md');
+  }
+  throw new Error('Ustaw INBOX_SKRZYNKA_PATH w .env (lub CLAUDE_CRON_WORKSPACE)');
+}
+
+function resolveArchiveDir(skrzynkaPath) {
+  if (process.env.INBOX_ARCHIVE_DIR) return process.env.INBOX_ARCHIVE_DIR;
+  // Wyprowadź z workspace'u Skrzynki: <workspace>/Zadania/Skrzynka.md → <workspace>/Zasoby/inbox-archive
+  const workspace = path.dirname(path.dirname(skrzynkaPath));
+  return path.join(workspace, 'Zasoby/inbox-archive');
+}
+
+async function loadEnv() {
+  if (process.env.INBOX_ENV_FILE) {
+    await readEnvFile(process.env.INBOX_ENV_FILE);
+    // Early-return: gdy mamy komplet z .env, nie dotykamy HOME w ogóle
+    if (process.env.INBOX_DB_URL && process.env.INBOX_USER) {
+      process.env.INBOX_SKRZYNKA_PATH = resolveSkrzynkaPath();
+      process.env.INBOX_ARCHIVE_DIR   = resolveArchiveDir(process.env.INBOX_SKRZYNKA_PATH);
+      return;
+    }
+  } else {
+    // Spójnie z inbox-pull.mjs: workspace z CLAUDE_CRON_WORKSPACE → HOME/Documents/...; .env z tego workspace'u
+    const home = process.env.HOME || process.env.USERPROFILE;
+    const workspace = process.env.CLAUDE_CRON_WORKSPACE
+      || (home ? path.resolve(home, 'Documents/kacper_trzepiecinski_workspace') : null);
+    if (workspace) await readEnvFile(path.join(workspace, '.env'));
+  }
+  process.env.INBOX_SKRZYNKA_PATH = resolveSkrzynkaPath();
+  process.env.INBOX_ARCHIVE_DIR   = resolveArchiveDir(process.env.INBOX_SKRZYNKA_PATH);
 }
 
 // ──────── parser ────────
@@ -184,6 +215,6 @@ export async function main() {
 }
 
 // Run only when executed directly (not when imported by inbox-sync.mjs)
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(e => { console.error('[inbox-push] FATAL:', e.message); process.exit(1); });
 }
