@@ -297,22 +297,12 @@ export async function main() {
       [INBOX_USER]
     );
 
-    // Auto-close 2 (Faza 3 IU2): MOJE OTRZYMANE task/query w threadach gdzie JA dałem reply
-    // Eliminuje friction po custom replym przez /deleguj reply — task znika ze Skrzynki bez ręcznego [x]
-    const closeRecvRes = await client.query(
-      `UPDATE inbox SET status='done'
-       WHERE to_user = $1
-         AND type IN ('task','query')
-         AND status != 'done'
-         AND thread_id IN (
-           SELECT thread_id FROM inbox
-           WHERE type = 'reply' AND from_user = $1
-         )
-       RETURNING id`,
-      [INBOX_USER]
-    );
-
-    const autoClosedTotal = closeSentRes.rows.length + closeRecvRes.rows.length;
+    // F-D (17.06): USUNIĘTO Auto-close 2 (otrzymane task/query → done po moim replym).
+    // Powód: odpowiedź ≠ załatwienie. Auto-zamykanie OTRZYMANYCH gubiło otwarte wątki ze
+    // Skrzynki, mimo że od tego jest ręczny checkbox [x] Zrobione/Zapoznane (→ inbox-push).
+    // Otrzymane znikają teraz WYŁĄCZNIE po ręcznym odhaczeniu. Auto-close zostaje tylko dla
+    // WYSŁANYCH (Auto-close 1 wyżej) — tam zniknięcie po odpowiedzi jest pożądane.
+    const autoClosedTotal = closeSentRes.rows.length;
 
     // Moje aktywne wiadomości (Otrzymane = do mnie, nie-done) — kotwice wątków + liczniki
     const activeRes = await client.query(
@@ -382,7 +372,7 @@ export async function main() {
     console.log(
       `[inbox-pull] ${new Date().toISOString()} — ` +
       `user=${INBOX_USER} inbox=${active.length} (task=${taskCount} query=${queryCount} new=${pendingIds.length}) ` +
-      `delegated=${delegated.length} (stale=${staleDelegatedCount}) auto-closed=${autoClosedTotal} (sent=${closeSentRes.rows.length} recv=${closeRecvRes.rows.length})`
+      `delegated=${delegated.length} (stale=${staleDelegatedCount}) auto-closed=${autoClosedTotal} (sent only; recv auto-close usunięty — F-D)`
     );
   } finally {
     await client.end();
