@@ -1,7 +1,7 @@
 # Kontekst: Migracja claude-cron → Puls
 
 Branch: `feature/migracja-puls-rebrand`
-Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 1)
+Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 2)
 
 ## Status realizacji
 
@@ -12,6 +12,18 @@ Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 1)
 - **Unit 4** — `public/enum-map.js` (dual-export CJS+global), `mapStatus`/`mapTrigger` wg kanonu §4.0.
 - **Testy:** `node --test` → `lib/db.test.js` 11/11 PASS, `public/enum-map.test.js` 12/12 PASS (łącznie 23 PASS, 0 FAIL).
 - **Walidacja:** `node --check` OK dla wszystkich plików; typecheck/lint = n/a (czysty CommonJS, brak TS/ESLint w projekcie); brak `vite build` (projekt to Node.js scheduler, nie SPA); zero nowych zależności.
+
+### Faza 2 — Front + rebrand widoczny (Unit 5–7): UKOŃCZONA
+- **Unit 5** — `public/index.html` przepisany: header (logo-puls + brand + env-toggle), `nav.tabs`, statbar (ID montażowe `stat-next-name/stat-next-eta/stat-today-ok/stat-today-err/stat-health`), 3× `section.view`, kill-bar, toast-container, modal (pełny kontrakt `form-*` + segment binarny Skill/Skrypt piszący do `input#form-job-type`), webhook-section, akordeon. Head: `<title>Puls — …>`, favicon, fonty Google; kolejność skryptów `enum-map.js` → `render-helpers.js` → `app.js`. KONTRAKT ID odtworzony.
+- **Unit 6** — render w `public/app.js` przepisany: `renderJobs` (gęsta tabela + sparkline z `/api/runs/recent`), `renderRuns` (5 statusów przez `EnumMap`, log viewer, pill Rutynowe z `jobsMap`), `renderSkills` (Kafelki + filtry source + stopki), `renderStatbar` z wzbogaconego `/api/status`, tab-switching na `.view`/`.active`, `poll()` 3s z guardem i zachowaniem `expandedRuns`. Guard/sparkline wyekstrahowane do nowego `public/render-helpers.js` (dual-export, testowalne).
+- **Unit 7** — banner `server.js` → `🫀  Puls running …`; `package.json` description → „Puls — scheduler agentów AI (Claude Code), AIBIZ" + `"test": "node --test"` (`name` zostaje `claude-cron`).
+- **Testy:** `node --test` → **39/39 PASS, 0 FAIL** (db.test.js + next-run.test.js + enum-map.test.js + nowy render-helpers.test.js 15 testów). `node --check` OK dla app.js / server.js / render-helpers.js.
+- **Walidacja:** typecheck/lint/vite build = n/a (czysty Node.js CommonJS, brak TS/ESLint/vite w repo); zero nowych zależności (runner `node --test` warm, brak zimnego cache).
+
+### Odchylenia Fazy 2 (do uwagi review)
+- **Unit 5:** klasa env-btn kombinowana (`class="env-opt env-btn"`) — `env-opt` = styl dema, `env-btn` = kontrakt logiki (`switchEnv` czyta `.env-btn`). Literalny grep `class="env-btn"` z planu nie łapie kombinowanej klasy, ale `querySelectorAll('.env-btn')` matchuje. Analogicznie filtry skilli `class="filter-pill skill-filter"`. Usunięto martwy `onclick="toggleAccordion()"` (funkcja nie istnieje w app.js). Modal: `hidden` jako stan początkowy (CSS dema); togglowanie `.show` przez logikę — pogodzenie mechanizmu = obszar CSS/Unit 6.
+- **Unit 6:** dodano `<script src="/render-helpers.js">` do `index.html` (jedna linia, analogiczna do `enum-map.js`) — konieczne by przeglądarka załadowała nowy moduł. Skille renderowane tylko jako Kafelki — `index.html` (Unit 5) nie zawiera DOM przełącznika Lista; dodanie wykraczałoby poza pliki Unit 6. Filtry po source i stopki działają. Guard/sparkline w `render-helpers.js` (dual-export jak enum-map.js), bo `app.js` to plik przeglądarkowy bez `module.exports`.
+- **Unit 7:** brak zmian zależności; typecheck/lint/migracja/RLS = n/a (czysty Node CommonJS, IU nie dotyka warstwy bazy/Supabase).
 
 ### Odchylenia Fazy 1 (do uwagi review)
 - **Unit 1:** grep weryfikacyjny `--mute:#7d7d7d` (bez spacji) NIE przechodzi — źródło `puls-demo/style.css:14` ma `--mute: #7d7d7d;` (ze spacją, wariant WCAG AA). CSS świadomie NIE zmodyfikowany pod grep: reguła „kopia 1:1, nie modyfikuj treści wzorca" > formatowanie greppa. Wariant WCAG AA obecny, różnica wyłącznie whitespace.
@@ -61,6 +73,12 @@ Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 1)
 - Zero nowych zależności (reguła: preferuj istniejące / nie dodawaj deps).
 - Kolejność: Faza 1 (Unit 1–4) równolegle → Faza 2 (Unit 5 → 6; Unit 7 niezależny) → Faza 3 (Unit 8) → Faza 4 (Unit 9–10, odroczone).
 - Parytet VPS: dodatki backendu działają w trybie VPS dopiero po deployu kodu na VPS.
+
+## Review fazy 1 (2026-06-23)
+- Raport: `docs/active/migracja-puls-rebrand/review-faza-1.md`. Bramka: **ZASTRZEZENIA** (0× P1, 7× P2, 11× P3, 1× OPERATOR).
+- Testy: `node --test` → **23/23 PASS** (db.test.js 11 + enum-map.test.js 12). Serwer startuje i nasłuchuje na 7777.
+- Kluczowe P2: (1) `lib/config.js` ruszony mimo granicy „NIE ruszamy" — override `CLAUDE_CRON_DB`, wymaga sign-offu lub przeniesienia izolacji do warstwy testu; (2) `computeNextRun` (server.js) bez testów — wyciągnąć do `lib/`; (3) logo 1.2 MB + brak cache w `serveStatic`; (4) `SELECT *` w `getRecentRunsPerJob` (zbędny payload + wyciek `rn`); (5) route `/api/runs/recent` bez testu integracyjnego (porządek if-ów krytyczny).
+- Bookkeeping `Weryfikacja:`: 10× odznaczone (CLI/grep PASS), 1× FAIL (grep `--mute:#7d7d7d` — CSS ma `--mute: #7d7d7d` ze spacją; token poprawny, wzorzec nietrafiony).
 
 ## Źródła
 - Requirements doc: brak (dokument źródłowy: `MIGRACJA-PULS.md` w root repo)

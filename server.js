@@ -419,7 +419,7 @@ db.getDb();
 scheduler.start();
 
 server.listen(PORT, () => {
-  console.log(`\n🕹️  CLAUDE-CRON running at http://localhost:${PORT}`);
+  console.log(`\n🫀  Puls running at http://localhost:${PORT}`);
   console.log(`   Press Ctrl+C to stop\n`);
 });
 

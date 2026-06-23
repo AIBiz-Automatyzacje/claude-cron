@@ -250,7 +250,7 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 
 ### Faza 2 — Front + rebrand widoczny
 
-- [ ] **Unit 5: Przepisany `public/index.html` (markup dema + KONTRAKT ID + elementy produkcyjne)**
+- [x] **Unit 5: Przepisany `public/index.html` (markup dema + KONTRAKT ID + elementy produkcyjne)**
 
 **Cel:** Docelowy szkielet UI z dema, z ID czytanymi przez zachowaną logikę i z elementami produkcyjnymi, których demo nie ma.
 
@@ -286,7 +286,7 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 
 ---
 
-- [ ] **Unit 6: Przepisany render w `public/app.js` (logika zachowana, render z API, poll z guardem)**
+- [x] **Unit 6: Przepisany render w `public/app.js` (logika zachowana, render z API, poll z guardem)**
 
 **Cel:** Podmienić warstwę render (mock dema → dane API) zachowując całą logikę; zaimplementować statbar, mapowanie enumów, guard poll i zachowanie rozwinięć.
 
@@ -336,7 +336,7 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 
 ---
 
-- [ ] **Unit 7: Rebrand widoczny backendu + `package.json` (description + test script)**
+- [x] **Unit 7: Rebrand widoczny backendu + `package.json` (description + test script)**
 
 **Cel:** Banner serwera „Puls", opis w `package.json`, włączenie `node --test`.
 
@@ -359,7 +359,7 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 - `server.js:370-372` (istniejący banner)
 
 **Scenariusze testowe:**
-- [Unit] `npm test` (`node --test`) uruchamia istniejące testy i kończy się sukcesem.
+- [x] [Unit] `npm test` (`node --test`) uruchamia istniejące testy i kończy się sukcesem. (39/39 PASS)
 
 **Weryfikacja:**
 - `grep -q 'Puls running' server.js` i brak `CLAUDE-CRON running` w server.js

@@ -77,11 +77,11 @@ P3 (nity — opcjonalnie, szczegóły w `review-faza-1.md`): `SELECT *` + wyciek
 ## Faza 2 — Front + rebrand widoczny
 
 ### Unit 5: Przepisany `public/index.html` (markup dema + KONTRAKT ID + elementy produkcyjne) — `feature-builder-ui` (L)
-- [ ] Przepisz `public/index.html`: header (logo+brand+env-toggle), `nav.tabs`, `statbar`, 3× `section.view`
-- [ ] DOMERGE elementów produkcyjnych: kill-bar, toast-container, modal (pełny kontrakt `form-*`), webhook-section, akordeon zaawansowany
-- [ ] Segment typu BINARNY Skill/Skrypt + ukryty `input#form-job-type`; webhook osobna sekcja
-- [ ] Head: `<title>Puls — Zadania dla Twojego Asystenta AI</title>`, favicon, fonty Google; `enum-map.js` PRZED `app.js`
-- [ ] Odtwórz KONTRAKT ID 1:1 (lista w kontekst.md)
+- [x] Przepisz `public/index.html`: header (logo+brand+env-toggle), `nav.tabs`, `statbar`, 3× `section.view`
+- [x] DOMERGE elementów produkcyjnych: kill-bar, toast-container, modal (pełny kontrakt `form-*`), webhook-section, akordeon zaawansowany
+- [x] Segment typu BINARNY Skill/Skrypt + ukryty `input#form-job-type`; webhook osobna sekcja
+- [x] Head: `<title>Puls — Zadania dla Twojego Asystenta AI</title>`, favicon, fonty Google; `enum-map.js` PRZED `app.js`
+- [x] Odtwórz KONTRAKT ID 1:1 (lista w kontekst.md)
 - [ ] Test: [Manual] Render: header/taby/statbar/sekcje widoczne, modal otwiera/zamyka, akordeon działa
 - [ ] Weryfikacja: każdy ID z kontraktu obecny (pętla grep po `id="..."` nie wypisuje „BRAK")
 - [ ] Weryfikacja: `grep -q 'enum-map.js' public/index.html` i `enum-map.js` przed `app.js` w pliku
@@ -89,15 +89,15 @@ P3 (nity — opcjonalnie, szczegóły w `review-faza-1.md`): `SELECT *` + wyciek
 - [ ] Weryfikacja: `grep -q 'class="env-btn"' public/index.html`
 
 ### Unit 6: Przepisany render w `public/app.js` (logika zachowana, render z API, poll z guardem) — `feature-builder-ui` (XL)
-- [ ] ZACHOWAJ bez zmian: `API/apiBase/switchEnv`, `loadJobs/loadSkills`, akcje, cron helpers, webhook helpers, `formatClaudeOutput/formatToolUse`, helpery format/esc/truncate/toast/showPromptPopup
-- [ ] Przepisz `renderJobs()` (gęsta tabela + sparkline z `/api/runs/recent` + akcja ✕ deleteJob)
-- [ ] Przepisz `renderRuns()` (5 statusów przez `EnumMap`, log viewer Kopiuj/Zawijaj/Pełny ekran, pill „Rutynowe" z `jobsMap`)
-- [ ] Przepisz `renderSkills()` (toggle Kafelki/Lista + filtry + stopki „N zadań · ostatnio X")
-- [ ] Nowy `renderStatbar(status)` wyłącznie z wzbogaconego `/api/status`
-- [ ] Modal: logika segmentu binarnego pisząca do `form-job-type` (`onJobTypeChange`)
-- [ ] Tab-switching przepisany na `.view`/`view-${tab}`+`.active`; `data-tab` = `jobs/history/skills`
-- [ ] Zmodyfikuj `poll()`: statbar 3s na każdej zakładce + guard zmian + zachowanie `expandedRuns`
-- [ ] Notatka wykonawcza: zachowaj sygnatury zachowanych funkcji; render-first jednej zakładki na raz
+- [x] ZACHOWAJ bez zmian: `API/apiBase/switchEnv`, `loadJobs/loadSkills`, akcje, cron helpers, webhook helpers, `formatClaudeOutput/formatToolUse`, helpery format/esc/truncate/toast/showPromptPopup
+- [x] Przepisz `renderJobs()` (gęsta tabela + sparkline z `/api/runs/recent` + akcja ✕ deleteJob)
+- [x] Przepisz `renderRuns()` (5 statusów przez `EnumMap`, log viewer Kopiuj/Zawijaj/Pełny ekran, pill „Rutynowe" z `jobsMap`)
+- [x] Przepisz `renderSkills()` (toggle Kafelki/Lista + filtry + stopki „N zadań · ostatnio X") — odchylenie: render tylko Kafelki, bo index.html (Unit 5) nie zawiera DOM przełącznika Lista; filtry+stopki działają
+- [x] Nowy `renderStatbar(status)` wyłącznie z wzbogaconego `/api/status`
+- [x] Modal: logika segmentu binarnego pisząca do `form-job-type` (`onJobTypeChange`)
+- [x] Tab-switching przepisany na `.view`/`view-${tab}`+`.active`; `data-tab` = `jobs/history/skills`
+- [x] Zmodyfikuj `poll()`: statbar 3s na każdej zakładce + guard zmian + zachowanie `expandedRuns`
+- [x] Notatka wykonawcza: zachowaj sygnatury zachowanych funkcji; render-first jednej zakładki na raz; guard/sparkline wyekstrahowane do `public/render-helpers.js` (dual-export, testowalne jednostkowo)
 - [ ] Test: [Manual] Lista zadań z `/api/jobs`; tagi/sparkline/następny/switch poprawne
 - [ ] Test: [Manual] ▶/⏻/✎/✕ + toast; modal nowy/edycja, segment przełącza pola, webhook generate/copy, zapis POST/PUT
 - [ ] Test: [Manual] Historia: 5 statusów, rozwijanie błędu, log viewer, filtr „Ukryj rutynowe"
@@ -111,9 +111,9 @@ P3 (nity — opcjonalnie, szczegóły w `review-faza-1.md`): `SELECT *` + wyciek
 - [ ] Weryfikacja: `grep -q 'tab-panel' public/app.js` zwraca pusto (tab-switching przepisany)
 
 ### Unit 7: Rebrand backendu + `package.json` — `feature-builder-data` (S)
-- [ ] Zmień banner w `server.js` (371-372): `🫀  Puls running at http://localhost:${PORT}`
-- [ ] `package.json`: `description` → „Puls — scheduler agentów AI (Claude Code), AIBIZ"; dodaj `"test": "node --test"` (`name` ZOSTAJE `claude-cron`)
-- [ ] Test: [Unit] `npm test` (`node --test`) uruchamia testy i kończy się sukcesem
+- [x] Zmień banner w `server.js` (371-372): `🫀  Puls running at http://localhost:${PORT}`
+- [x] `package.json`: `description` → „Puls — scheduler agentów AI (Claude Code), AIBIZ"; dodaj `"test": "node --test"` (`name` ZOSTAJE `claude-cron`)
+- [x] Test: [Unit] `npm test` (`node --test`) uruchamia testy i kończy się sukcesem (39 pass / 0 fail)
 - [ ] Weryfikacja: `grep -q 'Puls running' server.js` i brak `CLAUDE-CRON running`
 - [ ] Weryfikacja: `node -e "const p=require('./package.json'); process.exit((p.name==='claude-cron' && p.scripts.test==='node --test' && /Puls/.test(p.description))?0:1)"` kończy się kodem 0
 - [ ] Weryfikacja: `npm test` przechodzi

@@ -1,157 +1,183 @@
 <!DOCTYPE html>
 <html lang="pl">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CLAUDE-CRON 🕹️</title>
-  <link rel="stylesheet" href="/style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Puls — Zadania dla Twojego Asystenta AI</title>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <div class="app">
+    <!-- ── Slim header ── -->
+    <header class="header">
+      <div class="brand">
+        <img class="logo" src="/logo-puls.png" alt="Puls" />
+        <span class="brand-text">
+          <span class="brand-name">Puls</span>
+          <span class="brand-tag">Zadania dla Twojego Asystenta AI</span>
+        </span>
+      </div>
+      <div class="env-toggle" id="env-toggle" style="display:none">
+        <button class="env-opt env-btn active" data-env="local" onclick="switchEnv('local')">LOKALNY</button>
+        <button class="env-opt env-btn" data-env="vps" onclick="switchEnv('vps')">VPS</button>
+      </div>
+    </header>
 
-  <!-- Header -->
-  <div class="header">
-    <h1>CLAUDE-CRON</h1>
-    <div class="subtitle">scheduler skilli</div>
-    <div class="env-toggle" id="env-toggle" style="display:none">
-      <button class="env-btn active" data-env="local" onclick="switchEnv('local')">LOCAL</button>
-      <button class="env-btn" data-env="vps" onclick="switchEnv('vps')">VPS</button>
+    <!-- ── Taby ── -->
+    <nav class="tabs">
+      <button class="tab active" data-tab="jobs">Zadania</button>
+      <button class="tab" data-tab="history">Historia</button>
+      <button class="tab" data-tab="skills">Skille</button>
+    </nav>
+
+    <!-- ── Statbar wspólny ── -->
+    <div class="statbar">
+      <div class="stat"><span class="dot dot-amber pulse"></span><span class="stat-label">Następne:</span> <span class="stat-strong" id="stat-next-name">—</span> <span class="stat-accent" id="stat-next-eta"></span></div>
+      <div class="stat"><span class="stat-label">Aktywne</span> <span class="stat-strong" id="stat-jobs">—</span></div>
+      <div class="stat"><span class="stat-label">Dziś</span> <span class="stat-ok" id="stat-today-ok">—</span> <span class="stat-err" id="stat-today-err">—</span> <span class="health-bar" id="stat-health"></span></div>
+      <div class="stat"><span class="stat-label">Kolejka</span> <span class="stat-strong" id="stat-queue">—</span></div>
+      <div class="stat"><span class="stat-label">Uptime</span> <span class="stat-strong" id="stat-uptime">—</span></div>
     </div>
-    <div class="status-bar">
-      <span class="stat">JOBY <span class="val" id="stat-jobs">-</span></span>
-      <span class="stat">KOLEJKA <span class="val" id="stat-queue">-</span></span>
-      <span class="stat">UPTIME <span class="val" id="stat-uptime">-</span></span>
-    </div>
+
+    <!-- ── Sekcje ── -->
+    <main>
+      <!-- Zadania -->
+      <section class="view active" id="view-jobs">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <h2 class="toolbar-title">Zaplanowane zadania</h2>
+          </div>
+          <div class="toolbar-right">
+            <button class="btn btn-primary" onclick="openCreateModal()">+ Nowe zadanie</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>NAZWA</th>
+                <th>SKILL / PROMPT</th>
+                <th>HARMONOGRAM</th>
+                <th>NASTĘPNY</th>
+                <th>STATUS</th>
+                <th>AKCJE</th>
+              </tr>
+            </thead>
+            <tbody id="jobs-body"></tbody>
+          </table>
+        </div>
+        <div class="empty-state" id="jobs-empty" style="display:none">
+          <div class="icon">🎮</div>
+          <div>Brak zadań. Stwórz pierwsze!</div>
+        </div>
+      </section>
+
+      <!-- Historia -->
+      <section class="view" id="view-history">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <h2 class="toolbar-title">Historia uruchomień</h2>
+          </div>
+          <div class="toolbar-right">
+            <label class="check"><input type="checkbox" id="runs-hide-routine" checked onchange="loadRuns()" /><span class="checkbox"></span> Ukryj rutynowe runy</label>
+            <button class="btn btn-ghost" onclick="loadRuns()">↻ Odśwież</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>JOB</th>
+                <th>STATUS</th>
+                <th>WYZWALACZ</th>
+                <th>START</th>
+                <th>CZAS</th>
+              </tr>
+            </thead>
+            <tbody id="runs-body"></tbody>
+          </table>
+        </div>
+        <div class="empty-state" id="runs-empty" style="display:none">
+          <div class="icon">📜</div>
+          <div>Brak uruchomień.</div>
+        </div>
+      </section>
+
+      <!-- Skille -->
+      <section class="view" id="view-skills">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <h2 class="toolbar-title">Dostępne skille</h2>
+          </div>
+          <button class="btn btn-ghost" onclick="loadSkills()">↻ Odśwież</button>
+        </div>
+        <div class="filters" id="skills-filters">
+          <button class="filter-pill skill-filter active" data-filter="all" onclick="filterSkills('all')">⊞ Wszystkie <span class="fc" id="count-all">0</span></button>
+          <button class="filter-pill skill-filter" data-filter="project" onclick="filterSkills('project')">▣ Projektowe <span class="fc" id="count-project">0</span></button>
+          <button class="filter-pill skill-filter" data-filter="user" onclick="filterSkills('user')">◍ Użytkownika <span class="fc" id="count-user">0</span></button>
+          <button class="filter-pill skill-filter" data-filter="plugin" onclick="filterSkills('plugin')">⌥ Plugin <span class="fc" id="count-plugin">0</span></button>
+        </div>
+        <div class="skills-grid" id="skills-grid"></div>
+        <div class="empty-state" id="skills-empty" style="display:none">
+          <div class="icon">🔧</div>
+          <div>Nie znaleziono skilli</div>
+        </div>
+      </section>
+    </main>
   </div>
 
-  <!-- Tabs -->
-  <div class="tabs">
-    <button class="tab active" data-tab="jobs">JOBY</button>
-    <button class="tab" data-tab="history">HISTORIA</button>
-    <button class="tab" data-tab="skills">SKILLE</button>
-  </div>
-
-  <!-- Content -->
-  <div class="content">
-
-    <!-- Jobs Tab -->
-    <div class="tab-panel active" id="panel-jobs">
-      <div class="toolbar">
-        <h2>ZAPLANOWANE JOBY</h2>
-        <button class="btn btn-primary" onclick="openCreateModal()">+ NOWY JOB</button>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>NAZWA</th>
-              <th>SKILL / PROMPT</th>
-              <th>HARMONOGRAM</th>
-              <th>NASTĘPNY</th>
-              <th>STATUS</th>
-              <th>AKCJE</th>
-            </tr>
-          </thead>
-          <tbody id="jobs-body"></tbody>
-        </table>
-      </div>
-      <div class="empty-state" id="jobs-empty" style="display:none">
-        <div class="icon">🎮</div>
-        <div>Brak jobów. Stwórz pierwszy!</div>
-      </div>
-    </div>
-
-    <!-- History Tab -->
-    <div class="tab-panel" id="panel-history">
-      <div class="toolbar">
-        <h2>HISTORIA URUCHOMIEŃ</h2>
-        <label class="form-check" style="margin:0 auto 0 12px">
-          <input type="checkbox" id="runs-hide-routine" checked onchange="loadRuns()">
-          Ukryj rutynowe runy
-        </label>
-        <button class="btn btn-small" onclick="loadRuns()">ODŚWIEŻ</button>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>JOB</th>
-              <th>STATUS</th>
-              <th>WYZWALACZ</th>
-              <th>START</th>
-              <th>CZAS</th>
-            </tr>
-          </thead>
-          <tbody id="runs-body"></tbody>
-        </table>
-      </div>
-      <div class="empty-state" id="runs-empty" style="display:none">
-        <div class="icon">📜</div>
-        <div>Brak uruchomień.</div>
-      </div>
-    </div>
-
-    <!-- Skills Tab -->
-    <div class="tab-panel" id="panel-skills">
-      <div class="toolbar">
-        <h2>DOSTĘPNE SKILLE</h2>
-        <button class="btn btn-small" onclick="loadSkills()">ODŚWIEŻ</button>
-      </div>
-      <div class="skills-filters" id="skills-filters">
-        <button class="skill-filter active" data-filter="all" onclick="filterSkills('all')">ALL <span class="filter-count" id="count-all">0</span></button>
-        <button class="skill-filter" data-filter="project" onclick="filterSkills('project')">📁 PROJECT <span class="filter-count" id="count-project">0</span></button>
-        <button class="skill-filter" data-filter="user" onclick="filterSkills('user')">👤 USER <span class="filter-count" id="count-user">0</span></button>
-        <button class="skill-filter" data-filter="plugin" onclick="filterSkills('plugin')">🔌 PLUGIN <span class="filter-count" id="count-plugin">0</span></button>
-      </div>
-      <div class="skills-grid" id="skills-grid"></div>
-      <div class="empty-state" id="skills-empty" style="display:none">
-        <div class="icon">🔧</div>
-        <div>Nie znaleziono skilli</div>
-      </div>
-    </div>
-
-
-  </div>
-
-  <!-- Kill Bar -->
+  <!-- ── Kill bar ── -->
   <div class="kill-bar" id="kill-bar">
     <div class="run-info">
       <span class="badge badge-running">DZIAŁA</span>
       &nbsp;
-      <span class="job-name" id="kill-job-name">-</span>
+      <span class="job-name" id="kill-job-name">—</span>
     </div>
-    <button class="kill-btn" onclick="killCurrent()">■ ZATRZYMAJ</button>
+    <button class="kill-btn" onclick="killCurrent()">■ Zatrzymaj</button>
   </div>
 
-  <!-- Create/Edit Modal -->
-  <div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
-    <div class="modal" onclick="event.stopPropagation()">
-      <h2 id="modal-title">NOWY JOB</h2>
+  <!-- ── Modal: Nowe / Edytuj zadanie ── -->
+  <div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <div class="modal-title-wrap"><span class="modal-ico">+</span><h3 id="modal-title">Nowe zadanie</h3></div>
+        <button class="modal-close" onclick="hideModal()" aria-label="Zamknij">✕</button>
+      </div>
       <form id="job-form" onsubmit="saveJob(event)">
-        <input type="hidden" id="form-id">
-        <div class="form-group">
-          <label>NAZWA</label>
-          <input type="text" id="form-name" required placeholder="Nazwa joba">
-        </div>
-        <div class="form-group">
-          <label>TYP JOBA</label>
-          <select id="form-job-type" onchange="onJobTypeChange()">
-            <option value="claude">Claude skill / prompt</option>
-            <option value="script">Skrypt Node.js</option>
-          </select>
-        </div>
-        <div class="form-group" id="skill-group">
-          <label>SKILL (opcjonalnie)</label>
-          <select id="form-skill"></select>
-        </div>
-        <div class="form-group" id="command-group" style="display:none">
-          <label>ŚCIEŻKA SKRYPTU</label>
-          <input type="text" id="form-command" placeholder="/absolute/path/to/script.mjs">
-          <div class="hint">Odpalane jako <code>node &lt;ścieżka&gt;</code> z cwd = workspace</div>
-        </div>
-        <div class="form-group">
-          <label>KIEDY URUCHAMIAĆ</label>
-          <select id="form-freq" onchange="onFreqChange()">
+        <div class="modal-body">
+          <input type="hidden" id="form-id" />
+
+          <label class="field-label" for="form-name">NAZWA</label>
+          <input type="text" class="input input-focus" id="form-name" required placeholder="Nazwa zadania" />
+
+          <label class="field-label">TYP ZADANIA</label>
+          <div class="seg seg-type" id="job-type-seg">
+            <button type="button" class="seg-opt active" data-job-type="claude">Skill</button>
+            <button type="button" class="seg-opt" data-job-type="script">Skrypt</button>
+          </div>
+          <input type="hidden" id="form-job-type" value="claude" />
+
+          <!-- Pole warunkowe: SKILL (typ=claude) -->
+          <div class="form-group" id="skill-group">
+            <label class="field-label" for="form-skill">SKILL (opcjonalnie)</label>
+            <select class="input" id="form-skill"></select>
+          </div>
+
+          <!-- Pole warunkowe: ŚCIEŻKA SKRYPTU (typ=script) -->
+          <div class="form-group" id="command-group" style="display:none">
+            <label class="field-label" for="form-command">ŚCIEŻKA SKRYPTU</label>
+            <input type="text" class="input mono" id="form-command" placeholder="/absolute/path/to/script.mjs" />
+            <div class="hint">Odpalane jako <code>node &lt;ścieżka&gt;</code> z cwd = workspace</div>
+          </div>
+
+          <!-- Harmonogram -->
+          <label class="field-label" for="form-freq">KIEDY URUCHAMIAĆ</label>
+          <select class="input" id="form-freq" onchange="onFreqChange()">
             <option value="daily">Codziennie</option>
             <option value="weekdays">Dni robocze (pon-pt)</option>
             <option value="weekly">Raz w tygodniu</option>
@@ -159,92 +185,91 @@
             <option value="minutes">Co kilka minut</option>
             <option value="webhook_only">Tylko webhook (bez harmonogramu)</option>
           </select>
-        </div>
-        <div class="form-group" id="time-group">
-          <label>O KTÓREJ GODZINIE</label>
-          <input type="time" id="form-time" value="09:00">
-        </div>
-        <div class="form-group" id="day-group" style="display:none">
-          <label>DZIEŃ TYGODNIA</label>
-          <select id="form-day">
-            <option value="1">Poniedziałek</option>
-            <option value="2">Wtorek</option>
-            <option value="3">Środa</option>
-            <option value="4">Czwartek</option>
-            <option value="5">Piątek</option>
-            <option value="6">Sobota</option>
-            <option value="0">Niedziela</option>
-          </select>
-        </div>
-        <div class="form-group" id="interval-group" style="display:none">
-          <label id="interval-label">CO ILE</label>
-          <input type="number" id="form-interval" min="1" value="1" step="1">
-        </div>
-        <div id="schedule-preview" class="hint" style="margin-top:-6px;margin-bottom:12px"></div>
-        <input type="hidden" id="form-cron">
-        <div class="form-group" id="args-group">
-          <label>PROMPT / ARGUMENTY</label>
-          <textarea id="form-args" rows="3" placeholder="Treść promptu lub dodatkowe argumenty do skilla"></textarea>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label>TIMEOUT (ms)</label>
-            <input type="number" id="form-timeout" value="600000" min="10000" step="1000">
+
+          <div class="form-group" id="time-group">
+            <label class="field-label" for="form-time">O KTÓREJ GODZINIE</label>
+            <input type="time" class="input" id="form-time" value="09:00" />
           </div>
-          <div class="form-group">
-            <label>IDLE TIMEOUT (ms)</label>
-            <input type="number" id="form-idle-timeout" value="300000" min="10000" step="1000" title="Maks. czas bez outputu na stdout zanim job zostanie zabity. Domyślnie 5 min (300000 ms). Dla jobów z subagentami zwiększ np. do 1800000 (30 min).">
+
+          <div class="form-group" id="day-group" style="display:none">
+            <label class="field-label" for="form-day">DZIEŃ TYGODNIA</label>
+            <select class="input" id="form-day">
+              <option value="1">Poniedziałek</option>
+              <option value="2">Wtorek</option>
+              <option value="3">Środa</option>
+              <option value="4">Czwartek</option>
+              <option value="5">Piątek</option>
+              <option value="6">Sobota</option>
+              <option value="0">Niedziela</option>
+            </select>
           </div>
-          <div class="form-group">
-            <label>MAKS. POWTÓRZEŃ</label>
-            <input type="number" id="form-retries" value="1" min="0" max="5">
+
+          <div class="form-group" id="interval-group" style="display:none">
+            <label class="field-label" id="interval-label" for="form-interval">CO ILE</label>
+            <input type="number" class="input" id="form-interval" min="1" value="1" step="1" />
           </div>
-        </div>
-        <div class="form-group">
-          <label class="form-check">
-            <input type="checkbox" id="form-wake">
-            Uruchom po przebudzeniu (nadrobienie pominiętych)
-          </label>
-        </div>
-        <div class="form-group">
-          <label class="form-check">
-            <input type="checkbox" id="form-discord">
-            Powiadomienie Discord
-          </label>
-        </div>
-        <div class="form-group">
-          <label class="form-check">
-            <input type="checkbox" id="form-routine">
-            Rutynowy — ukrywaj udane runy w historii (np. sync co minutę). Fails zawsze widoczne.
-          </label>
-        </div>
-        <div class="webhook-section" id="webhook-section">
-          <div class="webhook-label">WEBHOOK</div>
-          <div id="webhook-empty">
-            <button type="button" class="btn btn-small btn-webhook" onclick="generateWebhook()">🔗 GENERATE WEBHOOK URL</button>
+
+          <div id="schedule-preview" class="hint" style="margin-top:-6px;margin-bottom:12px"></div>
+
+          <!-- Pole warunkowe: PROMPT / ARGUMENTY (typ=claude) -->
+          <div class="form-group" id="args-group">
+            <label class="field-label" for="form-args">PROMPT / ARGUMENTY</label>
+            <textarea class="input textarea" id="form-args" rows="3" placeholder="Treść promptu lub dodatkowe argumenty do skilla"></textarea>
           </div>
-          <div id="webhook-active" style="display:none">
-            <div class="webhook-url-wrap">
-              <input type="text" id="webhook-url" readonly class="webhook-url-input">
-              <button type="button" class="btn btn-small" onclick="copyWebhookUrl()" title="Copy">📋</button>
+
+          <!-- Opcje zaawansowane -->
+          <button type="button" class="accordion" id="accordion">
+            <span class="acc-caret">›</span> <b>Opcje zaawansowane</b> <span class="acc-hint">limity czasu · powtórzenia · Discord</span>
+          </button>
+          <div class="accordion-body hidden" id="accordion-body">
+            <div class="two-col">
+              <div>
+                <label class="field-label" for="form-timeout">TIMEOUT (ms)</label>
+                <input type="number" class="input" id="form-timeout" value="600000" min="10000" step="1000" />
+              </div>
+              <div>
+                <label class="field-label" for="form-idle-timeout">IDLE TIMEOUT (ms)</label>
+                <input type="number" class="input" id="form-idle-timeout" value="300000" min="10000" step="1000" title="Maks. czas bez outputu na stdout zanim job zostanie zabity. Domyślnie 5 min (300000 ms). Dla jobów z subagentami zwiększ np. do 1800000 (30 min)." />
+              </div>
             </div>
-            <div class="webhook-actions">
-              <button type="button" class="btn btn-small" onclick="generateWebhook()">🔄 REGENERATE</button>
-              <button type="button" class="btn btn-small btn-danger" onclick="removeWebhook()">❌ REMOVE</button>
+            <label class="field-label" for="form-retries">MAKS. POWTÓRZEŃ</label>
+            <input type="number" class="input" id="form-retries" value="1" min="0" max="5" />
+            <label class="check mt"><input type="checkbox" id="form-wake" /><span class="checkbox"></span> Uruchom po przebudzeniu (nadrobienie pominiętych)</label>
+            <label class="check"><input type="checkbox" id="form-discord" /><span class="checkbox"></span> Powiadomienie Discord</label>
+            <label class="check"><input type="checkbox" id="form-routine" /><span class="checkbox"></span> Rutynowy — ukrywaj udane runy w historii. Fails zawsze widoczne.</label>
+          </div>
+
+          <!-- Webhook (ortogonalny, osobna sekcja) -->
+          <div class="webhook-section" id="webhook-section">
+            <div class="webhook-label">WEBHOOK</div>
+            <div id="webhook-empty">
+              <button type="button" class="btn btn-small btn-webhook" onclick="generateWebhook()">🔗 Wygeneruj URL webhooka</button>
+            </div>
+            <div id="webhook-active" style="display:none">
+              <div class="webhook-row">
+                <input type="text" class="input mono webhook-url-input" id="webhook-url" readonly />
+                <button type="button" class="btn btn-small" onclick="copyWebhookUrl()" title="Kopiuj">📋</button>
+              </div>
+              <div class="webhook-actions">
+                <button type="button" class="btn btn-small" onclick="generateWebhook()">🔄 Regeneruj</button>
+                <button type="button" class="btn btn-small btn-danger" onclick="removeWebhook()">❌ Usuń</button>
+              </div>
             </div>
           </div>
         </div>
-        <div class="modal-actions">
-          <button type="button" class="btn" onclick="hideModal()">ANULUJ</button>
-          <button type="submit" class="btn btn-primary">ZAPISZ</button>
+        <div class="modal-foot">
+          <button type="button" class="btn btn-ghost" onclick="hideModal()">Anuluj</button>
+          <button type="submit" class="btn btn-primary">Zapisz zadanie</button>
         </div>
       </form>
     </div>
   </div>
 
-  <!-- Toasts -->
+  <!-- ── Toasty ── -->
   <div class="toast-container" id="toast-container"></div>
 
+  <script src="/enum-map.js"></script>
+  <script src="/render-helpers.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

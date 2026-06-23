@@ -1,10 +1,11 @@
 {
   "name": "claude-cron",
   "version": "1.0.0",
-  "description": "Lokalny scheduler skilli Claude Code z retro arcade UI",
+  "description": "Puls — scheduler agentów AI (Claude Code), AIBIZ",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test",
     "install:mac": "bash scripts/install-macos.sh",
     "uninstall:mac": "bash scripts/uninstall-macos.sh",
     "install:win": "powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1",

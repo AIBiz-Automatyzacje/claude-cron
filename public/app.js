@@ -1,11 +1,21 @@
 // === State ===
 let allJobs = [];
 let allSkills = [];
+let allRuns = []; // historia z /api/runs
 let jobsMap = {}; // id -> job
+let recentByJob = {}; // job_id -> [recent runs] z /api/runs/recent (sparkline + ostatni run)
 let expandedRuns = new Set(); // track expanded run details
 let currentEnv = 'local'; // 'local' or 'vps'
 let vpsConfigured = false;
 let webhookBaseUrl = ''; // public URL for webhook links (from VPS env)
+
+// Guard poll() — tanie podpisy payloadu, pomijamy innerHTML gdy bez zmian.
+let lastRunsSig = null;
+let lastJobsSig = null;
+let lastStatus = {}; // ostatni payload /api/status (część podpisu poll historii)
+
+const { mapStatus, mapTrigger } = EnumMap;
+const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = RenderHelpers;
 
 // === API ===
 function apiBase() {
@@ -47,6 +57,8 @@ function switchEnv(env) {
   });
   document.body.dataset.env = env;
   expandedRuns.clear();
+  lastJobsSig = null; // wymuś re-render po zmianie env (te same ID, inne dane)
+  lastRunsSig = null;
   loadSkills();
   loadJobs();
   loadStatus();
@@ -54,13 +66,19 @@ function switchEnv(env) {
 }
 
 // === Tabs ===
+// data-tab: jobs|history|skills → sekcje .view#view-${tab} (demo CSS).
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     tab.classList.add('active');
-    document.getElementById(`panel-${tab.dataset.tab}`).classList.add('active');
+    document.getElementById(`view-${tab.dataset.tab}`).classList.add('active');
   });
+});
+
+// === Modal: segment typu zadania (Skill/Skrypt) ===
+document.querySelectorAll('#job-type-seg .seg-opt').forEach(btn => {
+  btn.addEventListener('click', () => selectJobType(btn.dataset.jobType));
 });
 
 // === Toast ===
@@ -239,9 +257,8 @@ function updateSchedulePreview() {
 async function loadStatus() {
   try {
     const status = await API.get('/api/status');
-    document.getElementById('stat-jobs').textContent = `${status.enabled_jobs}/${status.total_jobs}`;
-    document.getElementById('stat-queue').textContent = status.queue_length;
-    document.getElementById('stat-uptime').textContent = formatUptime(status.uptime);
+    lastStatus = status;
+    renderStatbar(status);
 
     // Kill bar
     const killBar = document.getElementById('kill-bar');
@@ -252,7 +269,40 @@ async function loadStatus() {
     } else {
       killBar.classList.remove('show');
     }
-  } catch { /* silent */ }
+  } catch { /* silent — statbar degraduje cicho */ }
+}
+
+// Statbar: Następne / Aktywne / Dziś+health / Kolejka / Uptime.
+// Nowe pola muszą tolerować brak danych (fallback next:null, success/failed:0).
+function renderStatbar(status) {
+  const next = status.next || null;
+  const nextName = document.getElementById('stat-next-name');
+  const nextEta = document.getElementById('stat-next-eta');
+  if (next && next.job_name) {
+    nextName.textContent = next.job_name;
+    nextEta.textContent = next.next_run ? formatCountdown(next.next_run) : '';
+  } else {
+    nextName.textContent = '—';
+    nextEta.textContent = '';
+  }
+
+  document.getElementById('stat-jobs').textContent = `${status.enabled_jobs ?? 0}/${status.total_jobs ?? 0}`;
+  document.getElementById('stat-queue').textContent = status.queue_length ?? 0;
+  document.getElementById('stat-uptime').textContent = formatUptime(status.uptime || 0);
+
+  const ok = status.today_success ?? 0;
+  const failed = status.today_failed ?? 0;
+  document.getElementById('stat-today-ok').textContent = ok;
+  document.getElementById('stat-today-err').textContent = failed;
+
+  // Health bar — proporcja sukcesów do błędów (flex). Brak runów → pełna zieleń.
+  const health = document.getElementById('stat-health');
+  const total = ok + failed;
+  const okFlex = total === 0 ? 1 : ok;
+  const errFlex = total === 0 ? 0 : failed;
+  health.innerHTML =
+    `<i style="flex:${okFlex};background:var(--green)"></i>` +
+    `<i style="flex:${errFlex};background:var(--red)"></i>`;
 }
 
 async function loadJobs() {
@@ -260,17 +310,30 @@ async function loadJobs() {
     allJobs = await API.get('/api/jobs');
     jobsMap = {};
     allJobs.forEach(j => jobsMap[j.id] = j);
+    await loadRecentRuns();
     renderJobs();
   } catch (e) {
     toast('Błąd ładowania jobów', true);
   }
 }
 
+// Sparkline + "ostatni run" — preferuj jeden fetch /api/runs/recent?per_job=7.
+// Fallback: pusta mapa (render pokazuje '—'), reszta UI działa dalej.
+async function loadRecentRuns() {
+  try {
+    const recent = await API.get('/api/runs/recent?per_job=7');
+    recentByJob = groupRecentByJob(recent);
+  } catch {
+    recentByJob = {};
+  }
+}
+
 async function loadRuns() {
   try {
     const hideRoutine = document.getElementById('runs-hide-routine')?.checked ? '&hide_routine=1' : '';
-    const runs = await API.get(`/api/runs?limit=100${hideRoutine}`);
-    renderRuns(runs);
+    allRuns = await API.get(`/api/runs?limit=100${hideRoutine}`);
+    lastRunsSig = pollSignature(allRuns, lastStatus); // sync guard po jawnym odświeżeniu
+    renderRuns(allRuns);
   } catch (e) {
     toast('Błąd ładowania historii', true);
   }
@@ -286,7 +349,41 @@ async function loadSkills() {
 }
 
 // === Render ===
+// Pill typu: /skill → tag-skill (mono, akcent); skrypt/prompt → tag-type (uppercase).
+function jobTypePill(j) {
+  if (j.job_type === 'script') return '<span class="task-tag tag-type">skrypt</span>';
+  if (j.skill_name) return `<span class="task-tag tag-skill">/${esc(j.skill_name)}</span>`;
+  return '<span class="task-tag tag-type">prompt</span>';
+}
+
+// Sparkline 7 RUN z recentByJob (chronologicznie, kolor wg statusu).
+function sparklineHtml(jobId) {
+  const spark = buildSparkData(recentByJob[jobId]);
+  if (spark.length === 0) return '<span class="cell-mute">—</span>';
+  return `<div class="spark">${spark.map(s =>
+    `<i style="height:${4 + (s.ok ? 12 : 8)}px;background:${s.ok ? 'var(--green)' : 'var(--red)'}"></i>`
+  ).join('')}</div>`;
+}
+
+// Ostatni run: kropka (kolor wg sukces/błąd) + czas. Najnowszy = recentByJob[id][0].
+function lastRunHtml(jobId) {
+  const runs = recentByJob[jobId];
+  if (!runs || runs.length === 0) return '<span class="cell-mute">—</span>';
+  const last = runs[0];
+  const ok = last.status === 'success';
+  return `<span class="last-run"><span class="dot ${ok ? 'dot-green' : 'dot-red'}"></span>${formatTime(last.started_at)}</span>`;
+}
+
 function renderJobs() {
+  // Podpis = joby (enabled/next/cron/webhook) + recent runs (sparkline/ostatni run).
+  // Bez recent w podpisie zakończony run nie odświeżyłby sparkline/kropki.
+  const recentSig = Object.keys(recentByJob)
+    .map(id => `${id}:${(recentByJob[id][0] || {}).id || ''}:${(recentByJob[id][0] || {}).status || ''}`)
+    .join(',');
+  const sig = jobsSignature(allJobs) + '||' + recentSig;
+  if (sig === lastJobsSig) return; // guard — pomiń re-render gdy bez zmian
+  lastJobsSig = sig;
+
   const body = document.getElementById('jobs-body');
   const empty = document.getElementById('jobs-empty');
 
@@ -298,41 +395,64 @@ function renderJobs() {
 
   empty.style.display = 'none';
   body.innerHTML = allJobs.map(j => {
-    const hasCron = !!j.cron_expr;
-    const hasWebhook = !!j.webhook_token;
-    const triggerIcons = (hasCron ? '⏰' : '') + (hasWebhook ? '🔗' : '');
+    const ico = j.job_type === 'script' ? '›_' : '◷';
+    const sched = j.cron_expr ? esc(cronToHuman(j.cron_expr)) : '<span class="cell-mute">tylko webhook</span>';
+    const next = (j.enabled && j.next_run)
+      ? `<div class="next-cell"><span class="cell-strong">${formatDateTime(j.next_run)}</span><span class="next-rel">${formatCountdown(j.next_run)}</span></div>`
+      : '<span class="cell-mute">—</span>';
     return `
-    <tr>
-      <td><strong>${triggerIcons ? triggerIcons + ' ' : ''}${esc(j.name)}</strong></td>
-      <td>${j.job_type === 'script'
-        ? `<code title="${esc(j.command || '')}">📜 ${esc(truncate(j.command || 'script', 60))}</code>`
-        : j.skill_name
-          ? `<code>/${esc(j.skill_name)}</code>`
-          : j.arguments && j.arguments.length > 60
-            ? `<code class="prompt-truncated" onclick="showPromptPopup(jobsMap[${j.id}].arguments)">${esc(truncate(j.arguments, 60))}</code>`
-            : `<code>${esc(j.arguments || 'prompt')}</code>`
-      }</td>
-      <td>${j.cron_expr ? esc(cronToHuman(j.cron_expr)) : '<span style="color:var(--cyan)">tylko webhook</span>'}</td>
-      <td>
-        ${j.enabled && j.next_run
-          ? `<span class="next-run">${formatDateTime(j.next_run)}</span><br><span class="countdown">${formatCountdown(j.next_run)}</span>`
-          : '<span style="color:var(--text-dim)">—</span>'}
+    <tr class="trow grid-zadania ${j.enabled ? '' : 'disabled'}">
+      <td class="task-cell">
+        <span class="task-ico">${ico}</span>
+        <span><span class="task-name">${esc(j.name)}</span>${jobTypePill(j)}</span>
       </td>
+      <td class="cell-dim">${sched}</td>
+      <td>${lastRunHtml(j.id)}</td>
+      <td>${sparklineHtml(j.id)}</td>
+      <td>${next}</td>
       <td>
-        <span class="badge ${j.enabled ? 'badge-enabled' : 'badge-disabled'}">
-          ${j.enabled ? 'WŁ.' : 'WYŁ.'}
-        </span>
+        <label class="switch">
+          <input type="checkbox" ${j.enabled ? 'checked' : ''} onchange="toggleJob(${j.id})" aria-label="Przełącz ${esc(j.name)}" />
+          <span class="track"><span class="thumb"></span></span>
+        </label>
       </td>
-      <td>
-        <div class="btn-group">
-          <button class="btn btn-small btn-primary" onclick="triggerJob(${j.id})" title="Run now">▶</button>
-          <button class="btn btn-small ${j.enabled ? 'btn-toggle-on' : 'btn-toggle-off'}" onclick="toggleJob(${j.id})" title="${j.enabled ? 'Disable' : 'Enable'}">${j.enabled ? '⏻' : '⏻'}</button>
-          <button class="btn btn-small" onclick="openEditModal(${j.id})" title="Edit">✎</button>
-          <button class="btn btn-small btn-danger" onclick="deleteJob(${j.id})" title="Delete">✕</button>
-        </div>
+      <td class="actions">
+        <button class="act-btn run" onclick="triggerJob(${j.id})" title="Uruchom" aria-label="Uruchom ${esc(j.name)}">▶</button>
+        <button class="act-btn" onclick="toggleJob(${j.id})" title="${j.enabled ? 'Wyłącz' : 'Włącz'}" aria-label="${j.enabled ? 'Wyłącz' : 'Włącz'} ${esc(j.name)}">⏻</button>
+        <button class="act-btn" onclick="openEditModal(${j.id})" title="Edytuj" aria-label="Edytuj ${esc(j.name)}">✎</button>
+        <button class="act-btn" onclick="deleteJob(${j.id})" title="Usuń" aria-label="Usuń ${esc(j.name)}">✕</button>
       </td>
     </tr>
   `}).join('');
+}
+
+// Heurystyka: linia wygląda na błąd? (do podświetlenia w log viewerze)
+function isErrorLine(line) {
+  return /(?:^|\s)(error|err|exception|failed|fatal|✕|✗)\b/i.test(line) ||
+    /\bat\s+\S+\(.*:\d+\)/.test(line); // stack trace frame
+}
+
+// Body log viewera: error_msg + sformatowany stdout + stderr, z heurystyką błędu per linia.
+function logBodyHtml(r) {
+  const blocks = [];
+  if (r.error_msg) {
+    blocks.push(`<div class="log-line error"><span class="log-ts"></span><span class="log-msg">${esc(r.error_msg)}</span></div>`);
+  }
+  const out = r.stdout ? formatClaudeOutput(r.stdout) : '';
+  if (out) {
+    blocks.push(out.split('\n').map(line =>
+      `<div class="log-line ${isErrorLine(line) ? 'error' : ''}"><span class="log-ts"></span><span class="log-msg">${esc(line)}</span></div>`
+    ).join(''));
+  }
+  if (r.stderr) {
+    blocks.push(r.stderr.split('\n').map(line =>
+      `<div class="log-line error"><span class="log-ts"></span><span class="log-msg">${esc(line)}</span></div>`
+    ).join(''));
+  }
+  if (blocks.length === 0) {
+    blocks.push('<div class="log-line"><span class="log-ts"></span><span class="log-msg cell-mute">Brak outputu</span></div>');
+  }
+  return blocks.join('');
 }
 
 function renderRuns(runs) {
@@ -348,30 +468,78 @@ function renderRuns(runs) {
   empty.style.display = 'none';
   body.innerHTML = runs.map(r => {
     const job = jobsMap[r.job_id];
-    const badgeClass = `badge-${r.status}`;
+    const st = mapStatus(r.status);
+    const tr = mapTrigger(r.trigger_type);
+    const isRoutine = job && job.routine;
     const isExpanded = expandedRuns.has(r.id);
+    const name = job ? esc(job.name) : `Job #${r.job_id}`;
+    const dur = formatDuration(r.started_at, r.finished_at);
     return `
-      <tr class="clickable" onclick="toggleRunDetail(${r.id})">
-        <td>#${r.id}</td>
-        <td>${job ? esc(job.name) : `Job #${r.job_id}`}</td>
-        <td><span class="badge ${badgeClass}">${r.status.toUpperCase()}</span></td>
-        <td><span class="badge ${r.trigger_type === 'webhook' ? 'badge-webhook' : ''}">${esc(r.trigger_type.toUpperCase())}</span></td>
-        <td>${formatDateTime(r.started_at)}</td>
-        <td>${formatDuration(r.started_at, r.finished_at)}</td>
+      <tr class="hrow grid-historia err" onclick="toggleRunDetail(${r.id})">
+        <td class="id-cell">#${r.id}</td>
+        <td class="h-name">${name}${isRoutine ? ' <span class="task-tag tag-type">Rutynowe</span>' : ''}</td>
+        <td><span class="badge ${st.cls}">${st.label}</span></td>
+        <td class="trigger">${tr.ico} ${tr.label}</td>
+        <td class="cell-dim">${formatDateTime(r.started_at)}</td>
+        <td class="cell-dim">${dur}</td>
       </tr>
       <tr class="run-detail${isExpanded ? ' show' : ''}" id="run-detail-${r.id}">
         <td colspan="6">
-          ${r.error_msg ? `<div class="log-label">ERROR</div><div class="log-box" style="color:var(--red)">${esc(r.error_msg)}</div>` : ''}
-          ${r.stdout ? `<div class="log-label">OUTPUT</div><div class="log-box">${esc(formatClaudeOutput(r.stdout))}</div>` : ''}
-          ${r.stderr ? `<div class="log-label">STDERR</div><div class="log-box" style="color:var(--red)">${esc(r.stderr)}</div>` : ''}
-          ${!r.stdout && !r.stderr && !r.error_msg ? '<div style="color:var(--text-dim);font-size:11px">Brak outputu</div>' : ''}
+          <div class="logbox${isExpanded ? '' : ' hidden'}">
+            <div class="log-head">
+              <span class="log-title">${name} · <span class="${r.status === 'success' ? '' : 'exit-bad'}">${esc(st.label)}</span> · <span class="log-dur">${dur}</span></span>
+              <span class="log-actions">
+                <button class="log-act" data-act="copy" onclick="logAction(event, ${r.id}, 'copy')">Kopiuj</button>
+                <button class="log-act" data-act="wrap" onclick="logAction(event, ${r.id}, 'wrap')">Zawijaj</button>
+                <button class="log-act" data-act="full" onclick="logAction(event, ${r.id}, 'full')">Pełny ekran</button>
+              </span>
+            </div>
+            <div class="log-body" id="log-body-${r.id}">${logBodyHtml(r)}</div>
+          </div>
         </td>
       </tr>
     `;
   }).join('');
 }
 
+// Akcje log viewera (Kopiuj / Zawijaj / Pełny ekran). Nie propaguje na toggle wiersza.
+function logAction(e, runId, act) {
+  e.stopPropagation();
+  const btn = e.currentTarget;
+  const box = btn.closest('.logbox');
+  if (!box) return;
+  if (act === 'wrap') {
+    box.querySelectorAll('.log-line').forEach(l => l.classList.toggle('nowrap'));
+  } else if (act === 'full') {
+    box.classList.toggle('logbox-full');
+  } else if (act === 'copy') {
+    const text = box.querySelector('.log-body')?.innerText || '';
+    navigator.clipboard.writeText(text).catch(() => { /* ignore */ });
+    btn.textContent = 'Skopiowano ✓';
+    setTimeout(() => { btn.textContent = 'Kopiuj'; }, 1200);
+  }
+}
+
 let currentSkillFilter = 'all';
+
+// Mapowanie source (API) → klasa/label type-badge (CSS demo: type-projekt/user/plugin).
+const SKILL_TYPE_META = {
+  project: { cls: 'type-projekt', label: 'PROJEKT' },
+  user: { cls: 'type-user', label: 'USER' },
+  plugin: { cls: 'type-plugin', label: 'PLUGIN' },
+};
+
+// Polska odmiana "zadanie/zadania/zadań".
+function plJobs(n) {
+  if (n === 1) return 'zadanie';
+  if (n >= 2 && n <= 4) return 'zadania';
+  return 'zadań';
+}
+
+// Liczba jobów używających danego skilla (skill_name === dir_name).
+function countJobsForSkill(dirName) {
+  return allJobs.filter(j => j.skill_name === dirName).length;
+}
 
 function renderSkills() {
   const grid = document.getElementById('skills-grid');
@@ -397,14 +565,23 @@ function renderSkills() {
 
   empty.style.display = 'none';
   // Note: all values are escaped via esc() before insertion — safe from XSS
-  const sourceLabels = { project: '📁 PROJECT', user: '👤 USER', plugin: '🔌 PLUGIN' };
-  grid.innerHTML = filtered.map(s => `
+  grid.innerHTML = filtered.map(s => {
+    const meta = SKILL_TYPE_META[s.source] || { cls: 'type-plugin', label: esc(s.source).toUpperCase() };
+    const n = countJobsForSkill(s.dir_name);
+    const foot = n > 0
+      ? `<div class="skill-foot"><span class="dot dot-amber"></span>${n} ${plJobs(n)}</div>`
+      : '<div class="skill-foot unused"><span class="dot dot-grey"></span>nieużywany</div>';
+    return `
     <div class="skill-card">
-      <div class="source-badge source-${esc(s.source)}">${sourceLabels[s.source] || esc(s.source)}${s.plugin ? ' · ' + esc(s.plugin) : ''}</div>
-      <div class="name">/${esc(s.dir_name)}</div>
-      <div class="desc">${esc(s.description)}</div>
+      <div class="skill-card-head">
+        <span class="skill-name">/${esc(s.dir_name)}</span>
+        <span class="type-badge ${meta.cls}">${meta.label}${s.plugin ? ' · ' + esc(s.plugin) : ''}</span>
+      </div>
+      <div class="skill-desc">${esc(s.description)}</div>
+      ${foot}
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function filterSkills(filter) {
@@ -417,13 +594,15 @@ function filterSkills(filter) {
 
 function toggleRunDetail(id) {
   const el = document.getElementById(`run-detail-${id}`);
-  if (el) {
-    el.classList.toggle('show');
-    if (el.classList.contains('show')) {
-      expandedRuns.add(id);
-    } else {
-      expandedRuns.delete(id);
-    }
+  if (!el) return;
+  el.classList.toggle('show');
+  const box = el.querySelector('.logbox');
+  const isShown = el.classList.contains('show');
+  if (box) box.classList.toggle('hidden', !isShown);
+  if (isShown) {
+    expandedRuns.add(id);
+  } else {
+    expandedRuns.delete(id);
   }
 }
 
@@ -501,6 +680,19 @@ function onJobTypeChange() {
   document.getElementById('skill-group').style.display = isScript ? 'none' : '';
   document.getElementById('args-group').style.display = isScript ? 'none' : '';
   document.getElementById('command-group').style.display = isScript ? '' : 'none';
+  syncJobTypeSegment(type);
+}
+
+// Segment binarny Skill/Skrypt → zapisuje do #form-job-type i odświeża pola warunkowe.
+function syncJobTypeSegment(type) {
+  document.querySelectorAll('#job-type-seg .seg-opt').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.jobType === type);
+  });
+}
+
+function selectJobType(type) {
+  document.getElementById('form-job-type').value = type;
+  onJobTypeChange();
 }
 
 function openEditModal(id) {
@@ -753,12 +945,27 @@ function copyWebhookUrl() {
 }
 
 // === Polling ===
-function poll() {
-  loadStatus();
-  // Refresh active tab data
+// Statbar (loadStatus) odświeża się na KAŻDEJ zakładce co 3s.
+// Dane aktywnej zakładki odświeżają się z guardem podpisu (pomiń innerHTML bez zmian),
+// expandedRuns przeżywa re-render (renderRuns ponownie nakłada .show z setu).
+async function poll() {
+  await loadStatus();
   const activeTab = document.querySelector('.tab.active')?.dataset.tab;
   if (activeTab === 'jobs') loadJobs();
-  if (activeTab === 'history') loadRuns();
+  if (activeTab === 'history') pollRuns();
+}
+
+// Guard historii: pomiń re-render gdy podpis (length + id + statusy) bez zmian.
+async function pollRuns() {
+  try {
+    const hideRoutine = document.getElementById('runs-hide-routine')?.checked ? '&hide_routine=1' : '';
+    const runs = await API.get(`/api/runs?limit=100${hideRoutine}`);
+    const sig = pollSignature(runs, lastStatus);
+    if (sig === lastRunsSig) return;
+    lastRunsSig = sig;
+    allRuns = runs;
+    renderRuns(allRuns);
+  } catch { /* silent — historia degraduje cicho */ }
 }
 
 // === Init ===
