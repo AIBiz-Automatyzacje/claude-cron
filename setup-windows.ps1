@@ -137,6 +137,12 @@ $VpsUrl = ''
 
 if ($VpsHost) {
     $VpsHost = $VpsHost.Trim()
+    # Strip protocol if user pasted it (http://, https://)
+    $VpsHost = $VpsHost -replace '^https?://', ''
+    # Strip trailing slash and path
+    $VpsHost = $VpsHost -replace '/.*$', ''
+    # Strip trailing port if already included (we ask separately)
+    $VpsHost = $VpsHost -replace ':.*$', ''
     $VpsPortInput = Read-Host '  Port VPS [7777]'
     if ($VpsPortInput) { $VpsPort = $VpsPortInput.Trim() } else { $VpsPort = '7777' }
     $VpsUrl = 'http://' + $VpsHost + ':' + $VpsPort
