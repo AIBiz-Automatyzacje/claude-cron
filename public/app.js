@@ -54,19 +54,22 @@ const API = {
 };
 
 // === Environment switching ===
-function switchEnv(env) {
+async function switchEnv(env) {
+  if (env === currentEnv) return; // bez zbędnego reloadu po kliknięciu aktywnego
   currentEnv = env;
   document.querySelectorAll('.env-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.env === env);
   });
   document.body.dataset.env = env;
+  document.body.classList.add('env-loading'); // dim + spinner; stare dane zostają do nadejścia nowych
   expandedRuns.clear();
   lastJobsSig = null; // wymuś re-render po zmianie env (te same ID, inne dane)
   lastRunsSig = null;
-  loadSkills();
-  loadJobs();
-  loadStatus();
-  loadRuns();
+  try {
+    await Promise.allSettled([loadSkills(), loadJobs(), loadStatus(), loadRuns()]);
+  } finally {
+    document.body.classList.remove('env-loading');
+  }
 }
 
 // === Tabs ===
@@ -84,6 +87,15 @@ document.querySelectorAll('.tab').forEach(tab => {
 document.querySelectorAll('#job-type-seg .seg-opt').forEach(btn => {
   btn.addEventListener('click', () => selectJobType(btn.dataset.jobType));
 });
+
+// === Modal: accordion "Opcje zaawansowane" ===
+const accordionBtn = document.getElementById('accordion');
+if (accordionBtn) {
+  accordionBtn.addEventListener('click', () => {
+    accordionBtn.classList.toggle('open');
+    document.getElementById('accordion-body').classList.toggle('hidden');
+  });
+}
 
 // === Toast ===
 function toast(msg, isError = false) {
@@ -416,28 +428,28 @@ function renderJobs() {
       ? `<div class="next-cell"><span class="cell-strong">${formatDateTime(j.next_run)}</span><span class="next-rel">${formatCountdown(j.next_run)}</span></div>`
       : '<span class="cell-mute">—</span>';
     return `
-    <tr class="trow grid-zadania ${j.enabled ? '' : 'disabled'}">
-      <td class="task-cell">
+    <div class="trow grid-zadania ${j.enabled ? '' : 'disabled'}">
+      <div class="task-cell">
         <span class="task-ico">${ico}</span>
         <span><span class="task-name">${esc(j.name)}</span>${jobTypePill(j)}</span>
-      </td>
-      <td class="cell-dim">${sched}</td>
-      <td>${lastRunHtml(j.id)}</td>
-      <td>${sparklineHtml(j.id)}</td>
-      <td>${next}</td>
-      <td>
+      </div>
+      <div class="cell-dim">${sched}</div>
+      <div>${lastRunHtml(j.id)}</div>
+      <div>${sparklineHtml(j.id)}</div>
+      <div>${next}</div>
+      <div>
         <label class="switch">
           <input type="checkbox" ${j.enabled ? 'checked' : ''} onchange="toggleJob(${j.id})" aria-label="Przełącz ${esc(j.name)}" />
           <span class="track"><span class="thumb"></span></span>
         </label>
-      </td>
-      <td class="actions">
+      </div>
+      <div class="actions">
         <button class="act-btn run" onclick="triggerJob(${j.id})" title="Uruchom" aria-label="Uruchom ${esc(j.name)}">▶</button>
         <button class="act-btn" onclick="toggleJob(${j.id})" title="${j.enabled ? 'Wyłącz' : 'Włącz'}" aria-label="${j.enabled ? 'Wyłącz' : 'Włącz'} ${esc(j.name)}">⏻</button>
         <button class="act-btn" onclick="openEditModal(${j.id})" title="Edytuj" aria-label="Edytuj ${esc(j.name)}">✎</button>
         <button class="act-btn" onclick="deleteJob(${j.id})" title="Usuń" aria-label="Usuń ${esc(j.name)}">✕</button>
-      </td>
-    </tr>
+      </div>
+    </div>
   `}).join('');
 
   // Kalendarz dzieli źródło danych z listą — odśwież gdy aktywny.
@@ -558,16 +570,16 @@ function renderRuns(runs) {
     const name = job ? esc(job.name) : `Job #${r.job_id}`;
     const dur = formatDuration(r.started_at, r.finished_at);
     return `
-      <tr class="hrow grid-historia err" onclick="toggleRunDetail(${r.id})">
-        <td class="id-cell">#${r.id}</td>
-        <td class="h-name">${name}${isRoutine ? ' <span class="task-tag tag-type">Rutynowe</span>' : ''}</td>
-        <td><span class="badge ${st.cls}">${st.label}</span></td>
-        <td class="trigger">${tr.ico} ${tr.label}</td>
-        <td class="cell-dim">${formatDateTime(r.started_at)}</td>
-        <td class="cell-dim">${dur}</td>
-      </tr>
-      <tr class="run-detail${isExpanded ? ' show' : ''}" id="run-detail-${r.id}">
-        <td colspan="6">
+      <div class="hrow grid-historia err" onclick="toggleRunDetail(${r.id})">
+        <div class="id-cell">#${r.id}</div>
+        <div class="h-name">${name}${isRoutine ? ' <span class="task-tag tag-type">Rutynowe</span>' : ''}</div>
+        <div><span class="badge ${st.cls}">${st.label}</span></div>
+        <div class="trigger">${tr.ico} ${tr.label}</div>
+        <div class="cell-dim">${formatDateTime(r.started_at)}</div>
+        <div class="cell-dim">${dur}</div>
+      </div>
+      <div class="run-detail${isExpanded ? ' show' : ''}" id="run-detail-${r.id}">
+        <div class="run-detail-cell">
           <div class="logbox${isExpanded ? '' : ' hidden'}">
             <div class="log-head">
               <span class="log-title">${name} · <span class="${r.status === 'success' ? '' : 'exit-bad'}">${esc(st.label)}</span> · <span class="log-dur">${dur}</span></span>
@@ -579,8 +591,8 @@ function renderRuns(runs) {
             </div>
             <div class="log-body" id="log-body-${r.id}">${logBodyHtml(r)}</div>
           </div>
-        </td>
-      </tr>
+        </div>
+      </div>
     `;
   }).join('');
 }
@@ -861,11 +873,11 @@ function populateSkillSelect(selected) {
 }
 
 function showModal() {
-  document.getElementById('modal-overlay').classList.add('show');
+  document.getElementById('modal-overlay').hidden = false;
 }
 
 function hideModal() {
-  document.getElementById('modal-overlay').classList.remove('show');
+  document.getElementById('modal-overlay').hidden = true;
 }
 
 function closeModal(e) {
