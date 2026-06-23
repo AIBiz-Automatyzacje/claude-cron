@@ -150,17 +150,35 @@ P3 (nity — opcjonalnie, szczegóły w `review-faza-2.md`): klasa `err` hardcod
 - [x] Test: [Unit] CASCADE: `deleteJob` kasuje też jego runy
 - [x] Test: [Unit] `scheduler.getNextRun`/cron: 5 wzorców → poprawny czas; zły cron → kontrolowany błąd
 - [x] Test: [Unit] `matchWebhookToken`: `plain` ✓, `?query` ✓ (regresja), bez query ✓, nielegalny znak → null
-- [ ] Weryfikacja: `node --test` (cały zestaw) przechodzi
-- [ ] Weryfikacja: `node -e "require('./lib/webhook').matchWebhookToken"` nie rzuca
-- [ ] Weryfikacja: `grep -q 'matchWebhookToken' server.js`
+- [x] Weryfikacja: `node --test` (cały zestaw) przechodzi
+- [x] Weryfikacja: `node -e "require('./lib/webhook').matchWebhookToken"` nie rzuca
+- [x] Weryfikacja: `grep -q 'matchWebhookToken' server.js`
+
+---
+
+## Do poprawy po review fazy 3
+
+Brak findingów P1/P2. Faza 3 to czysta warstwa testów + ekstrakcja `matchWebhookToken` (zero regresji, 62/62 testów PASS). Wszystkie findingi review to P3 (nity) — opcjonalne, szczegóły w `review-faza-3.md`:
+
+- [ ] 🟡 [P3] **server.js:346** — handleWebhook zwraca rozróżnialne kody (403/404/405) na publicznym endpoincie → enumeracja tokenów bez rate-limitingu. PRE-EXISTING (faza tylko wyekstrahowała matchWebhookToken). Rozważyć ujednolicenie błędnej odpowiedzi + rate-limit.
+- [ ] 🟡 [P3] **lib/db.js:223** — getTodayRunStats: `date(started_at,'localtime')` non-sargable → full scan (omija idx_runs_started_at). PRE-EXISTING. Nieistotne przy małym wolumenie jednomaszynowym.
+- [ ] 🟡 [P3] **lib/db.js:202** — getRecentRunsPerJob: ROW_NUMBER() bez WHERE skanuje całe runs przed rn<=N. PRE-EXISTING, mitygacja istnieje (jawne kolumny + idx_runs_job_id), akceptowalne dla skali.
+- [ ] 🟡 [P3] **lib/scheduler.test.js:21** — cleanup oparty o hardcoded `SCHEDULED_IDS=[1..6]`, coupling do activeJobs, wymaga ręcznej synchronizacji listy. Izolacja per-proces (node --test) chroni przed cross-file leakiem.
+- [ ] 🟡 [P3] **lib/webhook.js:7** — matchWebhookToken: brak explicit return type / osie type-safety nieaplikowalne (czysty JS/CommonJS, brak TS). Czysta ekstrakcja, fail-fast, zero realnych naruszeń — wpis dla kompletności.
+- [ ] 🟡 [P3] **lib/db.test.js:226** — getTodayRunStats: brak asercji że zwracane pola to number a nie BigInt/string (nieosiągalne przy tych rozmiarach SUM).
+- [ ] 🟡 [P3] **lib/db.test.js:193** — getRecentRunsPerJob testowany int-ami, ale call-path (server.js:328) podaje string ("7") / null. Sugerowane testy granicy API: `"abc"`/`"-5"`/`null` → default 7.
+- [ ] 🟡 [P3] **lib/db.test.js:230** — deleteOldRoutineRuns: brak boundary na cutoff (`finished_at == cutoff` przy ostrym `<` nie kasowany) i `finished_at = NULL`. Główna logika retention pokryta.
+- [ ] 🟡 [P3] **lib/scheduler.test.js:98** — brak osobnej asercji na getNextRun dla joba unscheduled (return null); pośrednio pokryte przez test "zły cron → null".
+- [ ] 🟡 [P3] **lib/webhook.test.js:59** — "nie-string input" pokrywa undefined/null; brak number/object (guard `typeof !== 'string'` obsługuje jednolicie). req.url zawsze string w runtime.
 
 ---
 
 ## Faza 4 — Odroczone (po akceptacji Faz 1–3)
 
 ### Unit 9: Kalendarz (widok tygodnia, occurrences w JS) — `feature-builder-ui` (L)
-- [ ] Dodaj `renderKalendarz()` + liczenie occurrences z `cron_expr` enabled jobów w `public/app.js`
-- [ ] Filtr script-jobów (`hours`/`minutes`) domyślnie ukryty; kropki 3-stanowe; tylko widok Tydzień
+- [x] Dodaj `renderKalendarz()` + liczenie occurrences z `cron_expr` enabled jobów w `public/app.js` (logika occurrences wyekstrahowana do `public/render-helpers.js`: `parseCronForCalendar`/`computeWeekOccurrences`/`startOfWeek` — testowalna jednostkowo)
+- [x] Filtr script-jobów (`hours`/`minutes`) domyślnie ukryty (`highFreq` w `parseCronForCalendar`); kropki 3-stanowe (`ok`/`err`/`idle`); tylko widok Tydzień
+- [x] Odchylenie: Toggle Lista/Kalendarz NIE istniał w `index.html` (IU zakładało placeholder z Unit 5). Dodany w tej fazie: `seg-toggle #zadania-views` + kontenery `#zadania-lista`/`#zadania-kalendarz` (istniejące klasy CSS `seg/seg-opt/hidden`, zero nowych styli)
 - [ ] Test: [Manual] Job daily codziennie; weekly tylko swój dzień; minutowy/godzinowy ukryty
 - [ ] Test: [Manual] Kropki 3-stanowe; wyłączony job bez wystąpień; scroll w kolumnie dnia
 - [ ] Weryfikacja: `node --check public/app.js` przechodzi
@@ -168,8 +186,8 @@ P3 (nity — opcjonalnie, szczegóły w `review-faza-2.md`): klasa `err` hardcod
 - [ ] Operator checklist: weryfikacja widoku tygodnia w przeglądarce na realnych danych (occurrences vs next_run)
 
 ### Unit 10: README rebrand + usunięcie `_preview.html` — `feature-builder-data` (S)
-- [ ] Rebrand nagłówka i opisu w `README.md` → Puls (bez zmiany instrukcji technicznych)
-- [ ] Potwierdź że `public/_preview.html` jest martwy (brak referencji) i usuń
+- [x] Rebrand nagłówka i opisu w `README.md` → Puls (`# 🫀 Puls` + opis „scheduler agentów AI (Claude Code), AIBIZ"; instrukcje techniczne niezmienione)
+- [x] Potwierdź że `public/_preview.html` jest martwy (brak referencji w `public`/`server.js`) i usuń
 - [ ] Test: [Manual] README czyta się jako „Puls", instrukcje instalacji poprawne
 - [ ] Weryfikacja: `grep -q -i 'Puls' README.md`
 - [ ] Weryfikacja: `test ! -f public/_preview.html`

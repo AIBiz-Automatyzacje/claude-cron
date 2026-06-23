@@ -1,7 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = require('./render-helpers');
+const {
+  pollSignature, jobsSignature, buildSparkData, groupRecentByJob,
+  parseCronForCalendar, computeWeekOccurrences, startOfWeek,
+} = require('./render-helpers');
 
 // === pollSignature ===
 
@@ -105,4 +108,155 @@ test('groupRecentByJob: grupuje po job_id zachowując kolejność', () => {
 test('groupRecentByJob: pusta/nullowa lista → pusty obiekt, nie rzuca', () => {
   assert.deepEqual(groupRecentByJob([]), {});
   assert.doesNotThrow(() => groupRecentByJob(null));
+});
+
+// === parseCronForCalendar ===
+
+test('parseCronForCalendar: daily → all days, godzina/minuta', () => {
+  const r = parseCronForCalendar('0 9 * * *');
+  assert.equal(r.highFreq, false);
+  assert.equal(r.hour, 9);
+  assert.equal(r.minute, 0);
+  assert.equal(r.dow, 'all');
+});
+
+test('parseCronForCalendar: weekdays → pon-pt (1-5)', () => {
+  const r = parseCronForCalendar('30 8 * * 1-5');
+  assert.equal(r.dow.has(1), true);
+  assert.equal(r.dow.has(5), true);
+  assert.equal(r.dow.has(0), false);
+  assert.equal(r.dow.has(6), false);
+});
+
+test('parseCronForCalendar: weekly → pojedynczy dzień tygodnia', () => {
+  const r = parseCronForCalendar('0 14 * * 3');
+  assert.equal(r.dow.size, 1);
+  assert.equal(r.dow.has(3), true);
+});
+
+test('parseCronForCalendar: minutowy → highFreq (filtr skryptowy)', () => {
+  assert.equal(parseCronForCalendar('*/5 * * * *').highFreq, true);
+});
+
+test('parseCronForCalendar: godzinowy → highFreq (filtr skryptowy)', () => {
+  assert.equal(parseCronForCalendar('0 */2 * * *').highFreq, true);
+});
+
+test('parseCronForCalendar: pusty/webhook-only → null', () => {
+  assert.equal(parseCronForCalendar(''), null);
+  assert.equal(parseCronForCalendar('   '), null);
+  assert.equal(parseCronForCalendar(undefined), null);
+});
+
+test('parseCronForCalendar: nieobsługiwany kształt (dom/mon != *) → null', () => {
+  assert.equal(parseCronForCalendar('0 9 15 * *'), null);
+  assert.equal(parseCronForCalendar('0 9 * 6 *'), null);
+});
+
+// === startOfWeek ===
+
+test('startOfWeek: środa → cofa do poniedziałku tego tygodnia', () => {
+  const wed = new Date(2026, 5, 17); // 17 czerwca 2026 = środa
+  const mon = startOfWeek(wed);
+  assert.equal(mon.getDay(), 1, 'poniedziałek');
+  assert.equal(mon.getDate(), 15);
+});
+
+test('startOfWeek: niedziela → cofa do poniedziałku tego samego tygodnia (nie następnego)', () => {
+  const sun = new Date(2026, 5, 21); // 21 czerwca 2026 = niedziela
+  const mon = startOfWeek(sun);
+  assert.equal(mon.getDay(), 1);
+  assert.equal(mon.getDate(), 15, 'poniedziałek 15, nie 22');
+});
+
+// === computeWeekOccurrences ===
+
+const WEEK_START = new Date(2026, 5, 15); // pon 15 czerwca 2026
+const NOW = new Date(2026, 5, 17, 12, 0); // śr 17 czerwca 12:00
+
+test('computeWeekOccurrences: zwraca 7 dni z poprawnymi numerami i flagą today', () => {
+  const days = computeWeekOccurrences([], [], WEEK_START, NOW);
+  assert.equal(days.length, 7);
+  assert.equal(days[0].num, 15);
+  assert.equal(days[6].num, 21);
+  assert.equal(days[2].isToday, true, 'środa 17 = dziś');
+  assert.equal(days[0].isToday, false);
+});
+
+test('computeWeekOccurrences: daily job widoczny każdego dnia tygodnia', () => {
+  const jobs = [{ id: 1, name: 'Daily', enabled: true, cron_expr: '0 6 * * *' }];
+  const days = computeWeekOccurrences(jobs, [], WEEK_START, NOW);
+  for (const d of days) {
+    assert.equal(d.events.length, 1, `dzień ${d.num} ma 1 event`);
+    assert.equal(d.events[0].time, '06:00');
+    assert.equal(d.events[0].name, 'Daily');
+  }
+});
+
+test('computeWeekOccurrences: weekly job tylko w swoim dniu', () => {
+  // dow=3 = środa
+  const jobs = [{ id: 1, name: 'Środa', enabled: true, cron_expr: '0 14 * * 3' }];
+  const days = computeWeekOccurrences(jobs, [], WEEK_START, NOW);
+  const withEvents = days.filter((d) => d.events.length > 0);
+  assert.equal(withEvents.length, 1);
+  assert.equal(withEvents[0].num, 17, 'tylko środa 17');
+});
+
+test('computeWeekOccurrences: weekdays job pon-pt, brak w weekend', () => {
+  const jobs = [{ id: 1, name: 'Robocze', enabled: true, cron_expr: '30 8 * * 1-5' }];
+  const days = computeWeekOccurrences(jobs, [], WEEK_START, NOW);
+  assert.equal(days[0].events.length, 1, 'pon');
+  assert.equal(days[4].events.length, 1, 'pt');
+  assert.equal(days[5].events.length, 0, 'sob bez eventu');
+  assert.equal(days[6].events.length, 0, 'niedz bez eventu');
+});
+
+test('computeWeekOccurrences: wyłączony job → brak wystąpień', () => {
+  const jobs = [{ id: 1, name: 'Off', enabled: false, cron_expr: '0 6 * * *' }];
+  const days = computeWeekOccurrences(jobs, [], WEEK_START, NOW);
+  assert.equal(days.every((d) => d.events.length === 0), true);
+});
+
+test('computeWeekOccurrences: minutowy/godzinowy job ukryty (filtr highFreq)', () => {
+  const jobs = [
+    { id: 1, name: 'Min', enabled: true, cron_expr: '*/5 * * * *' },
+    { id: 2, name: 'Hr', enabled: true, cron_expr: '0 */2 * * *' },
+  ];
+  const days = computeWeekOccurrences(jobs, [], WEEK_START, NOW);
+  assert.equal(days.every((d) => d.events.length === 0), true);
+});
+
+test('computeWeekOccurrences: kropka 3-stanowa — sukces=ok, błąd=err, brak runu=idle', () => {
+  const jobs = [
+    { id: 1, name: 'A', enabled: true, cron_expr: '0 6 * * *' },
+    { id: 2, name: 'B', enabled: true, cron_expr: '0 7 * * *' },
+  ];
+  // runy w poniedziałek 15 czerwca (local). started_at jako UTC bez offsetu dnia.
+  const runs = [
+    { job_id: 1, status: 'success', started_at: '2026-06-15T06:00:00Z' },
+    { job_id: 2, status: 'failed', started_at: '2026-06-15T07:00:00Z' },
+  ];
+  const days = computeWeekOccurrences(jobs, runs, WEEK_START, NOW);
+  const mon = days[0];
+  const evA = mon.events.find((e) => e.name === 'A');
+  const evB = mon.events.find((e) => e.name === 'B');
+  assert.equal(evA.status, 'ok');
+  assert.equal(evB.status, 'err');
+  // wtorek — brak runów → idle
+  const tueA = days[1].events.find((e) => e.name === 'A');
+  assert.equal(tueA.status, 'idle');
+});
+
+test('computeWeekOccurrences: eventy posortowane po godzinie rosnąco', () => {
+  const jobs = [
+    { id: 1, name: 'Późny', enabled: true, cron_expr: '0 20 * * *' },
+    { id: 2, name: 'Wczesny', enabled: true, cron_expr: '0 6 * * *' },
+  ];
+  const days = computeWeekOccurrences(jobs, [], WEEK_START, NOW);
+  assert.equal(days[0].events[0].name, 'Wczesny');
+  assert.equal(days[0].events[1].name, 'Późny');
+});
+
+test('computeWeekOccurrences: nullowe wejścia nie rzucają', () => {
+  assert.doesNotThrow(() => computeWeekOccurrences(null, null, WEEK_START, NOW));
 });

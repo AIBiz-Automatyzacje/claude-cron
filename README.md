@@ -1,6 +1,6 @@
-# 🕹️ Claude-Cron
+# 🫀 Puls
 
-Automatyczny scheduler dla [Claude Code](https://claude.ai/code). Ustawiasz co i kiedy ma się odpalić — Claude robi resztę. Dashboard w stylu retro arcade do zarządzania wszystkim.
+**Puls** — scheduler agentów AI (Claude Code), AIBIZ. Ustawiasz co i kiedy ma się odpalić — Claude robi resztę. Dashboard w stylu retro arcade do zarządzania wszystkim.
 
 **Działa na:** 🍎 macOS · 🪟 Windows · 🐧 Linux (VPS)
 
@@ -21,13 +21,13 @@ Kolejność:
 1. **Krok 1 — VPS** (jeśli go używasz, opcjonalne)
 2. **Krok 2 — Komputer lokalny** — wybierz swoją platformę: 🍎 Mac lub 🪟 Windows
 
-> *Nie masz VPS-a?* Pomiń krok 1 — claude-cron zadziała tylko lokalnie. Joby będą lecieć tylko gdy komputer nie śpi.
+> *Nie masz VPS-a?* Pomiń krok 1 — Puls zadziała tylko lokalnie. Joby będą lecieć tylko gdy komputer nie śpi.
 
 ---
 
 ## ☁️ Krok 1 — Instalacja na VPS (opcjonalne)
 
-Jeśli chcesz harmonogram lecący 24/7 — postaw claude-cron na VPS-ie i podłącz dashboard przez Tailscale.
+Jeśli chcesz harmonogram lecący 24/7 — postaw Puls na VPS-ie i podłącz dashboard przez Tailscale.
 
 ### Wymagania
 - Serwer VPS z Linuxem (Hostinger, DigitalOcean, Hetzner, etc.) — installer instaluje Tailscale automatycznie

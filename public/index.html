@@ -50,30 +50,37 @@
         <div class="toolbar">
           <div class="toolbar-left">
             <h2 class="toolbar-title">Zaplanowane zadania</h2>
+            <div class="seg seg-views" id="zadania-views">
+              <button class="seg-opt active" data-zview="lista" onclick="switchZadaniaView('lista')">☰ Lista</button>
+              <button class="seg-opt" data-zview="kalendarz" onclick="switchZadaniaView('kalendarz')">▦ Kalendarz</button>
+            </div>
           </div>
           <div class="toolbar-right">
             <button class="btn btn-primary" onclick="openCreateModal()">+ Nowe zadanie</button>
           </div>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>NAZWA</th>
-                <th>SKILL / PROMPT</th>
-                <th>HARMONOGRAM</th>
-                <th>NASTĘPNY</th>
-                <th>STATUS</th>
-                <th>AKCJE</th>
-              </tr>
-            </thead>
-            <tbody id="jobs-body"></tbody>
-          </table>
+        <div id="zadania-lista">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>NAZWA</th>
+                  <th>SKILL / PROMPT</th>
+                  <th>HARMONOGRAM</th>
+                  <th>NASTĘPNY</th>
+                  <th>STATUS</th>
+                  <th>AKCJE</th>
+                </tr>
+              </thead>
+              <tbody id="jobs-body"></tbody>
+            </table>
+          </div>
+          <div class="empty-state" id="jobs-empty" style="display:none">
+            <div class="icon">🎮</div>
+            <div>Brak zadań. Stwórz pierwsze!</div>
+          </div>
         </div>
-        <div class="empty-state" id="jobs-empty" style="display:none">
-          <div class="icon">🎮</div>
-          <div>Brak zadań. Stwórz pierwsze!</div>
-        </div>
+        <div id="zadania-kalendarz" class="hidden"></div>
       </section>
 
       <!-- Historia -->

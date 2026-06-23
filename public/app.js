@@ -16,6 +16,9 @@ let lastStatus = {}; // ostatni payload /api/status (część podpisu poll histo
 
 const { mapStatus, mapTrigger } = EnumMap;
 const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = RenderHelpers;
+const { computeWeekOccurrences, startOfWeek } = RenderHelpers;
+
+let zadaniaView = 'lista'; // 'lista' | 'kalendarz'
 
 // === API ===
 function apiBase() {
@@ -424,6 +427,70 @@ function renderJobs() {
       </td>
     </tr>
   `}).join('');
+
+  // Kalendarz dzieli źródło danych z listą — odśwież gdy aktywny.
+  if (zadaniaView === 'kalendarz') renderKalendarz();
+}
+
+// === Kalendarz (widok tygodnia, occurrences w JS — R10) ===
+const CAL_DOW_LABELS = ['Niedz', 'Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob'];
+const CAL_MONTHS = ['stycznia', 'lutego', 'marca', 'kwietnia', 'maja', 'czerwca', 'lipca', 'sierpnia', 'września', 'października', 'listopada', 'grudnia'];
+
+// Kropka 3-stanowa eventu kalendarza: ok=zielony, err=czerwony, idle=szary.
+function calDotFor(status) {
+  const cls = status === 'ok' ? 'dot-green' : status === 'err' ? 'dot-red' : 'dot-grey';
+  return `<span class="dot ${cls}"></span>`;
+}
+
+// Zakres tygodnia: "15 – 21 czerwca 2026" (miesiąc/rok z dnia ostatniego — wystarczające dla MVP).
+function calRangeLabel(days) {
+  const first = days[0].date;
+  const last = days[6].date;
+  return `${first.getDate()} – ${last.getDate()} ${CAL_MONTHS[last.getMonth()]} ${last.getFullYear()}`;
+}
+
+// Widok kalendarza: occurrences enabled jobów w bieżącym tygodniu (occurrences liczone w JS).
+// Źródło runów do kropek: allRuns (historia /api/runs). Wyłączone i wysokoczęstotliwe joby pominięte w helperze.
+function renderKalendarz() {
+  const container = document.getElementById('zadania-kalendarz');
+  if (!container) return;
+
+  const now = new Date();
+  const weekStart = startOfWeek(now);
+  const days = computeWeekOccurrences(allJobs, allRuns, weekStart, now);
+
+  const nav = `<div class="cal-nav">
+    <div class="cal-nav-left">
+      <span class="cal-range">${esc(calRangeLabel(days))}</span>
+    </div>
+  </div>`;
+
+  const week = `<div class="cal-week">${days.map(d => `
+    <div class="cal-day ${d.isToday ? 'today' : ''}">
+      <div class="cal-day-head">
+        <span><span class="cal-day-num">${d.num}</span><span class="cal-day-dow">${CAL_DOW_LABELS[d.dow]}</span></span>
+        ${d.isToday ? '<span class="cal-today-badge">dziś</span>' : ''}
+      </div>
+      <div class="cal-events">${d.events.map(e => `
+        <div class="cal-event ${e.status === 'ok' ? 'done' : ''}">
+          <div class="cal-event-time">${calDotFor(e.status)}${esc(e.time)}</div>
+          <div class="cal-event-name">${esc(e.name)}</div>
+        </div>`).join('')}</div>
+    </div>`).join('')}</div>`;
+
+  container.innerHTML = nav + week;
+}
+
+// Przełącznik widoku Zadania: Lista ↔ Kalendarz.
+function switchZadaniaView(view) {
+  zadaniaView = view;
+  const isLista = view === 'lista';
+  document.querySelectorAll('#zadania-views .seg-opt').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.zview === view);
+  });
+  document.getElementById('zadania-lista').classList.toggle('hidden', !isLista);
+  document.getElementById('zadania-kalendarz').classList.toggle('hidden', isLista);
+  if (!isLista) renderKalendarz();
 }
 
 // Heurystyka: linia wygląda na błąd? (do podświetlenia w log viewerze)

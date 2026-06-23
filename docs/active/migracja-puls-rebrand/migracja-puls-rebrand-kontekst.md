@@ -1,7 +1,7 @@
 # Kontekst: Migracja claude-cron → Puls
 
 Branch: `feature/migracja-puls-rebrand`
-Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 3)
+Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 4)
 
 ## Status realizacji
 
@@ -24,6 +24,16 @@ Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 3)
 - **Unit 8** — regex tokenu webhooka wyciągnięty z `server.js` do `lib/webhook.js` (`matchWebhookToken(url)→token|null`, wzorzec `/^\/webhook\/([a-zA-Z0-9_-]+)(?:\?|$)/`); `server.js` woła nową funkcję zamiast inline-regexu. Nowe testy: `lib/webhook.test.js` (8 — plain, regresja query-string, znaki `_`/`-`, nielegalny znak → null, pusty token, nie-webhook, nie-string), `lib/scheduler.test.js` (8 — 5 wzorców cron `daily/weekdays/weekly/hours/minutes` przez `getNextRun`, zły cron → null, asercje na lokalnych polach Date by były niezależne od TZ CI). Rozszerzony `lib/db.test.js`: `getRuns({hideRoutine})`, `getRuns({job_id})` (DESC+limit), `deleteOldRoutineRuns` (tylko stary success rutynowych), CASCADE (`deleteJob` kasuje runy).
 - **Testy:** `node --test` → **62/62 PASS, 0 FAIL** (db + next-run + enum-map + render-helpers + webhook + scheduler). `node --check server.js` OK; `require('./lib/webhook').matchWebhookToken` nie rzuca; `grep matchWebhookToken server.js` PASS.
 - **Walidacja:** typecheck/lint/vite build = n/a (czysty Node.js CommonJS, brak TS/ESLint/vite w repo); zero nowych zależności (runner warm).
+
+### Faza 4 — Kalendarz + README/cleanup (Unit 9–10): UKOŃCZONA
+- **Unit 9** — widok kalendarza tygodnia. Logika occurrences wyekstrahowana do `public/render-helpers.js` (`parseCronForCalendar`, `computeWeekOccurrences`, `startOfWeek`, `formatHourMinute` — dual-export, testowalne `node --test`). Render (`renderKalendarz`/`switchZadaniaView`/`calDotFor`/`calRangeLabel`) w `public/app.js`. Occurrences liczone w JS bez parsera cron — rozpoznawane 5 kształtów z `buildCronFromForm` (daily/weekdays/weekly/hours/minutes); `hours`/`minutes` → `highFreq` (pomijane w kalendarzu, filtr skryptowy). Kropki 3-stanowe: `ok` (sukces danego dnia), `err` (błąd), `idle` (brak runu/przyszłość) — źródło kropek `allRuns`, indeksowane po dniu lokalnym (`indexRunsByDay`, normalizacja UTC jak `formatTime`). Tylko widok Tydzień (poniedziałek-niedziela).
+- **Unit 10** — `README.md` rebrand: `# 🫀 Puls` + opis „scheduler agentów AI (Claude Code), AIBIZ" (instrukcje techniczne niezmienione); `public/_preview.html` usunięty (martwy mockup, zero referencji w `public`/`server.js`).
+- **Testy:** `node --test` → **80/80 PASS, 0 FAIL** (62 z Fazy 3 + 18 nowych: `parseCronForCalendar` 7, `startOfWeek` 2, `computeWeekOccurrences` 9 — happy path każdego wzorca cron + edge highFreq/disabled/null + kropki 3-stanowe + sortowanie). `node --check public/app.js`/`public/render-helpers.js` OK.
+- **Walidacja:** typecheck/lint/vite build = n/a (czysty Node.js CommonJS, brak TS/ESLint/vite w repo); zero nowych zależności (runner `node --test` warm, brak zimnego cache).
+
+### Odchylenia Fazy 4 (do uwagi review)
+- **Unit 9:** Toggle Lista/Kalendarz NIE istniał w `index.html` (plan zakładał placeholder z Unit 5, którego tam nie było). Dodany w tej fazie: `seg-toggle #zadania-views` (data-zview lista/kalendarz) + owinięcie istniejącej tabeli w `#zadania-lista` i nowy `#zadania-kalendarz` — wyłącznie istniejące klasy CSS dema (`seg/seg-views/seg-opt/hidden`), zero nowych styli.
+- **Unit 9:** logika occurrences wyekstrahowana do `render-helpers.js` (dual-export, wzorzec z Unit 6) zamiast inline w `app.js` — wymagane do testów `node:test` (`app.js` to plik przeglądarkowy bez `module.exports`). Skill `tailwind-react-guidelines` wspomina vitest, ale stack projektu to vanilla JS + `node --test` (brak vitest/Vite w repo).
 
 ### Odchylenia Fazy 3 (do uwagi review)
 - **Unit 8:** `buildCronFromForm` jest funkcją DOM-ową w `public/app.js` (frontend, brak `module.exports`) — nieimportowalna w `node --test`. Zamiast importu test sprawdza 5 cron-stringów które ta funkcja produkuje (daily/weekdays/weekly/hours/minutes) przez realny `scheduler.scheduleJob`→`getNextRun`. Zgodne z intencją planu („5 wzorców z buildCronFromForm daje poprawny następny czas"). `scheduler.test.js` izoluje bazę przez `db.setDbPath(':memory:')` (jak `db.test.js`), bo moduł `scheduler` requiruje `db` przy ładowaniu.

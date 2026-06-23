@@ -444,8 +444,9 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 - [Manual] Kropki 3-stanowe poprawne (sukces/błąd/przyszłe); wyłączony job bez wystąpień; scroll w kolumnie dnia gdy dużo eventów.
 
 **Weryfikacja:**
-- `node --check public/app.js` przechodzi
-- `grep -q 'renderKalendarz' public/app.js`
+- [x] `node --check public/app.js` przechodzi
+- [x] `grep -q 'renderKalendarz' public/app.js`
+- [x] `node --test` → 80/80 PASS (18 nowych testów occurrences: parseCronForCalendar/computeWeekOccurrences/startOfWeek)
 
 **Operator checklist:**
 - [ ] Operator weryfikuje w przeglądarce widok tygodnia na realnych danych (occurrences vs faktyczne next_run jobów).
@@ -476,9 +477,9 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 - [Manual] README czyta się jako „Puls", instrukcje instalacji wciąż poprawne.
 
 **Weryfikacja:**
-- `grep -q -i 'Puls' README.md`
-- `test ! -f public/_preview.html` (plik usunięty)
-- `grep -rq '_preview.html' public server.js` zwraca pusto (brak martwych referencji)
+- [x] `grep -q -i 'Puls' README.md`
+- [x] `test ! -f public/_preview.html` (plik usunięty)
+- [x] `grep -rq '_preview.html' public server.js` zwraca pusto (brak martwych referencji)
 
 ## Wpływ systemowy
 
