@@ -1,7 +1,23 @@
 # Kontekst: Migracja claude-cron → Puls
 
 Branch: `feature/migracja-puls-rebrand`
-Ostatnia aktualizacja: 2026-06-23
+Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 1)
+
+## Status realizacji
+
+### Faza 1 — Fundament (Unit 1–4): UKOŃCZONA
+- **Unit 1** — assety (`public/logo-puls.png`, `public/favicon.png`) skopiowane; `public/style.css` zastąpiony 1:1 (`diff` vs `puls-demo/style.css` = IDENTYCZNE).
+- **Unit 2** — `getRecentRunsPerJob(perJob)` (window function `ROW_NUMBER`) w `lib/db.js`; route `GET /api/runs/recent` w `server.js` (matcher ścisły `===`, brak kolizji z ogólnym `/api/runs`). Zweryfikowane na izolowanej instancji `:7799`.
+- **Unit 3** — `getTodayRunStats()` (`date('now','localtime')`) w `lib/db.js`; `/api/status` wzbogacony o `today_success`/`today_failed`/`next:{job_name,next_run}` (potwierdzone: `today_success:530`, `next` obecne).
+- **Unit 4** — `public/enum-map.js` (dual-export CJS+global), `mapStatus`/`mapTrigger` wg kanonu §4.0.
+- **Testy:** `node --test` → `lib/db.test.js` 11/11 PASS, `public/enum-map.test.js` 12/12 PASS (łącznie 23 PASS, 0 FAIL).
+- **Walidacja:** `node --check` OK dla wszystkich plików; typecheck/lint = n/a (czysty CommonJS, brak TS/ESLint w projekcie); brak `vite build` (projekt to Node.js scheduler, nie SPA); zero nowych zależności.
+
+### Odchylenia Fazy 1 (do uwagi review)
+- **Unit 1:** grep weryfikacyjny `--mute:#7d7d7d` (bez spacji) NIE przechodzi — źródło `puls-demo/style.css:14` ma `--mute: #7d7d7d;` (ze spacją, wariant WCAG AA). CSS świadomie NIE zmodyfikowany pod grep: reguła „kopia 1:1, nie modyfikuj treści wzorca" > formatowanie greppa. Wariant WCAG AA obecny, różnica wyłącznie whitespace.
+- **Unit 2:** dotknięto `lib/config.js` (lista „NIE ruszać") jedną linią — `DB_PATH = process.env.CLAUDE_CRON_DB || …`. Override izoluje bazę w testach (bez niego singleton `getDb()` zanieczyszczałby produkcyjną `data/claude-cron.db`). Zmiana addytywna, backward-compatible.
+- **Unit 3:** `getTodayRunStats` agreguje do `failed` także `timeout`/`killed` (jedyne nie-success statusy zakończenia wg `lib/executor.js`) — inaczej statbar zaniżałby liczbę niepowodzeń.
+- **Unit 4:** wzorzec `puls-demo/app.js:STATUS_META/TRIGGER_ICO` z planu nie istnieje w repo; kształt `{cls,label}`/`{ico,label}` odtworzony wprost wg kanonu §4.0 (nie z mocka).
 
 ## Powiązane pliki
 

@@ -130,6 +130,22 @@ function proxyToVps(req, res, targetPath) {
   }
 }
 
+// Wybiera najbliższy zaplanowany run spośród enabled jobów.
+// Iteruje enabled joby, pyta scheduler.getNextRun (croner liczy per job — bez duplikacji cron),
+// zwraca { job_name, next_run } o minimalnym next_run lub null gdy brak zaplanowanych.
+function computeNextRun(allJobs) {
+  let best = null;
+  for (const job of allJobs) {
+    if (!job.enabled) continue;
+    const nextRun = scheduler.getNextRun(job.id);
+    if (!nextRun) continue;
+    if (best === null || nextRun < best.next_run) {
+      best = { job_name: job.name, next_run: nextRun };
+    }
+  }
+  return best;
+}
+
 async function handleApi(req, res) {
   const { method, path: urlPath, segments, params } = matchRoute(req.method, req.url);
 
@@ -156,6 +172,8 @@ async function handleApi(req, res) {
     const queued = db.getQueuedRuns();
     const allJobs = db.getAllJobs();
     const autostart = platform.getStatus();
+    const todayStats = db.getTodayRunStats();
+    const next = computeNextRun(allJobs);
 
     return json(res, {
       uptime: process.uptime(),
@@ -163,6 +181,9 @@ async function handleApi(req, res) {
       queue_length: queued.length,
       total_jobs: allJobs.length,
       enabled_jobs: allJobs.filter(j => j.enabled).length,
+      today_success: todayStats.success,
+      today_failed: todayStats.failed,
+      next,
       autostart,
     });
   }
@@ -275,6 +296,13 @@ async function handleApi(req, res) {
   if (method === 'POST' && urlPath === '/api/runs/current/kill') {
     const killed = executor.killCurrent();
     return json(res, { killed });
+  }
+
+  // GET /api/runs/recent?per_job=N — N ostatnich runów per job (sparkline + ostatni run).
+  // MUSI być przed ogólnym matcherem segments[1]==='runs' poniżej, inaczej zostanie złapany.
+  if (method === 'GET' && urlPath === '/api/runs/recent') {
+    const perJob = params.get('per_job');
+    return json(res, db.getRecentRunsPerJob(perJob));
   }
 
   // /api/runs with query params

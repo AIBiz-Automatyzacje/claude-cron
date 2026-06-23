@@ -95,7 +95,7 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 
 ### Faza 1 — Fundament (statyka, backend, moduł enumów)
 
-- [ ] **Unit 1: Assety + podmiana CSS + fonty**
+- [x] **Unit 1: Assety + podmiana CSS + fonty**
 
 **Cel:** Wgrać design system Dark Impact i assety brandu, by markup z Fazy 2 miał komplet klas/zmiennych.
 
@@ -129,7 +129,7 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 
 ---
 
-- [ ] **Unit 2: Backend — `GET /api/runs/recent?per_job=N` (window function) + test**
+- [x] **Unit 2: Backend — `GET /api/runs/recent?per_job=N` (window function) + test**
 
 **Cel:** Jeden endpoint zwracający dokładnie N ostatnich runów per job, niezależnie od kadencji — źródło OSTATNI RUN + 7-run sparkline.
 
@@ -170,7 +170,7 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 
 ---
 
-- [ ] **Unit 3: Backend — wzbogacony `/api/status` (today + next) + test**
+- [x] **Unit 3: Backend — wzbogacony `/api/status` (today + next) + test**
 
 **Cel:** `/api/status` jako jedyne źródło globalnego statbara — dorzucić `today_success`, `today_failed`, `next:{job_name,next_run}`.
 
@@ -210,7 +210,7 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 
 ---
 
-- [ ] **Unit 4: Moduł `enum-map` (kanon §4.0) + test**
+- [x] **Unit 4: Moduł `enum-map` (kanon §4.0) + test**
 
 **Cel:** Wyciągnąć mapowanie realna-wartość → demo-kod/UI do jednego testowalnego modułu (dual-export), używanego przez render w app.js.
 

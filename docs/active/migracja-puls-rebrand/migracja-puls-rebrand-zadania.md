@@ -8,48 +8,48 @@ Ostatnia aktualizacja: 2026-06-23
 ## Faza 1 — Fundament (statyka, backend, moduł enumów)
 
 ### Unit 1: Assety + podmiana CSS + fonty — `feature-builder-ui` (S)
-- [ ] Skopiuj `puls-demo/logo-puls.png` → `public/logo-puls.png`
-- [ ] Skopiuj `puls-demo/favicon.png` → `public/favicon.png`
-- [ ] Zastąp `public/style.css` w całości wersją z `puls-demo/style.css`
+- [x] Skopiuj `puls-demo/logo-puls.png` → `public/logo-puls.png`
+- [x] Skopiuj `puls-demo/favicon.png` → `public/favicon.png`
+- [x] Zastąp `public/style.css` w całości wersją z `puls-demo/style.css` (diff vs źródło: IDENTYCZNE 1:1)
 - [ ] Test: [Manual] Po Fazie 2: brak FOUC/brakujących glifów, kolory zgodne z demem
 - [ ] Weryfikacja: `test -f public/logo-puls.png && test -f public/favicon.png` zwraca sukces
 - [ ] Weryfikacja: `grep -q '\.modal-overlay\[hidden\]' public/style.css` i `grep -q '\.view\.active' public/style.css` przechodzą
 - [ ] Weryfikacja: `grep -q -- '--mute:#7d7d7d' public/style.css` przechodzi
 
 ### Unit 2: `GET /api/runs/recent` (window function) + test — `feature-builder-data` (M)
-- [ ] Dodaj helper `getRecentRunsPerJob(perJob)` w `lib/db.js` (window function) + eksport
-- [ ] Dodaj route `GET /api/runs/recent` w `server.js` PRZED ogólnym `/api/runs` matcherem (walidacja `per_job`, default+cap)
-- [ ] Test (unit): `lib/db.test.js`
-- [ ] Notatka wykonawcza: test-first — najpierw test seeda, potem helper
-- [ ] Test: [Unit] Job A `*/1` (20 runów) + job B rzadki (3 runy); `getRecentRunsPerJob(7)` → A=7, B=3
-- [ ] Test: [Unit] Wynik DESC po `id` w obrębie joba
-- [ ] Test: [Unit] `per_job=0`/brak → fallback default (nie crash, nie pusta tablica gdy są runy)
-- [ ] Test: [Manual] `curl localhost:7777/api/runs/recent?per_job=7` zwraca runy pogrupowane per job
+- [x] Dodaj helper `getRecentRunsPerJob(perJob)` w `lib/db.js` (window function) + eksport
+- [x] Dodaj route `GET /api/runs/recent` w `server.js` PRZED ogólnym `/api/runs` matcherem (walidacja `per_job`, default+cap)
+- [x] Test (unit): `lib/db.test.js`
+- [x] Notatka wykonawcza: test-first — najpierw test seeda, potem helper
+- [x] Test: [Unit] Job A `*/1` (20 runów) + job B rzadki (3 runy); `getRecentRunsPerJob(7)` → A=7, B=3
+- [x] Test: [Unit] Wynik DESC po `id` w obrębie joba
+- [x] Test: [Unit] `per_job=0`/brak → fallback default (nie crash, nie pusta tablica gdy są runy)
+- [x] Test: [Manual] `curl localhost:7777/api/runs/recent?per_job=7` zwraca runy pogrupowane per job (zweryfikowane na izolowanej instancji :7799)
 - [ ] Weryfikacja: `node --test lib/db.test.js` przechodzi
 - [ ] Weryfikacja: `node -e "require('./lib/db').getRecentRunsPerJob"` nie rzuca
 - [ ] Weryfikacja: `node server.js` startuje bez błędu i nasłuchuje na 7777
 
 ### Unit 3: Wzbogacony `/api/status` (today + next) + test — `feature-builder-data` (M)
-- [ ] Dodaj helper `getTodayRunStats()` w `lib/db.js` (`date('now','localtime')`) + eksport
-- [ ] Wzbogać `/api/status` w `server.js` o `today_success/today_failed` (db) + `next:{job_name,next_run}` (min z `scheduler.getNextRun` enabled jobów), zachowując istniejące pola
-- [ ] Test (unit): rozszerz `lib/db.test.js`
-- [ ] Notatka wykonawcza: test-first dla `getTodayRunStats` (granica północy lokalnej)
-- [ ] Test: [Unit] Seed runów dziś (localtime) i wczoraj → liczy tylko dzisiejsze, rozdziela success/failed
-- [ ] Test: [Unit] Run po północy lokalnej (przed północą UTC) liczony jako „dziś" (regresja UTC)
-- [ ] Test: [Unit] Brak runów dziś → `{success:0, failed:0}` (nie null)
-- [ ] Test: [Manual] `curl localhost:7777/api/status` zawiera `today_success`, `today_failed`, `next`
+- [x] Dodaj helper `getTodayRunStats()` w `lib/db.js` (`date('now','localtime')`) + eksport
+- [x] Wzbogać `/api/status` w `server.js` o `today_success/today_failed` (db) + `next:{job_name,next_run}` (min z `scheduler.getNextRun` enabled jobów), zachowując istniejące pola
+- [x] Test (unit): rozszerz `lib/db.test.js`
+- [x] Notatka wykonawcza: test-first dla `getTodayRunStats` (granica północy lokalnej)
+- [x] Test: [Unit] Seed runów dziś (localtime) i wczoraj → liczy tylko dzisiejsze, rozdziela success/failed
+- [x] Test: [Unit] Run po północy lokalnej (przed północą UTC) liczony jako „dziś" (regresja UTC)
+- [x] Test: [Unit] Brak runów dziś → `{success:0, failed:0}` (nie null)
+- [x] Test: [Manual] `curl localhost:7777/api/status` zawiera `today_success`, `today_failed`, `next` (zweryfikowane na :7799 → today_success:530, next:{job_name,next_run})
 - [ ] Weryfikacja: `node --test lib/db.test.js` przechodzi
 - [ ] Weryfikacja: `node -e "require('./lib/db').getTodayRunStats"` nie rzuca
 - [ ] Weryfikacja: `/api/status` zwraca klucze `today_success` i `next` (test integracyjny lub grep handlera w `server.js`)
 
 ### Unit 4: Moduł `enum-map` (kanon §4.0) + test — `feature-builder-data` (S)
-- [ ] Stwórz `public/enum-map.js` (dual-export; `mapStatus`, `mapTrigger`)
-- [ ] Test (unit): `public/enum-map.test.js`
-- [ ] Notatka wykonawcza: test-first, wertykalnie (jeden mapping → test → następny)
-- [ ] Test: [Unit] `mapStatus('failed')` → `{cls:'badge-err', label:'Błąd'}`
-- [ ] Test: [Unit] `mapStatus('killed')` → `badge-stop`; `mapStatus('queued')` → `badge-run`
-- [ ] Test: [Unit] `mapStatus('nieznane')` → fallback z niepustym cls i label
-- [ ] Test: [Unit] `mapTrigger('scheduled')` → Harmonogram; `mapTrigger('retry')` → Harmonogram (fallback)
+- [x] Stwórz `public/enum-map.js` (dual-export; `mapStatus`, `mapTrigger`)
+- [x] Test (unit): `public/enum-map.test.js`
+- [x] Notatka wykonawcza: test-first, wertykalnie (jeden mapping → test → następny)
+- [x] Test: [Unit] `mapStatus('failed')` → `{cls:'badge-err', label:'Błąd'}`
+- [x] Test: [Unit] `mapStatus('killed')` → `badge-stop`; `mapStatus('queued')` → `badge-run`
+- [x] Test: [Unit] `mapStatus('nieznane')` → fallback z niepustym cls i label
+- [x] Test: [Unit] `mapTrigger('scheduled')` → Harmonogram; `mapTrigger('retry')` → Harmonogram (fallback)
 - [ ] Weryfikacja: `node --test public/enum-map.test.js` przechodzi
 - [ ] Weryfikacja: `node -e "const m=require('./public/enum-map.js'); process.exit(m.mapStatus('failed').cls==='badge-err'?0:1)"` kończy się kodem 0
 
