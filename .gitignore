@@ -4,3 +4,5 @@ data/
 .env
 .env.*
 .DS_Store
+
+.playwright-mcp/
