@@ -22,22 +22,22 @@
       "numer": 3,
       "nazwa": "Szersza warstwa testów backendu",
       "execute": "done",
-      "review": "pending",
+      "review": "done",
       "fix": "none",
       "otwarteFindingi": []
     },
     {
       "numer": 4,
       "nazwa": "Odroczone (po akceptacji Faz 1-3)",
-      "execute": "pending",
-      "review": "pending",
-      "fix": "none",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
       "otwarteFindingi": []
     }
   ],
   "zakonczenie": {
-    "walidacja": "pending",
-    "complete": "pending",
-    "compound": "pending"
+    "walidacja": "done",
+    "complete": "done",
+    "compound": "done"
   }
 }
