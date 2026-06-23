@@ -45,15 +45,17 @@ async function parseBody(req) {
   });
 }
 
-// Assety statyczne (logo/favicon/css/js) cache'owane przez 1h; HTML bez cache (SPA fallback).
+// Duże, stałe assety (logo/favicon) cache'owane 1h. Kod UI (css/js) i HTML: no-cache
+// (rewalidacja przez ETag → 304) — dashboard zawsze serwuje świeży front po deployu.
 const STATIC_MAX_AGE_S = 3600;
-const CACHEABLE_EXTS = new Set(['.png', '.svg', '.ico', '.css', '.js']);
+const LONG_CACHE_EXTS = new Set(['.png', '.svg', '.ico']);
 
 function buildEtag(stats) {
   return `"${stats.size.toString(16)}-${stats.mtimeMs.toString(16)}"`;
 }
 
 function serveStatic(res, urlPath, reqHeaders = {}) {
+  urlPath = urlPath.split('?')[0]; // odetnij query string — inaczej np. style.css?v=1 nie matchuje pliku i leci w SPA fallback
   let filePath = path.join(PUBLIC_DIR, urlPath === '/' ? 'index.html' : urlPath);
   filePath = path.normalize(filePath);
 
@@ -86,7 +88,7 @@ function serveStatic(res, urlPath, reqHeaders = {}) {
     'Last-Modified': lastModified,
     ETag: etag,
   };
-  if (CACHEABLE_EXTS.has(ext)) {
+  if (LONG_CACHE_EXTS.has(ext)) {
     headers['Cache-Control'] = `public, max-age=${STATIC_MAX_AGE_S}`;
   } else {
     headers['Cache-Control'] = 'no-cache';
@@ -197,7 +199,8 @@ async function handleApi(req, res) {
     const allJobs = db.getAllJobs();
     const autostart = platform.getStatus();
     const todayStats = db.getTodayRunStats();
-    const next = computeNextRun(allJobs, scheduler.getNextRun);
+    // Statbar pomija joby rutynowe (np. inbox sync co minutę) — nie zdominują "Następne".
+    const next = computeNextRun(allJobs.filter(j => !j.routine), scheduler.getNextRun);
 
     return json(res, {
       uptime: process.uptime(),
