@@ -370,7 +370,7 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 
 ### Faza 3 — Szersza warstwa testów backendu
 
-- [ ] **Unit 8: Regresja webhooka + legacy `db`/`scheduler` testy**
+- [x] **Unit 8: Regresja webhooka + legacy `db`/`scheduler` testy**
 
 **Cel:** Pokryć testami istniejącą logikę backendu (zakres B, osobny przebieg po domknięciu rebrandu, źródło §9.2/§9.4).
 
@@ -399,17 +399,17 @@ Obecny front to retro-arcade UI sklejone ad-hoc; nie pokrywa nowego designu AIBI
 - `lib/db.js:getRuns` (167-177 hideRoutine — `WHERE NOT (routine=1 AND status='success')`), `deleteOldRoutineRuns` (181-190), `lib/scheduler.js:getNextRun`
 
 **Scenariusze testowe:**
-- [Unit] `getRuns({hideRoutine:true})`: UDANY run rutynowego joba ukryty, ale jego FAIL widoczny; nierutynowe zawsze widoczne.
-- [Unit] `getRuns({job_id})`: tylko runy danego joba, DESC, respektuje `limit`.
-- [Unit] `deleteOldRoutineRuns`: kasuje TYLKO `success` rutynowych starszych niż cutoff; fail/timeout/nierutynowe zostają.
-- [Unit] CASCADE: `deleteJob` kasuje też jego runy.
-- [Unit] `scheduler.getNextRun`/cron: 5 wzorców (`daily/weekdays/weekly/hours/minutes`) → poprawny następny czas; zły cron → kontrolowany błąd.
-- [Unit] `matchWebhookToken`: `plain` ✓, `?query` ✓ (regresja), token bez query ✓, nielegalny znak → null.
+- [x] [Unit] `getRuns({hideRoutine:true})`: UDANY run rutynowego joba ukryty, ale jego FAIL widoczny; nierutynowe zawsze widoczne.
+- [x] [Unit] `getRuns({job_id})`: tylko runy danego joba, DESC, respektuje `limit`.
+- [x] [Unit] `deleteOldRoutineRuns`: kasuje TYLKO `success` rutynowych starszych niż cutoff; fail/timeout/nierutynowe zostają.
+- [x] [Unit] CASCADE: `deleteJob` kasuje też jego runy.
+- [x] [Unit] `scheduler.getNextRun`/cron: 5 wzorców (`daily/weekdays/weekly/hours/minutes`) → poprawny następny czas; zły cron → kontrolowany błąd.
+- [x] [Unit] `matchWebhookToken`: `plain` ✓, `?query` ✓ (regresja), token bez query ✓, nielegalny znak → null.
 
 **Weryfikacja:**
-- `node --test` (cały zestaw) przechodzi — wszystkie pliki `*.test.js` PASS
-- `node -e "require('./lib/webhook').matchWebhookToken"` nie rzuca (funkcja wyeksportowana)
-- `grep -q 'matchWebhookToken' server.js` (server używa wyciągniętej funkcji, nie inline-regexu)
+- [x] `node --test` (cały zestaw) przechodzi — wszystkie pliki `*.test.js` PASS (62 pass / 0 fail)
+- [x] `node -e "require('./lib/webhook').matchWebhookToken"` nie rzuca (funkcja wyeksportowana)
+- [x] `grep -q 'matchWebhookToken' server.js` (server używa wyciągniętej funkcji, nie inline-regexu)
 
 ---
 

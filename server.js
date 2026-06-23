@@ -10,6 +10,7 @@ const executor = require('./lib/executor');
 const skills = require('./lib/skills');
 const platform = require('./lib/platform');
 const keepAwake = require('./lib/keep-awake');
+const { matchWebhookToken } = require('./lib/webhook');
 
 // === MIME types ===
 const MIME = {
@@ -386,9 +387,9 @@ const server = http.createServer(async (req, res) => {
 
   try {
     // Webhook endpoint: /webhook/:token — public, accessible from internet
-    const webhookMatch = req.url.match(/^\/webhook\/([a-zA-Z0-9_-]+)(?:\?|$)/);
-    if (webhookMatch) {
-      return await handleWebhook(req, res, webhookMatch[1]);
+    const webhookToken = matchWebhookToken(req.url);
+    if (webhookToken) {
+      return await handleWebhook(req, res, webhookToken);
     }
 
     // Block non-webhook requests from external sources (Tailscale Funnel)

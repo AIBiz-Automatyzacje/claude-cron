@@ -139,17 +139,17 @@ P3 (nity — opcjonalnie, szczegóły w `review-faza-2.md`): klasa `err` hardcod
 ## Faza 3 — Szersza warstwa testów backendu
 
 ### Unit 8: Regresja webhooka + legacy `db`/`scheduler` testy — `feature-builder-data` (L)
-- [ ] Wyciągnij regex tokenu z `server.js:338` do `lib/webhook.js` (`matchWebhookToken`) i podmień użycie w `server.js`
-- [ ] Stwórz `lib/webhook.test.js`
-- [ ] Stwórz `lib/scheduler.test.js` (`getNextRun`/cron dla 5 wzorców + zły cron)
-- [ ] Rozszerz `lib/db.test.js` (`getRuns` hideRoutine/job_id, `deleteOldRoutineRuns`, CASCADE)
-- [ ] Notatka wykonawcza: wertykalnie; nie modyfikuj testów by przeszły — napraw kod
-- [ ] Test: [Unit] `getRuns({hideRoutine:true})`: udany run rutynowego ukryty, jego FAIL widoczny; nierutynowe zawsze
-- [ ] Test: [Unit] `getRuns({job_id})`: tylko runy danego joba, DESC, respektuje `limit`
-- [ ] Test: [Unit] `deleteOldRoutineRuns`: kasuje tylko `success` rutynowych > cutoff; reszta zostaje
-- [ ] Test: [Unit] CASCADE: `deleteJob` kasuje też jego runy
-- [ ] Test: [Unit] `scheduler.getNextRun`/cron: 5 wzorców → poprawny czas; zły cron → kontrolowany błąd
-- [ ] Test: [Unit] `matchWebhookToken`: `plain` ✓, `?query` ✓ (regresja), bez query ✓, nielegalny znak → null
+- [x] Wyciągnij regex tokenu z `server.js:338` do `lib/webhook.js` (`matchWebhookToken`) i podmień użycie w `server.js`
+- [x] Stwórz `lib/webhook.test.js`
+- [x] Stwórz `lib/scheduler.test.js` (`getNextRun`/cron dla 5 wzorców + zły cron)
+- [x] Rozszerz `lib/db.test.js` (`getRuns` hideRoutine/job_id, `deleteOldRoutineRuns`, CASCADE)
+- [x] Notatka wykonawcza: wertykalnie; nie modyfikuj testów by przeszły — napraw kod
+- [x] Test: [Unit] `getRuns({hideRoutine:true})`: udany run rutynowego ukryty, jego FAIL widoczny; nierutynowe zawsze
+- [x] Test: [Unit] `getRuns({job_id})`: tylko runy danego joba, DESC, respektuje `limit`
+- [x] Test: [Unit] `deleteOldRoutineRuns`: kasuje tylko `success` rutynowych > cutoff; reszta zostaje
+- [x] Test: [Unit] CASCADE: `deleteJob` kasuje też jego runy
+- [x] Test: [Unit] `scheduler.getNextRun`/cron: 5 wzorców → poprawny czas; zły cron → kontrolowany błąd
+- [x] Test: [Unit] `matchWebhookToken`: `plain` ✓, `?query` ✓ (regresja), bez query ✓, nielegalny znak → null
 - [ ] Weryfikacja: `node --test` (cały zestaw) przechodzi
 - [ ] Weryfikacja: `node -e "require('./lib/webhook').matchWebhookToken"` nie rzuca
 - [ ] Weryfikacja: `grep -q 'matchWebhookToken' server.js`

@@ -1,7 +1,7 @@
 # Kontekst: Migracja claude-cron → Puls
 
 Branch: `feature/migracja-puls-rebrand`
-Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 2)
+Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 3)
 
 ## Status realizacji
 
@@ -19,6 +19,14 @@ Ostatnia aktualizacja: 2026-06-23 (domknięcie Fazy 2)
 - **Unit 7** — banner `server.js` → `🫀  Puls running …`; `package.json` description → „Puls — scheduler agentów AI (Claude Code), AIBIZ" + `"test": "node --test"` (`name` zostaje `claude-cron`).
 - **Testy:** `node --test` → **39/39 PASS, 0 FAIL** (db.test.js + next-run.test.js + enum-map.test.js + nowy render-helpers.test.js 15 testów). `node --check` OK dla app.js / server.js / render-helpers.js.
 - **Walidacja:** typecheck/lint/vite build = n/a (czysty Node.js CommonJS, brak TS/ESLint/vite w repo); zero nowych zależności (runner `node --test` warm, brak zimnego cache).
+
+### Faza 3 — Szersza warstwa testów backendu (Unit 8): UKOŃCZONA
+- **Unit 8** — regex tokenu webhooka wyciągnięty z `server.js` do `lib/webhook.js` (`matchWebhookToken(url)→token|null`, wzorzec `/^\/webhook\/([a-zA-Z0-9_-]+)(?:\?|$)/`); `server.js` woła nową funkcję zamiast inline-regexu. Nowe testy: `lib/webhook.test.js` (8 — plain, regresja query-string, znaki `_`/`-`, nielegalny znak → null, pusty token, nie-webhook, nie-string), `lib/scheduler.test.js` (8 — 5 wzorców cron `daily/weekdays/weekly/hours/minutes` przez `getNextRun`, zły cron → null, asercje na lokalnych polach Date by były niezależne od TZ CI). Rozszerzony `lib/db.test.js`: `getRuns({hideRoutine})`, `getRuns({job_id})` (DESC+limit), `deleteOldRoutineRuns` (tylko stary success rutynowych), CASCADE (`deleteJob` kasuje runy).
+- **Testy:** `node --test` → **62/62 PASS, 0 FAIL** (db + next-run + enum-map + render-helpers + webhook + scheduler). `node --check server.js` OK; `require('./lib/webhook').matchWebhookToken` nie rzuca; `grep matchWebhookToken server.js` PASS.
+- **Walidacja:** typecheck/lint/vite build = n/a (czysty Node.js CommonJS, brak TS/ESLint/vite w repo); zero nowych zależności (runner warm).
+
+### Odchylenia Fazy 3 (do uwagi review)
+- **Unit 8:** `buildCronFromForm` jest funkcją DOM-ową w `public/app.js` (frontend, brak `module.exports`) — nieimportowalna w `node --test`. Zamiast importu test sprawdza 5 cron-stringów które ta funkcja produkuje (daily/weekdays/weekly/hours/minutes) przez realny `scheduler.scheduleJob`→`getNextRun`. Zgodne z intencją planu („5 wzorców z buildCronFromForm daje poprawny następny czas"). `scheduler.test.js` izoluje bazę przez `db.setDbPath(':memory:')` (jak `db.test.js`), bo moduł `scheduler` requiruje `db` przy ładowaniu.
 
 ### Odchylenia Fazy 2 (do uwagi review)
 - **Unit 5:** klasa env-btn kombinowana (`class="env-opt env-btn"`) — `env-opt` = styl dema, `env-btn` = kontrakt logiki (`switchEnv` czyta `.env-btn`). Literalny grep `class="env-btn"` z planu nie łapie kombinowanej klasy, ale `querySelectorAll('.env-btn')` matchuje. Analogicznie filtry skilli `class="filter-pill skill-filter"`. Usunięto martwy `onclick="toggleAccordion()"` (funkcja nie istnieje w app.js). Modal: `hidden` jako stan początkowy (CSS dema); togglowanie `.show` przez logikę — pogodzenie mechanizmu = obszar CSS/Unit 6.

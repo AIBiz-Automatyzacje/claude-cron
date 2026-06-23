@@ -14,14 +14,14 @@
       "numer": 2,
       "nazwa": "Front + rebrand widoczny",
       "execute": "done",
-      "review": "pending",
-      "fix": "none",
+      "review": "done",
+      "fix": "done",
       "otwarteFindingi": []
     },
     {
       "numer": 3,
       "nazwa": "Szersza warstwa testów backendu",
-      "execute": "pending",
+      "execute": "done",
       "review": "pending",
       "fix": "none",
       "otwarteFindingi": []
