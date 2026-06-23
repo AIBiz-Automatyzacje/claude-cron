@@ -4,6 +4,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { PORT, PUBLIC_DIR, VPS_API_URL, WEBHOOK_ENABLED, WEBHOOK_BASE_URL } = require('./lib/config');
 const db = require('./lib/db');
+const computeNextRun = require('./lib/next-run');
 const scheduler = require('./lib/scheduler');
 const executor = require('./lib/executor');
 const skills = require('./lib/skills');
@@ -43,7 +44,15 @@ async function parseBody(req) {
   });
 }
 
-function serveStatic(res, urlPath) {
+// Assety statyczne (logo/favicon/css/js) cache'owane przez 1h; HTML bez cache (SPA fallback).
+const STATIC_MAX_AGE_S = 3600;
+const CACHEABLE_EXTS = new Set(['.png', '.svg', '.ico', '.css', '.js']);
+
+function buildEtag(stats) {
+  return `"${stats.size.toString(16)}-${stats.mtimeMs.toString(16)}"`;
+}
+
+function serveStatic(res, urlPath, reqHeaders = {}) {
   let filePath = path.join(PUBLIC_DIR, urlPath === '/' ? 'index.html' : urlPath);
   filePath = path.normalize(filePath);
 
@@ -61,13 +70,43 @@ function serveStatic(res, urlPath) {
   const ext = path.extname(filePath);
   const mime = MIME[ext] || 'application/octet-stream';
 
+  let stats;
   try {
-    const content = fs.readFileSync(filePath);
-    res.writeHead(200, { 'Content-Type': mime });
-    res.end(content);
+    stats = fs.statSync(filePath);
   } catch {
     error(res, 'Not found', 404);
+    return;
   }
+
+  const etag = buildEtag(stats);
+  const lastModified = stats.mtime.toUTCString();
+  const headers = {
+    'Content-Type': mime,
+    'Last-Modified': lastModified,
+    ETag: etag,
+  };
+  if (CACHEABLE_EXTS.has(ext)) {
+    headers['Cache-Control'] = `public, max-age=${STATIC_MAX_AGE_S}`;
+  } else {
+    headers['Cache-Control'] = 'no-cache';
+  }
+
+  // Conditional request — odpowiedz 304 bez ponownego wysyłania bajtów.
+  if (reqHeaders['if-none-match'] === etag || reqHeaders['if-modified-since'] === lastModified) {
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+
+  // Asynchroniczny odczyt — nie blokuje event-loopa (ważne dla 1.2 MB logo).
+  fs.readFile(filePath, (err, content) => {
+    if (err) {
+      error(res, 'Not found', 404);
+      return;
+    }
+    res.writeHead(200, headers);
+    res.end(content);
+  });
 }
 
 // === Router ===
@@ -130,22 +169,6 @@ function proxyToVps(req, res, targetPath) {
   }
 }
 
-// Wybiera najbliższy zaplanowany run spośród enabled jobów.
-// Iteruje enabled joby, pyta scheduler.getNextRun (croner liczy per job — bez duplikacji cron),
-// zwraca { job_name, next_run } o minimalnym next_run lub null gdy brak zaplanowanych.
-function computeNextRun(allJobs) {
-  let best = null;
-  for (const job of allJobs) {
-    if (!job.enabled) continue;
-    const nextRun = scheduler.getNextRun(job.id);
-    if (!nextRun) continue;
-    if (best === null || nextRun < best.next_run) {
-      best = { job_name: job.name, next_run: nextRun };
-    }
-  }
-  return best;
-}
-
 async function handleApi(req, res) {
   const { method, path: urlPath, segments, params } = matchRoute(req.method, req.url);
 
@@ -173,7 +196,7 @@ async function handleApi(req, res) {
     const allJobs = db.getAllJobs();
     const autostart = platform.getStatus();
     const todayStats = db.getTodayRunStats();
-    const next = computeNextRun(allJobs);
+    const next = computeNextRun(allJobs, scheduler.getNextRun);
 
     return json(res, {
       uptime: process.uptime(),
@@ -379,7 +402,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/api/')) {
       await handleApi(req, res);
     } else {
-      serveStatic(res, req.url);
+      serveStatic(res, req.url, req.headers);
     }
   } catch (err) {
     console.error('[server] Error:', err);
