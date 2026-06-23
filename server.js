@@ -335,7 +335,7 @@ const server = http.createServer(async (req, res) => {
 
   try {
     // Webhook endpoint: /webhook/:token — public, accessible from internet
-    const webhookMatch = req.url.match(/^\/webhook\/([a-zA-Z0-9_-]+)$/);
+    const webhookMatch = req.url.match(/^\/webhook\/([a-zA-Z0-9_-]+)(?:\?|$)/);
     if (webhookMatch) {
       return await handleWebhook(req, res, webhookMatch[1]);
     }
