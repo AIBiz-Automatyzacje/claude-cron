@@ -82,11 +82,11 @@ P3 (nity — opcjonalnie, szczegóły w `review-faza-1.md`): `SELECT *` + wyciek
 - [x] Segment typu BINARNY Skill/Skrypt + ukryty `input#form-job-type`; webhook osobna sekcja
 - [x] Head: `<title>Puls — Zadania dla Twojego Asystenta AI</title>`, favicon, fonty Google; `enum-map.js` PRZED `app.js`
 - [x] Odtwórz KONTRAKT ID 1:1 (lista w kontekst.md)
-- [ ] Test: [Manual] Render: header/taby/statbar/sekcje widoczne, modal otwiera/zamyka, akordeon działa
-- [ ] Weryfikacja: każdy ID z kontraktu obecny (pętla grep po `id="..."` nie wypisuje „BRAK")
-- [ ] Weryfikacja: `grep -q 'enum-map.js' public/index.html` i `enum-map.js` przed `app.js` w pliku
-- [ ] Weryfikacja: `grep -q '<title>Puls' public/index.html` i `grep -q 'rel="icon"' public/index.html`
-- [ ] Weryfikacja: `grep -q 'class="env-btn"' public/index.html`
+- [ ] Test: [Manual] Render: header/taby/statbar/sekcje widoczne, modal otwiera/zamyka, akordeon działa — wymaga operatora (checklist)
+- [x] Weryfikacja: każdy ID z kontraktu obecny (pętla grep po `id="..."` nie wypisuje „BRAK") — PASS (54/54 ID obecne)
+- [x] Weryfikacja: `grep -q 'enum-map.js' public/index.html` i `enum-map.js` przed `app.js` w pliku — PASS (enum-map l.271 < app.js l.273)
+- [x] Weryfikacja: `grep -q '<title>Puls' public/index.html` i `grep -q 'rel="icon"' public/index.html` — PASS
+- [x] Weryfikacja: `grep -qE 'class="[^"]*env-btn' public/index.html` — PASS (atrybut to `class="env-opt env-btn active"`, token `env-btn` obecny l.25-26; wzorzec poprawiony po review fazy 2)
 
 ### Unit 6: Przepisany render w `public/app.js` (logika zachowana, render z API, poll z guardem) — `feature-builder-ui` (XL)
 - [x] ZACHOWAJ bez zmian: `API/apiBase/switchEnv`, `loadJobs/loadSkills`, akcje, cron helpers, webhook helpers, `formatClaudeOutput/formatToolUse`, helpery format/esc/truncate/toast/showPromptPopup
@@ -98,25 +98,41 @@ P3 (nity — opcjonalnie, szczegóły w `review-faza-1.md`): `SELECT *` + wyciek
 - [x] Tab-switching przepisany na `.view`/`view-${tab}`+`.active`; `data-tab` = `jobs/history/skills`
 - [x] Zmodyfikuj `poll()`: statbar 3s na każdej zakładce + guard zmian + zachowanie `expandedRuns`
 - [x] Notatka wykonawcza: zachowaj sygnatury zachowanych funkcji; render-first jednej zakładki na raz; guard/sparkline wyekstrahowane do `public/render-helpers.js` (dual-export, testowalne jednostkowo)
-- [ ] Test: [Manual] Lista zadań z `/api/jobs`; tagi/sparkline/następny/switch poprawne
-- [ ] Test: [Manual] ▶/⏻/✎/✕ + toast; modal nowy/edycja, segment przełącza pola, webhook generate/copy, zapis POST/PUT
-- [ ] Test: [Manual] Historia: 5 statusów, rozwijanie błędu, log viewer, filtr „Ukryj rutynowe"
-- [ ] Test: [Manual] Statbar na realnych liczbach na każdej zakładce
-- [ ] Test: [Manual] Polling 3s bez migotania, rozwinięty log nie zwija się
-- [ ] Test: [Manual] Kill-bar gdy job leci; env-toggle tylko gdy VPS skonfigurowany
-- [ ] Weryfikacja: `node --check public/app.js` przechodzi
-- [ ] Weryfikacja: `grep -q 'EnumMap' public/app.js`
-- [ ] Weryfikacja: `grep -q '/api/runs/recent' public/app.js`
-- [ ] Weryfikacja: `grep -q 'renderStatbar' public/app.js`
-- [ ] Weryfikacja: `grep -q 'tab-panel' public/app.js` zwraca pusto (tab-switching przepisany)
+- [ ] Test: [Manual] Lista zadań z `/api/jobs`; tagi/sparkline/następny/switch poprawne — wymaga operatora (checklist)
+- [ ] Test: [Manual] ▶/⏻/✎/✕ + toast; modal nowy/edycja, segment przełącza pola, webhook generate/copy, zapis POST/PUT — wymaga operatora (checklist)
+- [ ] Test: [Manual] Historia: 5 statusów, rozwijanie błędu, log viewer, filtr „Ukryj rutynowe" — wymaga operatora (checklist)
+- [ ] Test: [Manual] Statbar na realnych liczbach na każdej zakładce — wymaga operatora (checklist)
+- [ ] Test: [Manual] Polling 3s bez migotania, rozwinięty log nie zwija się — wymaga operatora (checklist)
+- [ ] Test: [Manual] Kill-bar gdy job leci; env-toggle tylko gdy VPS skonfigurowany — wymaga operatora (checklist)
+- [x] Weryfikacja: `node --check public/app.js` przechodzi — PASS
+- [x] Weryfikacja: `grep -q 'EnumMap' public/app.js` — PASS
+- [x] Weryfikacja: `grep -q '/api/runs/recent' public/app.js` — PASS
+- [x] Weryfikacja: `grep -q 'renderStatbar' public/app.js` — PASS
+- [x] Weryfikacja: `grep -q 'tab-panel' public/app.js` zwraca pusto (tab-switching przepisany) — PASS (0 wystąpień)
 
 ### Unit 7: Rebrand backendu + `package.json` — `feature-builder-data` (S)
 - [x] Zmień banner w `server.js` (371-372): `🫀  Puls running at http://localhost:${PORT}`
 - [x] `package.json`: `description` → „Puls — scheduler agentów AI (Claude Code), AIBIZ"; dodaj `"test": "node --test"` (`name` ZOSTAJE `claude-cron`)
 - [x] Test: [Unit] `npm test` (`node --test`) uruchamia testy i kończy się sukcesem (39 pass / 0 fail)
-- [ ] Weryfikacja: `grep -q 'Puls running' server.js` i brak `CLAUDE-CRON running`
-- [ ] Weryfikacja: `node -e "const p=require('./package.json'); process.exit((p.name==='claude-cron' && p.scripts.test==='node --test' && /Puls/.test(p.description))?0:1)"` kończy się kodem 0
-- [ ] Weryfikacja: `npm test` przechodzi
+- [x] Weryfikacja: `grep -q 'Puls running' server.js` i brak `CLAUDE-CRON running` — PASS
+- [x] Weryfikacja: `node -e "const p=require('./package.json'); process.exit((p.name==='claude-cron' && p.scripts.test==='node --test' && /Puls/.test(p.description))?0:1)"` kończy się kodem 0 — PASS
+- [x] Weryfikacja: `npm test` przechodzi — PASS (39 pass / 0 fail)
+
+---
+
+## Do poprawy po review fazy 2
+
+- [x] 🟠 [P2] **public/index.html:112 + public/app.js:544** — under-implementation R4/Unit 6: brak widoku „Lista" dla Skilli (zaimplementowano tylko Kafelki). NAPRAWIONE: dodano segment Kafelki/Lista (#skille-views + data-sview, #skille-kafelki/#skille-lista), renderSkills() renderuje oba widoki (renderSkillsKafelki/renderSkillsLista), switchSkillView() przełącza. Zweryfikowane E2E w przeglądarce: toggle Kafelki↔Lista działa, filtry re-renderują oba widoki (plugin: 62/62).
+- [x] 🟠 [P2] **public/render-helpers.test.js:6-31** — pollSignature: brak asercji że today_success/today_failed oraz next.next_run wchodzą do podpisu. NAPRAWIONE: dodano 3 testy (today_success, today_failed, next.next_run zmieniają podpis). 14/14 PASS.
+- [x] 🟠 [P2] **public/index.html:25-26** — checkbox weryfikacji `class="env-btn"` failuje: atrybut to `class="env-opt env-btn active"`. NAPRAWIONE: wzorzec checkboxa poprawiony na `grep -qE 'class="[^"]*env-btn'` (PASS). Zweryfikowane E2E: env-btn obecny (2 przyciski, class=`env-opt env-btn active`).
+
+P3 (nity — opcjonalnie, szczegóły w `review-faza-2.md`): klasa `err` hardcodowana na każdym wierszu historii (app.js:478/497 — semantyka nazwy myląca, niezgodność z demem, martwy chevron CSS .hrow-wrap.open); inline recentSig w renderJobs nietestowalny — wyciągnąć `recentSignature` do render-helpers.js (app.js:380-382, kanon R8); jobsSignature/buildSparkData słabe asercje pokrycia (render-helpers.test.js:35-58); magic numbers sparkline (app.js:362); esc→toUpperCase kolejność (app.js:567-569, bez XSS); countJobsForSkill O(skills×jobs) (app.js:540-543); network niegated guardem podpisu (app.js:308-320); await loadStatus sekwencyjne (app.js:951-957); top-level destrukturyzacja globali = kruchy coupling bez graceful degrade (app.js:18); scope creep — drugi testowalny moduł frontu render-helpers.js poza granicą planu; brak automatycznego E2E/DOM dla Unit 5/6 (tylko Manual).
+
+## Operator checklist faza 2
+
+- [ ] Operator: weryfikacja braku migotania pollingu 3s oraz że rozwinięty log-viewer (expandedRuns Set) przeżywa re-poll (≥2 cykle) — R8. Niewykonalne headless (brak .env.e2e). — Operator action: `node server.js` (nie pod daemonem), otwórz http://localhost:7777, rozwiń log w Historii, odczekaj ≥6s (2 cykle poll), potwierdź że log się nie zwija i tabela nie migocze.
+- [ ] Operator: wizualna zgodność renderu z demem i poprawność mapowania danych do UI na realnych danych (sparkline/ostatni-run z /api/runs/recent, statbar Następne/Dziś+health na realnych liczbach, kill-bar gdy job leci, env-toggle tylko gdy VPS skonfigurowany) — niewykonalne headless. — Operator action: na żywym serwerze z bazą przejdź zakładki Zadania/Historia/Skille, porównaj wygląd z puls-demo, zweryfikuj że liczby statbara i sparkline odpowiadają danym z API.
+- [ ] Operator: weryfikacja kosztu innerHTML i braku migotania przy realnej liczbie jobów/runów (app.js:998-999) — statycznie OK (single setInterval, inline onclick, brak listenerów per-render), ale pomiar tylko w przeglądarce. — Operator action: na instancji z >10 jobami obserwuj re-poll co 3s, potwierdź brak widocznego repaintu/flashu wierszy.
 
 ---
 

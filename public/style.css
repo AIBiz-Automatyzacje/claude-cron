@@ -412,7 +412,7 @@ body {
 .skill-foot { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--hairline); font-size: 12.5px; color: var(--dim); }
 .skill-foot.unused { color: var(--mute); }
 
-.grid-skille-lista { grid-template-columns: 3fr 1fr 1.1fr 1fr; }
+.grid-skille-lista { grid-template-columns: 3fr 1fr 1.1fr; }
 .srow { display: grid; align-items: center; padding: 14px 22px; border-bottom: 1px solid var(--hairline); }
 .srow:last-child { border-bottom: none; }
 .srow .s-name { font-family: 'Outfit', sans-serif; font-weight: 700; color: var(--accent); font-size: 14.5px; }

@@ -25,6 +25,27 @@ test('pollSignature: zmiana queue_length zmienia podpis', () => {
   assert.notEqual(a, b);
 });
 
+test('pollSignature: zmiana today_success zmienia podpis (statbar R7/R8)', () => {
+  const runs = [{ id: 1, status: 'success' }];
+  const a = pollSignature(runs, { queue_length: 0, today_success: 2, today_failed: 1 });
+  const b = pollSignature(runs, { queue_length: 0, today_success: 3, today_failed: 1 });
+  assert.notEqual(a, b, 'today_success MUSI wpływać na podpis statbara');
+});
+
+test('pollSignature: zmiana today_failed zmienia podpis (statbar R7/R8)', () => {
+  const runs = [{ id: 1, status: 'success' }];
+  const a = pollSignature(runs, { queue_length: 0, today_success: 2, today_failed: 1 });
+  const b = pollSignature(runs, { queue_length: 0, today_success: 2, today_failed: 2 });
+  assert.notEqual(a, b, 'today_failed MUSI wpływać na podpis statbara');
+});
+
+test('pollSignature: zmiana next.next_run zmienia podpis (statbar Następne)', () => {
+  const runs = [{ id: 1, status: 'success' }];
+  const a = pollSignature(runs, { queue_length: 0, next: { next_run: '2026-06-23T10:00:00Z' } });
+  const b = pollSignature(runs, { queue_length: 0, next: { next_run: '2026-06-23T11:00:00Z' } });
+  assert.notEqual(a, b, 'next.next_run MUSI wpływać na podpis statbara');
+});
+
 test('pollSignature: nullowe/niezdefiniowane wejścia nie rzucają (degradacja cicha)', () => {
   assert.doesNotThrow(() => pollSignature(null, null));
   assert.doesNotThrow(() => pollSignature(undefined, undefined));

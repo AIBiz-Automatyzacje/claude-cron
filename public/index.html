@@ -113,6 +113,10 @@
         <div class="toolbar">
           <div class="toolbar-left">
             <h2 class="toolbar-title">Dostępne skille</h2>
+            <div class="seg seg-views" id="skille-views">
+              <button class="seg-opt active" data-sview="kafelki" onclick="switchSkillView('kafelki')">▦ Kafelki</button>
+              <button class="seg-opt" data-sview="lista" onclick="switchSkillView('lista')">☰ Lista</button>
+            </div>
           </div>
           <button class="btn btn-ghost" onclick="loadSkills()">↻ Odśwież</button>
         </div>
@@ -122,7 +126,8 @@
           <button class="filter-pill skill-filter" data-filter="user" onclick="filterSkills('user')">◍ Użytkownika <span class="fc" id="count-user">0</span></button>
           <button class="filter-pill skill-filter" data-filter="plugin" onclick="filterSkills('plugin')">⌥ Plugin <span class="fc" id="count-plugin">0</span></button>
         </div>
-        <div class="skills-grid" id="skills-grid"></div>
+        <div id="skille-kafelki"></div>
+        <div id="skille-lista" class="hidden"></div>
         <div class="empty-state" id="skills-empty" style="display:none">
           <div class="icon">🔧</div>
           <div>Nie znaleziono skilli</div>

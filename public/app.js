@@ -541,8 +541,14 @@ function countJobsForSkill(dirName) {
   return allJobs.filter(j => j.skill_name === dirName).length;
 }
 
+// Meta pojedynczego skilla: badge typu + label źródła (z fallbackiem dla nieznanego source).
+function skillTypeMeta(s) {
+  return SKILL_TYPE_META[s.source] || { cls: 'type-plugin', label: esc(s.source).toUpperCase() };
+}
+
 function renderSkills() {
-  const grid = document.getElementById('skills-grid');
+  const kafelki = document.getElementById('skille-kafelki');
+  const lista = document.getElementById('skille-lista');
   const empty = document.getElementById('skills-empty');
 
   // Update counts
@@ -558,15 +564,22 @@ function renderSkills() {
     : allSkills.filter(s => s.source === currentSkillFilter);
 
   if (filtered.length === 0) {
-    grid.innerHTML = '';
+    kafelki.innerHTML = '';
+    lista.innerHTML = '';
     empty.style.display = 'block';
     return;
   }
 
   empty.style.display = 'none';
-  // Note: all values are escaped via esc() before insertion — safe from XSS
-  grid.innerHTML = filtered.map(s => {
-    const meta = SKILL_TYPE_META[s.source] || { cls: 'type-plugin', label: esc(s.source).toUpperCase() };
+  kafelki.innerHTML = renderSkillsKafelki(filtered);
+  lista.innerHTML = renderSkillsLista(filtered);
+}
+
+// Widok Kafelki: karta na skill (nazwa, badge typu, opis, stopka z liczbą zadań).
+// Note: all values are escaped via esc() before insertion — safe from XSS
+function renderSkillsKafelki(skills) {
+  const cards = skills.map(s => {
+    const meta = skillTypeMeta(s);
     const n = countJobsForSkill(s.dir_name);
     const foot = n > 0
       ? `<div class="skill-foot"><span class="dot dot-amber"></span>${n} ${plJobs(n)}</div>`
@@ -582,6 +595,26 @@ function renderSkills() {
     </div>
   `;
   }).join('');
+  return `<div class="skille-grid">${cards}</div>`;
+}
+
+// Widok Lista: tabela skilli (kolumny SKILL / TYP / ZADANIA).
+// Note: all values are escaped via esc() before insertion — safe from XSS
+function renderSkillsLista(skills) {
+  const head = '<div class="thead grid-skille-lista"><div>SKILL</div><div>TYP</div><div>ZADANIA</div></div>';
+  const rows = skills.map(s => {
+    const meta = skillTypeMeta(s);
+    const n = countJobsForSkill(s.dir_name);
+    const tasks = n > 0
+      ? `<div class="s-tasks"><span class="dot dot-amber"></span>${n} ${plJobs(n)}</div>`
+      : '<div class="s-tasks unused"><span class="dot dot-grey"></span>nieużywany</div>';
+    return `<div class="srow grid-skille-lista">
+      <div><div class="s-name">/${esc(s.dir_name)}</div><div class="s-desc">${esc(s.description)}</div></div>
+      <div><span class="type-badge ${meta.cls}">${meta.label}${s.plugin ? ' · ' + esc(s.plugin) : ''}</span></div>
+      <div>${tasks}</div>
+    </div>`;
+  }).join('');
+  return `<div class="table">${head}${rows}</div>`;
 }
 
 function filterSkills(filter) {
@@ -590,6 +623,16 @@ function filterSkills(filter) {
     btn.classList.toggle('active', btn.dataset.filter === filter);
   });
   renderSkills();
+}
+
+// Przełącznik widoku skilli: Kafelki ↔ Lista.
+function switchSkillView(view) {
+  const isKafelki = view === 'kafelki';
+  document.querySelectorAll('#skille-views .seg-opt').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.sview === view);
+  });
+  document.getElementById('skille-kafelki').classList.toggle('hidden', !isKafelki);
+  document.getElementById('skille-lista').classList.toggle('hidden', isKafelki);
 }
 
 function toggleRunDetail(id) {
