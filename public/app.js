@@ -1,7 +1,8 @@
 // === State ===
 let allJobs = [];
 let allSkills = [];
-let allRuns = []; // historia z /api/runs
+let allRuns = []; // historia z /api/runs (może być filtrowana przez hide_routine)
+let calendarRuns = []; // runy do kropek kalendarza — NIGDY filtrowane przez hide_routine (osobne od historii)
 let jobsMap = {}; // id -> job
 let recentByJob = {}; // job_id -> [recent runs] z /api/runs/recent (sparkline + ostatni run)
 let expandedRuns = new Set(); // track expanded run details
@@ -342,6 +343,17 @@ async function loadRuns() {
   }
 }
 
+// Runy do kropek kalendarza — osobne źródło od historii.
+// NIE doklejamy hide_routine: kalendarz musi widzieć status WSZYSTKICH enabled jobów
+// (w tym rutynowych), niezależnie od filtra historii. Degraduje cicho do pustej listy.
+async function loadCalendarRuns() {
+  try {
+    calendarRuns = await API.get('/api/runs?limit=100');
+  } catch {
+    calendarRuns = [];
+  }
+}
+
 async function loadSkills() {
   try {
     allSkills = await API.get('/api/skills');
@@ -450,14 +462,15 @@ function calRangeLabel(days) {
 }
 
 // Widok kalendarza: occurrences enabled jobów w bieżącym tygodniu (occurrences liczone w JS).
-// Źródło runów do kropek: allRuns (historia /api/runs). Wyłączone i wysokoczęstotliwe joby pominięte w helperze.
+// Źródło runów do kropek: calendarRuns (osobne od historii — bez filtra hide_routine).
+// Wyłączone i wysokoczęstotliwe joby pominięte w helperze.
 function renderKalendarz() {
   const container = document.getElementById('zadania-kalendarz');
   if (!container) return;
 
   const now = new Date();
   const weekStart = startOfWeek(now);
-  const days = computeWeekOccurrences(allJobs, allRuns, weekStart, now);
+  const days = computeWeekOccurrences(allJobs, calendarRuns, weekStart, now);
 
   const nav = `<div class="cal-nav">
     <div class="cal-nav-left">
@@ -490,7 +503,10 @@ function switchZadaniaView(view) {
   });
   document.getElementById('zadania-lista').classList.toggle('hidden', !isLista);
   document.getElementById('zadania-kalendarz').classList.toggle('hidden', isLista);
-  if (!isLista) renderKalendarz();
+  if (!isLista) {
+    renderKalendarz(); // render natychmiast z tym co mamy
+    loadCalendarRuns().then(renderKalendarz); // dociągnij świeże, niefiltrowane runy i przerysuj kropki
+  }
 }
 
 // Heurystyka: linia wygląda na błąd? (do podświetlenia w log viewerze)
@@ -1061,7 +1077,11 @@ function copyWebhookUrl() {
 async function poll() {
   await loadStatus();
   const activeTab = document.querySelector('.tab.active')?.dataset.tab;
-  if (activeTab === 'jobs') loadJobs();
+  if (activeTab === 'jobs') {
+    loadJobs();
+    // Kalendarz ma własne, niefiltrowane źródło runów — odśwież kropki na żywo.
+    if (zadaniaView === 'kalendarz') loadCalendarRuns().then(renderKalendarz);
+  }
   if (activeTab === 'history') pollRuns();
 }
 

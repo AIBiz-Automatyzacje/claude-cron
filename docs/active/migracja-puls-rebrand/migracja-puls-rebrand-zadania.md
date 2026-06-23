@@ -179,19 +179,33 @@ Brak findingów P1/P2. Faza 3 to czysta warstwa testów + ekstrakcja `matchWebho
 - [x] Dodaj `renderKalendarz()` + liczenie occurrences z `cron_expr` enabled jobów w `public/app.js` (logika occurrences wyekstrahowana do `public/render-helpers.js`: `parseCronForCalendar`/`computeWeekOccurrences`/`startOfWeek` — testowalna jednostkowo)
 - [x] Filtr script-jobów (`hours`/`minutes`) domyślnie ukryty (`highFreq` w `parseCronForCalendar`); kropki 3-stanowe (`ok`/`err`/`idle`); tylko widok Tydzień
 - [x] Odchylenie: Toggle Lista/Kalendarz NIE istniał w `index.html` (IU zakładało placeholder z Unit 5). Dodany w tej fazie: `seg-toggle #zadania-views` + kontenery `#zadania-lista`/`#zadania-kalendarz` (istniejące klasy CSS `seg/seg-opt/hidden`, zero nowych styli)
-- [ ] Test: [Manual] Job daily codziennie; weekly tylko swój dzień; minutowy/godzinowy ukryty
-- [ ] Test: [Manual] Kropki 3-stanowe; wyłączony job bez wystąpień; scroll w kolumnie dnia
-- [ ] Weryfikacja: `node --check public/app.js` przechodzi
-- [ ] Weryfikacja: `grep -q 'renderKalendarz' public/app.js`
-- [ ] Operator checklist: weryfikacja widoku tygodnia w przeglądarce na realnych danych (occurrences vs next_run)
+- [ ] Test: [Manual] Job daily codziennie; weekly tylko swój dzień; minutowy/godzinowy ukryty — wymaga operatora (checklist)
+- [ ] Test: [Manual] Kropki 3-stanowe; wyłączony job bez wystąpień; scroll w kolumnie dnia — wymaga operatora (checklist)
+- [x] Weryfikacja: `node --check public/app.js` przechodzi — PASS (exit 0)
+- [x] Weryfikacja: `grep -q 'renderKalendarz' public/app.js` — PASS
+- [ ] Operator checklist: weryfikacja widoku tygodnia w przeglądarce na realnych danych (occurrences vs next_run) — wymaga operatora (checklist faza 4)
 
 ### Unit 10: README rebrand + usunięcie `_preview.html` — `feature-builder-data` (S)
 - [x] Rebrand nagłówka i opisu w `README.md` → Puls (`# 🫀 Puls` + opis „scheduler agentów AI (Claude Code), AIBIZ"; instrukcje techniczne niezmienione)
 - [x] Potwierdź że `public/_preview.html` jest martwy (brak referencji w `public`/`server.js`) i usuń
-- [ ] Test: [Manual] README czyta się jako „Puls", instrukcje instalacji poprawne
-- [ ] Weryfikacja: `grep -q -i 'Puls' README.md`
-- [ ] Weryfikacja: `test ! -f public/_preview.html`
-- [ ] Weryfikacja: `grep -rq '_preview.html' public server.js` zwraca pusto
+- [ ] Test: [Manual] README czyta się jako „Puls", instrukcje instalacji poprawne — wymaga operatora (checklist)
+- [x] Weryfikacja: `grep -q -i 'Puls' README.md` — PASS
+- [x] Weryfikacja: `test ! -f public/_preview.html` — PASS (plik usunięty)
+- [x] Weryfikacja: `grep -rq '_preview.html' public server.js` zwraca pusto — PASS (0 referencji)
+
+---
+
+## Do poprawy po review fazy 4
+
+- [x] 🟠 [P2] **public/app.js:1072** — przeciek filtra `hide_routine` do kalendarza: `allRuns` ładowany z `/api/runs?limit=100` z doklejanym `&hide_routine=1` (checkbox `#runs-hide-routine`); `renderKalendarz` (app.js:457) używa tego samego `allRuns` do kropek. Gdy operator włączy filtr routine w Historii, runy routine znikają z `allRuns` → kropki enabled, cyklicznych jobów gubią status (idle zamiast ok/err). Coupling przez współdzielony mutowalny stan z ukrytym side-effectem filtra. Dodatkowo `limit=100` może obcinać starsze runy tygodnia → fałszywe „idle".
+- [x] 🟠 [P2] **public/render-helpers.test.js:229-248** — test `computeWeekOccurrences: kropka 3-stanowa` TZ-zależny i FAILUJE poza Europe/Warsaw. Fixture `started_at:'2026-06-15T06:00:00Z'`; `indexRunsByDay` mapuje na dzień lokalny → w `TZ=America/Los_Angeles` run ląduje 14 czerwca local, kropka „idle" zamiast „ok". Zweryfikowane: `TZ=America/Los_Angeles node --test` → 1 fail; UTC/Kiritimati/Europe-Warsaw 32/32 PASS. Defekt testu (TZ-fragile fixture), nie kodu. Naprawa: `started_at` o 12:00Z lub wymuszenie TZ.
+
+P3 (nity — opcjonalnie, szczegóły w `review-faza-4.md`): wzorzec „string concat + innerHTML" w renderKalendarz bez XSS (app.js:467); hook renderKalendarz po guardzie sig (app.js:430, OK perf); indexRunsByDay pełny indeks O(100) przy każdym wywołaniu (render-helpers.js:155); świeżość kropek — allRuns nierefetchowane na zakładce jobs (app.js:460/1064); duplikacja formuły dayKey 3× (render-helpers.js:117); martwy eksport formatHourMinute (render-helpers.js:188); stringly-typed enum statusu bez współdzielonej stałej (render-helpers.js:127); discriminated union jako boolean highFreq (render-helpers.js:71); brak walidacji typu started_at (render-helpers.js:114); przeciek hide_routine — wariant routine+daily (app.js:337); stale copy „retro arcade" w README; brak testu granicy doby UTC→localtime (render-helpers.test.js:262 + dodatkowe); brak testu „sukces wygrywa" przy wielu runach/dzień; brak boundary weekly dow=0/dow=6; plan Fazy 4 zdefiniował wszystkie scenariusze jako [Manual] zamiast [Unit] (plan:442-449).
+
+## Operator checklist faza 4
+
+- [ ] Operator: weryfikacja widoku tygodnia kalendarza (Unit 9) w przeglądarce na realnych danych — occurrences vs faktyczne `next_run` enabled jobów. Niewykonalne headless; statyka zweryfikowana (node --check OK, render-helpers 32/32 PASS, klasy CSS cal-week/cal-day/cal-event/dot-grey w style.css, kontenery `#zadania-lista`/`#zadania-kalendarz` + toggle `#zadania-views` w index.html). — Operator action: `node server.js`, otwórz http://localhost:7777, zakładka Zadania→Kalendarz; porównaj wystąpienia (kropki/wpisy) z faktycznymi harmonogramami jobów: daily codziennie, weekly tylko swój dzień, minutowy/godzinowy ukryty, kropki 3-stanowe (zielony/czerwony/szary) zgodne z ostatnim runem, scroll w kolumnie dnia.
+- [ ] Operator: README rebrand (Unit 10) — README czyta się jako „Puls", instrukcje instalacji poprawne. — Operator action: otwórz README.md, potwierdź nagłówek „🫀 Puls" i opis „scheduler agentów AI (Claude Code), AIBIZ"; przejdź instrukcje instalacji/uruchomienia i potwierdź że są spójne i działające.
 
 ---
 

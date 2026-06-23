@@ -231,10 +231,12 @@ test('computeWeekOccurrences: kropka 3-stanowa — sukces=ok, błąd=err, brak r
     { id: 1, name: 'A', enabled: true, cron_expr: '0 6 * * *' },
     { id: 2, name: 'B', enabled: true, cron_expr: '0 7 * * *' },
   ];
-  // runy w poniedziałek 15 czerwca (local). started_at jako UTC bez offsetu dnia.
+  // runy w poniedziałek 15 czerwca (local). started_at generowany z LOKALNEGO południa
+  // tego dnia → po normalizacji UTC w indexRunsByDay wraca na 15 czerwca local w KAŻDEJ
+  // strefie (fixture TZ-odporny, nie zależy od TZ maszyny — patrz review-faza-4 P2).
   const runs = [
-    { job_id: 1, status: 'success', started_at: '2026-06-15T06:00:00Z' },
-    { job_id: 2, status: 'failed', started_at: '2026-06-15T07:00:00Z' },
+    { job_id: 1, status: 'success', started_at: new Date(2026, 5, 15, 12, 0).toISOString() },
+    { job_id: 2, status: 'failed', started_at: new Date(2026, 5, 15, 13, 0).toISOString() },
   ];
   const days = computeWeekOccurrences(jobs, runs, WEEK_START, NOW);
   const mon = days[0];
