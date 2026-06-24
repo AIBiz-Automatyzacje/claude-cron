@@ -4,11 +4,13 @@
   --accent-soft: rgba(254, 111, 0, 0.14);
   --accent-line: rgba(254, 111, 0, 0.35);
   --bg: #0A0A0A;
-  --card: #161616;
-  --card-2: #121212;
+  --card: #181818;
+  --card-2: #141414;
   --input: #1c1c1c;
-  --hairline: #1d1d1d;
-  --hairline-2: #242424;
+  --hairline: #202020;
+  --hairline-2: #2a2a2a;
+  /* Cień nakładany na powierzchnie (table, statbar, cal-day) — odcina kartę od tła */
+  --shadow-card: 0 1px 0 rgba(255,255,255,.015), 0 10px 30px rgba(0,0,0,.28);
   --text: #F2F2F2;
   --dim: #9a9a9a;
   --mute: #949494; /* WCAG AA: 4.5:1+ na ciemnych powierzchniach (było #7d7d7d = 4.43:1, fail) */
@@ -38,9 +40,10 @@ body {
 .view.active { display: block; }
 
 .app {
-  max-width: 1280px;
+  /* Laptop-first: vw-cap nigdy nie wyjdzie poza ekran; na dużym monitorze sięga 1360px */
+  max-width: min(1360px, 92vw);
   margin: 0 auto;
-  padding: 0 24px 60px;
+  padding: 0 24px 56px;
 }
 
 /* ===== Header ===== */
@@ -100,26 +103,34 @@ body {
 .statbar {
   display: flex;
   align-items: center;
-  gap: 38px;
+  gap: 28px;
   background: var(--card);
   border: 1px solid var(--hairline);
   border-radius: var(--r-md);
-  padding: 16px 22px;
-  margin-bottom: 22px;
+  box-shadow: var(--shadow-card);
+  padding: 14px 20px;
+  margin-bottom: 20px;
   font-size: 13.5px;
 }
-.stat { display: flex; align-items: center; gap: 7px; }
-.stat-label { color: var(--mute); }
+/* Separator między metrykami — czytelniejszy podział niż sam odstęp */
+.stat { display: flex; align-items: center; gap: 8px; padding-left: 22px; border-left: 1px solid var(--hairline-2); }
+.stat:first-child { padding-left: 0; border-left: none; }
+.stat-label { color: var(--mute); font-size: 12.5px; }
 .stat-strong { color: var(--text); font-weight: 600; }
 .stat-accent { color: var(--accent); font-weight: 600; }
 .stat-ok { color: var(--green); font-weight: 600; }
+.stat-ok::before { content: "✓ "; }
 .stat-err { color: var(--red); font-weight: 600; }
+.stat-err::before { content: "✗ "; }
+/* Zero błędów nie jest alarmem — wyszarz zamiast krzyczeć czerwienią */
+.stat-err.zero { color: var(--mute); }
 .health-bar {
   display: inline-flex;
-  width: 64px; height: 7px;
+  width: 72px; height: 8px;
   border-radius: 4px;
   overflow: hidden;
-  margin-left: 4px;
+  margin-left: 6px;
+  border: 1px solid var(--hairline-2);
 }
 .health-bar i { display: block; height: 100%; }
 
@@ -197,7 +208,19 @@ body {
 }
 
 /* ===== Tabela zadań ===== */
-.table { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--r-md); overflow: hidden; }
+.table { background: var(--card); border: 1px solid var(--hairline); border-radius: var(--r-md); box-shadow: var(--shadow-card); overflow: hidden; }
+/* Pasek przewijania poziomego (tryb kompaktowy na wąskim ekranie) — wyraźny,
+   żeby było widać, że tabelę można przeciągnąć w bok. Uchwyt jaśniejszy od tła
+   + akcent na hover (afordancja „złap mnie"). */
+.table::-webkit-scrollbar { height: 12px; }
+.table::-webkit-scrollbar-track { background: rgba(255,255,255,.05); border-radius: 6px; margin: 0 6px; }
+.table::-webkit-scrollbar-thumb {
+  background: var(--grey); border-radius: 6px;
+  border: 3px solid var(--card); background-clip: padding-box;
+}
+.table::-webkit-scrollbar-thumb:hover { background: var(--accent); border-color: var(--card); }
+/* Firefox (na wszelki wypadek poza Chromium/Obsidianem) */
+.table { scrollbar-width: thin; scrollbar-color: var(--grey) transparent; }
 .thead {
   display: grid;
   align-items: center;
@@ -210,9 +233,11 @@ body {
 .trow {
   display: grid;
   align-items: center;
-  padding: 16px 22px;
+  padding: 15px 22px;
   border-bottom: 1px solid var(--hairline);
+  transition: background .12s;
 }
+.trow:hover { background: rgba(255,255,255,.018); }
 .trow:last-child { border-bottom: none; }
 .trow.next { background: linear-gradient(90deg, var(--accent-soft), transparent 60%); }
 .trow.disabled .task-name, .trow.disabled .task-tag { opacity: .5; }
@@ -221,8 +246,11 @@ body {
 .thead > div, .trow > div { min-width: 0; }
 
 .task-cell { display: flex; align-items: center; gap: 12px; min-width: 0; padding-right: 16px; }
-.task-cell > span:last-child { min-width: 0; display: flex; align-items: center; }
-.task-name { white-space: nowrap; }
+/* Nazwa + badge w pionie: nazwa na górze (pełna szerokość, ellipsis), badge jako podtytuł.
+   Dzięki temu badge nie zjada szerokości nazwy. */
+.task-cell > span:last-child { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.task-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; align-self: stretch; }
+.task-cell .task-tag { margin-left: 0; }
 .task-ico {
   width: 30px; height: 30px; border-radius: var(--r-sm);
   background: var(--accent-soft); color: var(--accent);
@@ -235,7 +263,7 @@ body {
   font-size: 11px; font-weight: 600; letter-spacing: 0.4px;
   padding: 2px 8px; border-radius: 5px;
   border: 1px solid var(--hairline-2);
-  white-space: nowrap;
+  white-space: nowrap; flex-shrink: 0;
 }
 .task-tag.tag-skill {
   font-family: 'JetBrains Mono', monospace; font-weight: 500; letter-spacing: 0;
@@ -250,7 +278,7 @@ body {
 .last-run { display: flex; align-items: center; gap: 7px; color: var(--dim); }
 
 /* Sparkline 7 RUN */
-.spark { display: flex; gap: 3px; align-items: flex-end; }
+.spark { display: flex; gap: 3px; align-items: flex-end; height: 18px; }
 .spark i { width: 7px; border-radius: 2px; background: var(--green); }
 
 .next-cell { display: flex; flex-direction: column; gap: 2px; }
@@ -276,16 +304,20 @@ body {
 .switch input:checked + .track .thumb { left: 19px; background: #0A0A0A; }
 
 /* Akcje */
-.actions { display: flex; gap: 6px; }
+.actions { display: flex; gap: 7px; }
 .act-btn {
-  width: 32px; height: 32px; border-radius: var(--r-sm);
+  width: 31px; height: 31px; border-radius: var(--r-sm);
   background: var(--input); border: 1px solid var(--hairline-2);
-  color: var(--dim); cursor: pointer;
+  color: var(--text); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   font-size: 13px;
+  transition: color .12s, background .12s, border-color .12s, transform .08s;
 }
-.act-btn:hover { color: var(--text); background: #232323; }
+.act-btn:hover { color: var(--text); background: #262626; border-color: #333; }
+.act-btn:active { transform: scale(.92); }
 .act-btn.run { color: var(--accent); }
+.act-btn.run:hover { background: var(--accent-soft); border-color: var(--accent-line); }
+.act-btn.danger:hover { color: var(--red); background: rgba(255,92,92,.1); border-color: rgba(255,92,92,.35); }
 
 /* ===== Kalendarz ===== */
 .cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
@@ -300,28 +332,43 @@ body {
 .cal-week {
   display: grid; grid-template-columns: repeat(7, 1fr);
   gap: 12px;
-  height: 380px;
+  /* Wysokość rośnie z treścią (grid wyrównuje kolumny do najwyższej) — koniec sztywnej pustki */
+  min-height: 240px;
 }
 .cal-day {
   background: var(--card); border: 1px solid var(--hairline);
   border-radius: var(--r-md); overflow: hidden;
+  box-shadow: var(--shadow-card);
   display: flex; flex-direction: column;
 }
-.cal-day.today { border-color: var(--accent); background: linear-gradient(180deg, var(--accent-soft), transparent 30%); }
+/* Weekend — subtelnie ciemniejszy, odróżnia dni wolne od roboczych */
+.cal-day.weekend { background: var(--card-2); }
+.cal-day.today { border-color: var(--accent-line); background: linear-gradient(180deg, var(--accent-soft), transparent 28%); box-shadow: 0 0 0 1px var(--accent-line), var(--shadow-card); }
 .cal-day-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 14px; border-bottom: 1px solid var(--hairline);
+  padding: 13px 15px; border-bottom: 1px solid var(--hairline);
 }
 .cal-day-num { font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 16px; }
+.cal-day.today .cal-day-num { color: var(--accent); }
 .cal-day-dow { color: var(--dim); font-size: 13px; margin-left: 6px; font-weight: 400; }
 .cal-today-badge { background: var(--accent); color: #0A0A0A; font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 5px; letter-spacing: 0.5px; }
-.cal-events { padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; flex: 1; }
+.cal-events { padding: 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; flex: 1; }
 .cal-events::-webkit-scrollbar { width: 6px; }
 .cal-events::-webkit-scrollbar-track { background: transparent; }
 .cal-events::-webkit-scrollbar-thumb { background: var(--hairline-2); border-radius: 3px; }
-.cal-event { }
+/* Event jako chip z akcentem po lewej — czytelniej i mniej "pustki" niż gołe wiersze */
+.cal-event {
+  background: rgba(255,255,255,.025);
+  border: 1px solid var(--hairline);
+  border-left: 2px solid var(--accent-line);
+  border-radius: 7px;
+  padding: 8px 10px;
+  transition: background .12s;
+}
+.cal-event:hover { background: rgba(255,255,255,.05); }
 .cal-event-time { display: flex; align-items: center; gap: 7px; color: var(--dim); font-size: 12.5px; }
-.cal-event-name { font-size: 13px; margin-top: 3px; font-weight: 500; }
+.cal-event-name { font-size: 13px; margin-top: 3px; font-weight: 500; line-height: 1.35; }
+.cal-event.done { border-left-color: var(--green); }
 .cal-event.done .cal-event-name, .cal-event.done .cal-event-time { color: var(--mute); }
 
 /* ===== Historia ===== */
@@ -341,16 +388,18 @@ body {
 #accordion-body .check { padding: 6px 0; }
 #accordion-body .check.mt { margin-top: 4px; }
 
-.grid-historia { grid-template-columns: 0.7fr 2fr 1fr 1.1fr 1.3fr 0.9fr; }
+.grid-historia { grid-template-columns: 0.7fr 2fr 1fr 1.1fr 1.3fr 0.9fr; column-gap: 16px; }
 .hrow-wrap { border-bottom: 1px solid var(--hairline); }
 .hrow-wrap:last-child { border-bottom: none; }
 .hrow { display: grid; align-items: center; padding: 16px 22px; cursor: default; }
 .hrow.err { cursor: pointer; }
-.hrow .id-cell { color: var(--dim); font-weight: 500; }
+.hrow .id-cell { color: var(--dim); font-weight: 500; white-space: nowrap; }
 .hrow.err .id-cell::before { content: "›"; color: var(--accent); margin-right: 6px; display: inline-block; transition: transform .15s; }
 .hrow-wrap.open .hrow.err .id-cell::before { transform: rotate(90deg); }
-.hrow .h-name { font-weight: 600; }
-.trigger { display: flex; align-items: center; gap: 8px; color: var(--dim); }
+/* Nazwa + badge "Rutynowe" w pionie (spójnie z listą Zadań) — koniec nierównego zawijania */
+.hrow .h-name { font-weight: 600; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.hrow .h-name .task-tag { margin-left: 0; }
+.trigger { display: flex; align-items: center; gap: 8px; color: var(--dim); white-space: nowrap; }
 
 .badge {
   display: inline-flex; align-items: center; gap: 6px;
@@ -456,6 +505,20 @@ body {
 
 .field-label { display: block; color: var(--dim); font-size: 11px; font-weight: 600; letter-spacing: 0.6px; margin: 16px 0 7px; }
 .label-dim { color: var(--dim); font-weight: 400; letter-spacing: 0; }
+
+/* Podpowiedzi pod polami (ścieżka skryptu, podgląd harmonogramu) — subtelne, nie krzyczą */
+.hint { color: var(--mute); font-size: 12.5px; line-height: 1.5; margin-top: 7px; }
+.hint code {
+  font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+  background: var(--input); border: 1px solid var(--hairline-2);
+  border-radius: 4px; padding: 1px 5px; color: var(--dim);
+}
+/* Podgląd harmonogramu — odrobinę wyraźniejszy niż zwykła podpowiedź (potwierdza wybór) */
+#schedule-preview { color: var(--dim); margin-bottom: 4px; }
+
+/* Natywny wskaźnik pola czasu — dopasowany do ciemnego motywu (domyślnie czarny, niewidoczny) */
+.input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(0.7); opacity: .55; cursor: pointer; }
+.input[type="time"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .input {
   width: 100%; background: var(--input);
   border: 1px solid var(--hairline-2); border-radius: var(--r-sm);
@@ -486,7 +549,8 @@ body {
 .acc-caret { color: var(--accent); display: inline-block; transition: transform .15s; }
 .accordion.open .acc-caret { transform: rotate(90deg); }
 .acc-hint { color: var(--dim); font-size: 12.5px; margin-left: 6px; }
-.accordion-body { padding: 16px 2px 2px; }
+.accordion-body { padding: 6px 2px 2px; }
+.accordion-body .two-col:first-child .field-label { margin-top: 4px; }
 
 /* ===== Elementy produkcyjne (poza demem): kill-bar, toasty, webhook ===== */
 
@@ -578,3 +642,55 @@ select:focus-visible,
 .input:focus-visible, .textarea:focus-visible { outline: none; }
 /* Placeholdery — czytelny kontrast zamiast browser default */
 .input::placeholder, .textarea::placeholder { color: var(--mute); opacity: 1; }
+
+/* ===== Responsywność ===== */
+/* Wąskie okno (panel Obsidiana, podzielony ekran) — tabele zostają kompaktowymi
+   wierszami (jedno zadanie = jedna linia) i przewijają się w poziomie, zamiast
+   miażdżyć kolumny aż tekst nachodzi na sąsiednie. Łatwiej to skanować niż karty. */
+@media (max-width: 880px) {
+  .app { max-width: 100%; padding: 0 16px 44px; }
+
+  /* Statbar zawija się zamiast wylewać poza ekran */
+  .statbar { flex-wrap: wrap; gap: 10px 18px; }
+  .stat { padding-left: 18px; }
+
+  /* Toolbar: gdy zabraknie miejsca, akcje schodzą pod tytuł */
+  .toolbar { flex-wrap: wrap; }
+
+  /* Tabela przewija się w poziomie; min-width trzyma kolumny przy ich naturalnej
+     szerokości (sparkline, 4 przyciski akcji) zamiast je ściskać. */
+  .table { overflow-x: auto; }
+  .thead.grid-zadania, .trow.grid-zadania { min-width: 1080px; }
+  .thead.grid-historia, .hrow.grid-historia { min-width: 760px; }
+
+  /* Skille: lżejsze siatki na wąskim ekranie */
+  .skille-grid { grid-template-columns: 1fr 1fr; }
+  .thead.grid-skille-lista, .srow.grid-skille-lista { min-width: 520px; }
+
+  /* ── Kalendarz: siatka 7 kolumn → agenda (pionowa lista dni) ──
+     7 kolumn na wąskim ekranie miażdży nazwy zadań; agenda daje pełną szerokość
+     na każdy event i przewija się w pionie jak reszta strony. */
+  .cal-week { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+  .cal-day { flex-direction: row; align-items: stretch; }
+  /* Nagłówek dnia = wąska kolumna po lewej: skrót dnia nad dużym numerem */
+  .cal-day-head {
+    flex-direction: column; justify-content: flex-start; align-items: flex-start;
+    gap: 2px; width: 66px; flex-shrink: 0;
+    border-bottom: none; border-right: 1px solid var(--hairline);
+  }
+  .cal-day-head > span { display: flex; flex-direction: column-reverse; align-items: flex-start; }
+  .cal-day-num { font-size: 22px; }
+  .cal-day-dow { margin-left: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--mute); }
+  .cal-today-badge { display: none; } /* "dziś" sygnalizuje akcentowy numer + ramka */
+  /* Eventy wypełniają prawą część — każda nazwa czytelna w pełnej szerokości */
+  .cal-events { flex: 1; overflow: visible; }
+  .cal-event { display: flex; flex-direction: row; align-items: center; gap: 10px; }
+  .cal-event-time { flex-shrink: 0; }
+  .cal-event-name { margin-top: 0; }
+}
+
+/* Telefon — karty skilli w jednej kolumnie, taby ciaśniej */
+@media (max-width: 560px) {
+  .skille-grid { grid-template-columns: 1fr; }
+  .tabs { gap: 20px; }
+}

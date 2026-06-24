@@ -21,6 +21,11 @@ const { computeWeekOccurrences, startOfWeek } = RenderHelpers;
 
 let zadaniaView = 'lista'; // 'lista' | 'kalendarz'
 
+// UI pokazuje timeouty w minutach (czytelniej niż ms), baza/executor trzymają ms.
+const MS_PER_MIN = 60000;
+const msToMin = (ms) => Math.max(1, Math.round(ms / MS_PER_MIN));
+const minToMs = (min) => Math.max(1, parseInt(min, 10) || 0) * MS_PER_MIN;
+
 // === API ===
 function apiBase() {
   return currentEnv === 'vps' ? '/api/vps' : '/api';
@@ -309,7 +314,9 @@ function renderStatbar(status) {
   const ok = status.today_success ?? 0;
   const failed = status.today_failed ?? 0;
   document.getElementById('stat-today-ok').textContent = ok;
-  document.getElementById('stat-today-err').textContent = failed;
+  const errEl = document.getElementById('stat-today-err');
+  errEl.textContent = failed;
+  errEl.classList.toggle('zero', failed === 0);
 
   // Health bar — proporcja sukcesów do błędów (flex). Brak runów → pełna zieleń.
   const health = document.getElementById('stat-health');
@@ -388,7 +395,7 @@ function sparklineHtml(jobId) {
   const spark = buildSparkData(recentByJob[jobId]);
   if (spark.length === 0) return '<span class="cell-mute">—</span>';
   return `<div class="spark">${spark.map(s =>
-    `<i style="height:${4 + (s.ok ? 12 : 8)}px;background:${s.ok ? 'var(--green)' : 'var(--red)'}"></i>`
+    `<i style="height:${s.ok ? 16 : 11}px;background:${s.ok ? 'var(--green)' : 'var(--red)'}"></i>`
   ).join('')}</div>`;
 }
 
@@ -447,7 +454,7 @@ function renderJobs() {
         <button class="act-btn run" onclick="triggerJob(${j.id})" title="Uruchom" aria-label="Uruchom ${esc(j.name)}">▶</button>
         <button class="act-btn" onclick="toggleJob(${j.id})" title="${j.enabled ? 'Wyłącz' : 'Włącz'}" aria-label="${j.enabled ? 'Wyłącz' : 'Włącz'} ${esc(j.name)}">⏻</button>
         <button class="act-btn" onclick="openEditModal(${j.id})" title="Edytuj" aria-label="Edytuj ${esc(j.name)}">✎</button>
-        <button class="act-btn" onclick="deleteJob(${j.id})" title="Usuń" aria-label="Usuń ${esc(j.name)}">✕</button>
+        <button class="act-btn danger" onclick="deleteJob(${j.id})" title="Usuń" aria-label="Usuń ${esc(j.name)}">✕</button>
       </div>
     </div>
   `}).join('');
@@ -491,7 +498,7 @@ function renderKalendarz() {
   </div>`;
 
   const week = `<div class="cal-week">${days.map(d => `
-    <div class="cal-day ${d.isToday ? 'today' : ''}">
+    <div class="cal-day ${d.isToday ? 'today' : ''} ${(d.dow === 0 || d.dow === 6) ? 'weekend' : ''}">
       <div class="cal-day-head">
         <span><span class="cal-day-num">${d.num}</span><span class="cal-day-dow">${CAL_DOW_LABELS[d.dow]}</span></span>
         ${d.isToday ? '<span class="cal-today-badge">dziś</span>' : ''}
@@ -572,7 +579,7 @@ function renderRuns(runs) {
     return `
       <div class="hrow grid-historia err" onclick="toggleRunDetail(${r.id})">
         <div class="id-cell">#${r.id}</div>
-        <div class="h-name">${name}${isRoutine ? ' <span class="task-tag tag-type">Rutynowe</span>' : ''}</div>
+        <div class="h-name"><span>${name}</span>${isRoutine ? '<span class="task-tag tag-type">Rutynowe</span>' : ''}</div>
         <div><span class="badge ${st.cls}">${st.label}</span></div>
         <div class="trigger">${tr.ico} ${tr.label}</div>
         <div class="cell-dim">${formatDateTime(r.started_at)}</div>
@@ -796,8 +803,8 @@ function openCreateModal() {
   document.getElementById('form-freq').value = 'daily';
   document.getElementById('form-time').value = '09:00';
   document.getElementById('form-args').value = '';
-  document.getElementById('form-timeout').value = '600000';
-  document.getElementById('form-idle-timeout').value = '300000';
+  document.getElementById('form-timeout').value = '10';
+  document.getElementById('form-idle-timeout').value = '5';
   document.getElementById('form-retries').value = '1';
   document.getElementById('form-wake').checked = false;
   document.getElementById('form-discord').checked = false;
@@ -840,8 +847,8 @@ function openEditModal(id) {
   document.getElementById('form-id').value = job.id;
   document.getElementById('form-name').value = job.name;
   document.getElementById('form-args').value = job.arguments || '';
-  document.getElementById('form-timeout').value = job.timeout_ms;
-  document.getElementById('form-idle-timeout').value = job.idle_timeout_ms ?? 300000;
+  document.getElementById('form-timeout').value = msToMin(job.timeout_ms);
+  document.getElementById('form-idle-timeout').value = msToMin(job.idle_timeout_ms ?? 300000);
   document.getElementById('form-retries').value = job.max_retries;
   document.getElementById('form-wake').checked = !!job.run_on_wake;
   document.getElementById('form-discord').checked = !!job.discord_notify;
@@ -895,8 +902,8 @@ async function saveJob(e) {
     command: jobType === 'script' ? document.getElementById('form-command').value : null,
     cron_expr: buildCronFromForm(),
     arguments: jobType === 'script' ? '' : document.getElementById('form-args').value,
-    timeout_ms: parseInt(document.getElementById('form-timeout').value, 10),
-    idle_timeout_ms: parseInt(document.getElementById('form-idle-timeout').value, 10),
+    timeout_ms: minToMs(document.getElementById('form-timeout').value),
+    idle_timeout_ms: minToMs(document.getElementById('form-idle-timeout').value),
     max_retries: parseInt(document.getElementById('form-retries').value, 10),
     run_on_wake: document.getElementById('form-wake').checked,
     discord_notify: document.getElementById('form-discord').checked,
