@@ -419,6 +419,10 @@ const server = http.createServer(async (req, res) => {
 // Init DB
 db.getDb();
 
+// Reaper: osierocone runy 'running' z przerwanego procesu → 'killed' (gasi wiszący kill-bar)
+const reaped = db.reapOrphanedRuns();
+if (reaped > 0) console.log(`[reaper] Oznaczono ${reaped} przerwany(ch) run(ów) jako zatrzymane`);
+
 // Start scheduler
 scheduler.start();
 
