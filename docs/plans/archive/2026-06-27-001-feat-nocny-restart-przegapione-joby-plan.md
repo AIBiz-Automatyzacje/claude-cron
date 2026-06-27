@@ -1,7 +1,7 @@
 ---
 title: "feat: Nadrabianie jobów przegapionych przez nocny restart VPS (run_on_wake opt-out + warning okna restartu)"
 type: feat
-status: active
+status: completed
 date: 2026-06-27
 origin: docs/plans/2026-06-26-nocny-restart-vps-przegapione-joby-ustalenia.md
 design_md: null          # brak docs/DESIGN.md; feature dodaje tylko tekstowy hint (reuse klasy .hint)
@@ -10,6 +10,9 @@ figma_screens: {}
 ---
 
 # feat: Nadrabianie jobów przegapionych przez nocny restart VPS
+
+> **Status: ZREALIZOWANE i scalone do `main` (commit `4ff262d`).** Archiwum: `docs/completed/nocny-restart-przegapione-joby/`.
+> **Korekta po wdrożeniu:** plan zakłada okno restartu **06:00**; po ukończeniu przeniesione na **02:00** (cichsze okno). Wszystkie wzmianki „6:00 / `0 6 * * *`" poniżej to zapis pierwotnego planu — aktualny stan w kodzie = **02:00–02:15**.
 
 ## Przegląd
 

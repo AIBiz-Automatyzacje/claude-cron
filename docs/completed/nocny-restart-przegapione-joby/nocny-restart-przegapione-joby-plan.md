@@ -3,6 +3,8 @@
 **Branch:** `feature/nocny-restart-przegapione-joby`
 **Ostatnia aktualizacja:** 2026-06-27
 
+> **Korekta po wdrożeniu (2026-06-27):** ten plan zakłada okno restartu **06:00** (potwierdzone empirycznie w momencie planowania). Po ukończeniu restart auto-update przeniesiono na **02:00** — `MAINTENANCE_WINDOW`, cron w `install-vps.sh`, treść warningu i testy okna są w kodzie ustawione na 02:00–02:15 (commit `4ff262d`). Wszystkie wzmianki „6:00 / 06:00 / `0 6 * * *`" poniżej to zapis pierwotnego planu; aktualny stan = **02:00**. Szczegóły: `nocny-restart-przegapione-joby-podsumowanie.md`.
+
 ## Podsumowanie wykonawcze
 
 VPS robi co noc auto-update (`git pull` + `systemctl restart claude-cron`) o **6:00** (potwierdzone empirycznie: restart 06:00:06–06:00:08 CEST, 7 dni z rzędu). `croner` trzyma harmonogram tylko w RAM (`activeJobs` Map), więc job zaplanowany w oknie restartu przepada bez śladu — brak nawet runu `failed`. Mechanizm nadrabiania (`detectMissedJobs` + flaga `run_on_wake`) **już istnieje**, ale jest domyślnie wyłączony i ma bug strefy czasowej.

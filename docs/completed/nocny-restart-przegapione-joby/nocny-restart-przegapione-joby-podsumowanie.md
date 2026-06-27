@@ -4,13 +4,15 @@
 **Branch:** `feature/nocny-restart-przegapione-joby`
 **Status:** Wszystkie 4 fazy ukończone (execute + review + fix). Suite `node --test`: 108/108 PASS, zero regresji.
 
+> **Korekta po wdrożeniu (2026-06-27):** plan i implementacja powstały przy założeniu, że restart VPS pozostaje o **06:00** (potwierdzone empirycznie przez `journalctl` w momencie planowania). Po ukończeniu zapadła decyzja, by **przenieść restart auto-update z 06:00 na 02:00** (cichsze okno, brak kolizji z porannymi jobami). Stan systemu opisany w tym dokumencie odzwierciedla **02:00** (`MAINTENANCE_WINDOW`, cron w `install-vps.sh`, treść warningu i odpowiednie testy zaktualizowane — commit `4ff262d`). Linia o obserwacji `journalctl` poniżej zachowuje fakt historyczny (06:00) — to dowód *sprzed* decyzji o przeniesieniu.
+
 ## Co zostało dostarczone
 
-System nadrabia joby cron przegapione podczas codziennego nocnego restartu VPS (06:00–06:15 CEST). Po starcie serwera wykrywa joby, których cykl wypadł w oknie downtime, i dokolejkowuje je dokładnie raz (collapse N przegapionych cykli → 1 odpalenie). Job może opt-outować z nadrabiania (`run_on_wake = 0`). UI ostrzega operatora, gdy nowy job pokrywa się z oknem restartu.
+System nadrabia joby cron przegapione podczas codziennego nocnego restartu VPS (02:00–02:15). Po starcie serwera wykrywa joby, których cykl wypadł w oknie downtime, i dokolejkowuje je dokładnie raz (collapse N przegapionych cykli → 1 odpalenie). Job może opt-outować z nadrabiania (`run_on_wake = 0`). UI ostrzega operatora, gdy nowy job pokrywa się z oknem restartu.
 
 - **Unit 1 — opt-out `run_on_wake`:** kolumna ze schematem `DEFAULT 1`, `createJob` domyślnie `run_on_wake = 1`, jednorazowy backfill istniejących jobów chroniony flagą `wake_backfill_done` w tabeli `state`.
 - **Unit 2 — fix strefy + pure `computeMissedJobs`:** ekstrakcja czystej funkcji `(jobs, lastActive, now, timezone) → jobIds[]` budującej `new Cron(expr, { timezone })`; `detectMissedJobs` jako cienki wrapper I/O. Naprawiony bug strefy w detekcji przegapionych (wcześniej strefa była tylko w `scheduleJob`).
-- **Unit 3 — `MAINTENANCE_WINDOW` w config:** stała `{ startHour: 6, startMin: 0, endHour: 6, endMin: 15 }` jako jedno źródło prawdy, eksponowana przez `GET /api/env` (`maintenance_window`). Zabezpieczona testem integracyjnym `server.env.test.js` (boot serwera → curl → asercja kształtu).
+- **Unit 3 — `MAINTENANCE_WINDOW` w config:** stała `{ startHour: 2, startMin: 0, endHour: 2, endMin: 15 }` jako jedno źródło prawdy, eksponowana przez `GET /api/env` (`maintenance_window`). Zabezpieczona testem integracyjnym `server.env.test.js` (boot serwera → curl → asercja kształtu).
 - **Unit 4 — warning UI + domyślny checkbox wake:** pure helper `overlapsMaintenanceWindow(cronExpr, window)` (reuse `parseCronForCalendar`, highFreq → zawsze overlap), warning `#maintenance-warning` reaktywnie pokazywany w `updateSchedulePreview`, checkbox „Uruchom po przebudzeniu" zaznaczony domyślnie w `openCreateModal`.
 
 ## Kluczowe decyzje
@@ -38,9 +40,9 @@ System nadrabia joby cron przegapione podczas codziennego nocnego restartu VPS (
 - **Granica doby/strefa w detekcji przegapionych musi liczyć w localtime.** Zgodne z `.claude/rules/learned-patterns.md` („Granica doby w SQLite licz w localtime") — bezpośrednia motywacja fixu R3. Strefa w `scheduleJob` nie wystarczy; każda ścieżka budująca `new Cron(expr)` musi przekazać `timezone`.
 - **Migracje wołane przy każdym `getDb()` wymagają flagi idempotencji dla operacji destruktywnych** (UPDATE/resetów), inaczej cicho nadpisują stan użytkownika przy każdym starcie.
 - **Granica testowalności pure vs I/O/DOM:** w stacku bez harnessu E2E split (pure → `node:test`, DOM/integracja → operator/dedykowany test bootujący serwer) pozwala osiągnąć realne pokrycie bez fałszywego E2E. Test `server.env.test.js` (proces potomny + curl) zamknął lukę P2 bez `.env.e2e`.
-- **Okno restartu potwierdzone empirycznie:** restart serwisu codziennie 06:00:06–06:00:08 CEST (`journalctl -u claude-cron`, 7 dni, 21–27.06.2026). Bufor 06:00–06:15.
+- **Okno restartu potwierdzone empirycznie (stan pierwotny):** restart serwisu obserwowany codziennie 06:00:06–06:00:08 CEST (`journalctl -u claude-cron`, 7 dni, 21–27.06.2026). Po wdrożeniu restart **przeniesiony na 02:00** decyzją operacyjną — okno maintenance i cron auto-update zaktualizowane na 02:00–02:15 (zob. notka korekty na górze).
 
 ## Otwarte (nieblokujące) — Operator checklist / P3
 
-- Operator: wizualne potwierdzenie czytelności warningu okna restartu i że checkbox wake jest domyślnie zaznaczony (E2E przy 06:05 → warning widoczny, 09:00 → ukryty). Niewykonalne headless.
+- Operator: wizualne potwierdzenie czytelności warningu okna restartu i że checkbox wake jest domyślnie zaznaczony (E2E przy 02:05 → warning widoczny, 09:00 → ukryty). Niewykonalne headless.
 - Findingi P3 (nity, nie blokują): shadowing parametru `window` w `overlapsMaintenanceWindow` (sugestia `maintenanceWindow`), pusty `catch {}` w `computeMissedJobs` bez logu, duplikacja `Intl...timeZone` (ekstrakcja `LOCAL_TIMEZONE`), `Object.freeze(MAINTENANCE_WINDOW)`, świadomy over-warn highFreq bez testu granicznego.

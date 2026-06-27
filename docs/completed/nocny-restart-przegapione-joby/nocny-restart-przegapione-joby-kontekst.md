@@ -3,6 +3,8 @@
 **Branch:** `feature/nocny-restart-przegapione-joby`
 **Ostatnia aktualizacja:** 2026-06-27 (Faza 1 zamknięta — implementacja + testy PASS)
 
+> **Korekta po wdrożeniu (2026-06-27):** okno restartu przeniesione z **06:00** (stan z planowania) na **02:00**. Sekcja „Potwierdzenie okna restartu" poniżej opisuje pierwotną obserwację `journalctl` (06:00) — to fakt historyczny sprzed decyzji o przeniesieniu. Aktualny stan systemu = **02:00–02:15** (commit `4ff262d`).
+
 ## Powiązane pliki
 
 ### Warstwa danych / scheduler
