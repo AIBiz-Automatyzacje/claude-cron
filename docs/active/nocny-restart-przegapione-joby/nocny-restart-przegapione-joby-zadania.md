@@ -85,12 +85,60 @@
 
 ### Weryfikacja
 - [x] Weryfikacja: `node --test public/render-helpers.test.js` przechodzi bez błędów
-- [ ] Weryfikacja: [E2E przez /agent-browser] formularz nowego joba — checkbox wake zaznaczony, godzina 06:05 pokazuje `#maintenance-warning` (`hidden` zdjęte w DOM) — wymaga operatora (checklist): brak harnessu E2E headless, przeniesione do Operator checklist faza 1
+- [ ] Weryfikacja: [E2E przez /agent-browser] formularz nowego joba — checkbox wake zaznaczony, godzina 06:05 pokazuje `#maintenance-warning` (`hidden` zdjęte w DOM) — wymaga operatora (checklist): brak harnessu E2E headless, przeniesione do Operator checklist faza 4
 
 ### Operator checklist *(brak `.env.e2e`)*
 - [ ] Operator wizualnie potwierdza, że warning jest czytelny i nie blokuje zapisu joba
 
 ---
+
+## Do poprawy po review fazy 4
+
+Severity gate: **ZASTRZEZENIA** — jeden P2 (typ E2E). Brak P1.
+
+P2 (important — do naprawy):
+
+- [x] 🟠 [P2] **public/app.js:1138** — Pobranie `maintenance_window` z `/api/env` i zapis do stanu modułu (`maintenanceWindow`) nie ma testu integracyjnego. Plan Unit 3 przewidział [E2E] `curl /api/env` → obecność `maintenance_window` ze `startHour:6`, z fallbackiem na Operator checklist gdy brak `.env.e2e`. Realnie weryfikowalne tylko przez uruchomiony serwer (operator). — NAPRAWIONE (review fazy 4): dodano integracyjny test `server.env.test.js` (boot serwera jako proces potomny → `GET /api/env` → asercja `maintenance_window` === `MAINTENANCE_WINDOW` z config, `startHour:6`). E2E zweryfikowane na realnie wystartowanym serwerze: `curl localhost:7799/api/env` → `{"maintenance_window":{"startHour":6,"startMin":0,"endHour":6,"endMin":15}}` PASS. Suite 108/108.
+
+P3 (nity — opcjonalne, nie blokują fazy):
+
+- [ ] 🟡 [P3] **public/app.js:820** — `openCreateModal` ustawia `form-wake.checked=true` (R1 domyślny wake) — brak automatycznego testu (DOM). Plan wymienił to jako osobny [E2E] scenariusz. Weryfikowalne tylko w realnym formularzu (E2E/operator).
+- [ ] 🟡 [P3] **public/app.js:270-279** — `updateMaintenanceWarning(cron)` wywoływane dwukrotnie w `updateSchedulePreview` (gałąź webhook-only przed return i po niej). Mała duplikacja wywołania pure helpera (O(1)). Można policzyć cron raz i wywołać warning jednokrotnie. Nit czytelności.
+- [ ] 🟡 [P3] **public/render-helpers.js:187** — Parametr `window` przesłania globalny `window` przeglądarki (plik działa w Node i w przeglądarce). Działa poprawnie, ale zapach nazewniczy. Sugestia: `maintenanceWindow`/`windowConfig`.
+- [ ] 🟡 [P3] **public/render-helpers.test.js:266** — highFreq godzinowy z minutą poza oknem nie ma testu rozróżniającego intencję — test używa `'0 */2 * * *'` (w oknie), helper zwraca `true` dla każdego highFreq niezależnie od minuty. Zgodne z planem (świadomy over-warn) — test nie dokumentuje granicy. Nit dokumentacyjny.
+- [ ] 🟡 [P3] **public/app.js:282** — `updateMaintenanceWarning` (wiring DOM pokaż/ukryj `#maintenance-warning`) nie ma unit testu — pokryta tylko E2E/agent-browser. Zgodne ze split projektu. Reaktywność potwierdzona w kodzie.
+- [ ] 🟡 [P3] **public/render-helpers.js:67** — Parametr `window` cieni globalny obiekt przeglądarki w pliku UMD. Pure helper, brak buga, ale pułapka czytelności. Sugestia: `maintenanceWindow`.
+- [ ] 🟡 [P3] **public/app.js:282** — `updateMaintenanceWarning(cron)` — `cron` może być `null` (webhook-only); helper poprawnie zwraca `false`. Nit: kontrakt `cron: string|null` nigdzie nie zadeklarowany (projekt bez JSDoc). Zerowy wpływ.
+- [ ] 🟡 [P3] **public/render-helpers.js:77** — Parametr `window` cieni globalny obiekt przeglądarki. Pure, brak defektu, shadowing stylistycznie ryzykowny. Plan sam używał `window` jako arg.
+- [ ] 🟡 [P3] **public/render-helpers.js:78** — Świadomy false-positive (plan linie 104,117): dla highFreq helper zawsze `true`, więc `'0 */5 * * *'` (nie trafia w 06:00) pokaże warning. Celowy heurystyk R5, nie defekt — potencjalny szum UX do wizualnego potwierdzenia.
+- [ ] 🟡 [P3] **public/app.js:271** — Scenariusze E2E Unit 4 (checkbox wake domyślny; 06:05 pokazuje warning, 09:00 ukrywa) bez testu automatycznego — wiring poprawny, logika pokryta unit (43/43 PASS). Brak realnego E2E w repo.
+- [ ] 🟡 [P3] **public/render-helpers.test.js:271** — Pure helper ma pełne pokrycie unit (43 PASS): 5 scenariuszy z planu + granice 6:15 inclusive, 5:59/6:16, highFreq, nieobsługiwany kształt, brak window. Brak luk w warstwie pure.
+- [ ] 🟡 [P3] **public/render-helpers.test.js:239** — Komentarz fixture odwołuje się do "review-faza-4 P2" jako uzasadnienie TZ-odpornego `started_at`, ale plik nie istniał w momencie pisania testu (forward-reference). Mylące, nie wpływa na asercje.
+- [ ] 🟡 [P3] **public/render-helpers.js:190** — `overlapsMaintenanceWindow` nie obsługuje okna przekraczającego północ (`end < start`) — dla obecnego 6:00-6:15 nie defekt, YAGNI OK, ale brak testu/komentarza dokumentującego założenie.
+
+## Operator checklist faza 4
+
+Warunki środowiskowe dla operatora (niewykonalne headless — NIE liczą się do ukończenia fazy):
+
+- [ ] Operator: wizualne potwierdzenie, że warning okna restartu jest czytelny i nie blokuje zapisu joba (element `.hint` obok `#schedule-preview`, treść z ⚠ i informacją o nadrobieniu) — Operator action: otwórz formularz nowego joba w przeglądarce, ustaw freq=daily godzina 06:05 → potwierdź że `#maintenance-warning` jest widoczny (`hidden` zdjęte) i czytelny; zmień na 09:00 → potwierdź że warning znika; potwierdź że obecność warningu nie blokuje przycisku zapisu joba. (Plan linia 278; weryfikacja wymaga realnego renderu strony.)
+- [ ] Operator: E2E formularz nowego joba — checkbox „Uruchom po przebudzeniu" zaznaczony domyślnie + warning przy 06:05 (E2E Unit 4, zadania.md:88) — Operator action: otwórz formularz nowego joba → sprawdź że checkbox wake jest zaznaczony domyślnie; ustaw godzinę 06:05 → potwierdź `#maintenance-warning` widoczny (`hidden` zdjęte w DOM); zmień na 09:00 → warning ukryty. (Brak harnessu E2E headless — przeniesione z Weryfikacja: zadania.md:88.)
+- [x] Operator: curl `/api/env` zwraca `maintenance_window` z `startHour: 6` (powiązany P2 E2E app.js:1138) — ZWERYFIKOWANE w fix fazy 4 na realnie wystartowanym serwerze (`CLAUDE_CRON_PORT=7799 node server.js` → `curl localhost:7799/api/env`): odpowiedź zawiera `maintenance_window` ze `startHour:6, startMin:0, endHour:6, endMin:15`. Zabezpieczone automatycznym testem `server.env.test.js`.
+
+## Do poprawy po review fazy 3
+
+Brak findingów P1/P2 (blokujących ani important) typu KOD/TEST/E2E. Severity gate: **CZYSTE**.
+
+Findingi P3 (nity — opcjonalne, nie blokują fazy):
+
+- [ ] 🟡 [P3] **server.js:180** — Bezpośredni deliverable Fazy 3 — pole `maintenance_window` w odpowiedzi `GET /api/env` — nie ma ŻADNEJ asercji automatycznej (brak `server.test.js`, suite nie sprawdza kształtu/obecności pola). Min. test integracyjny: odpowiedź `/api/env` zawiera `maintenance_window` równe `MAINTENANCE_WINDOW` z config.
+- [ ] 🟡 [P3] **public/render-helpers.test.js:10** — Zakładane pokrycie pośrednie kształtu `MAINTENANCE_WINDOW` nie istnieje: test hardkoduje własną kopię okna (`{startHour:6,...}`) zamiast importować z `lib/config.js`. Drift kształtu w config NIE zostanie wychwycony. (UMD frontend nie importuje configu Node — rozważyć komentarz wiążący fixture z configiem.)
+- [ ] 🟡 [P3] **lib/config.js:43** — `MAINTENANCE_WINDOW` to eksportowany mutowalny obiekt bez `Object.freeze` — współdzielona referencja mogłaby zostać przypadkowo zmutowana. Sugestia: `Object.freeze({...})`. Spójne z resztą configu (żaden obiekt nie freezowany) — do ewentualnej globalnej decyzji, nie do naprawy w tej fazie.
+
+## Operator checklist faza 3
+
+Warunki środowiskowe dla operatora (niewykonalne headless — NIE liczą się do ukończenia fazy):
+
+- [ ] Operator: curl `/api/env` zwraca `maintenance_window` z `startHour: 6` (Operator checklist + E2E Unit 3) — Operator action: uruchom serwer, wykonaj `curl localhost:7777/api/env`, sprawdź że odpowiedź zawiera `maintenance_window` ze `startHour: 6`, `startMin: 0`, `endHour: 6`, `endMin: 15`. Alternatywnie: otwórz `/` w przeglądarce → w devtools/network sprawdź `GET /api/env` → potwierdź obecność `maintenance_window` z `startHour: 6`. (Brak `.env.e2e` — weryfikacja wymaga realnie wystartowanego serwera; kod to trywialny passthrough stałej z config.js:43.)
 
 ## Do poprawy po review fazy 2
 
