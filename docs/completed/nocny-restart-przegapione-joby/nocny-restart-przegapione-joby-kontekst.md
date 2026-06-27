@@ -65,6 +65,17 @@ Odchylenia od planu (uzasadnione, nie osłabienia):
 
 Restart serwisu następuje **codziennie o 06:00:06–06:00:08 CEST** (`journalctl -u claude-cron` na VPS, 7 dni z rzędu, 21–27.06.2026). NIE zmieniony na 2:00. `scripts/install-vps.sh:437` (`0 6 * * *`) i README:379 zgadzają się z rzeczywistością. Okno **6:00–6:15** to bezpieczny bufor.
 
+## Review faza 4 (2026-06-27)
+
+Severity gate: **ZASTRZEZENIA** — 1× P2 (typ E2E), 0× P1, 15× P3 (KOD/TEST/E2E), 1× OPERATOR. Raport: `review-faza-4.md`.
+
+Kluczowe wnioski:
+- Pure helper `overlapsMaintenanceWindow` — 43/43 unit PASS, pełne pokrycie 5 scenariuszy z planu + granice + highFreq + degenerate inputs. Brak luk w warstwie pure.
+- Wszystkie luki to warstwa DOM/E2E (wiring `openCreateModal`, `updateMaintenanceWarning`, fetch `/api/env`) świadomie wydzielona ze split testowego (pure→node:test, DOM→E2E/operator). Wiring zweryfikowany statycznie, poprawny.
+- P2 (app.js:1138, fetch `maintenance_window`) i scenariusze E2E z planu wymagają uruchomionego serwera/przeglądarki → fallback Operator checklist faza 4 (brak `.env.e2e` / harnessu E2E headless).
+- Powtarzający się nit: parametr `window` w `overlapsMaintenanceWindow` cieni globalny `window` przeglądarki (render-helpers.js UMD). Sugestia: `maintenanceWindow`. Plan sam używał `window` jako arg.
+- Świadomy over-warn dla highFreq (zawsze `true`) zgodny z planem (R5) — potencjalny szum UX zostawiony do wizualnego potwierdzenia operatora.
+
 ## Źródła
 - Requirements doc: (brak — origin to ustalenia, nie `/dev-brainstorm`)
 - Plan techniczny: [docs/plans/2026-06-27-001-feat-nocny-restart-przegapione-joby-plan.md](../../plans/2026-06-27-001-feat-nocny-restart-przegapione-joby-plan.md)

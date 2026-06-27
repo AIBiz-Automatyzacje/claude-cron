@@ -1,0 +1,43 @@
+{
+  "wersja": 1,
+  "zadanie": "nocny-restart-przegapione-joby",
+  "fazy": [
+    {
+      "numer": 1,
+      "nazwa": "run_on_wake opt-out — schema, createJob default, backfill",
+      "execute": "done",
+      "review": "done",
+      "fix": "none",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 2,
+      "nazwa": "Fix strefy w detectMissedJobs + ekstrakcja pure computeMissedJobs",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 3,
+      "nazwa": "MAINTENANCE_WINDOW w config.js + ekspozycja przez /api/env",
+      "execute": "done",
+      "review": "done",
+      "fix": "none",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 4,
+      "nazwa": "Warning okna restartu + domyślny checkbox wake + pure helper overlap",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    }
+  ],
+  "zakonczenie": {
+    "walidacja": "done",
+    "complete": "done",
+    "compound": "done"
+  }
+}
