@@ -62,7 +62,7 @@ Installer zrobi wszystko automatycznie. Po drodze zapyta:
 | **Discord webhook** | URL albo puste |
 | **Timezone** | Enter (Warsaw) |
 | **Tailscale Funnel** | `Y` jeśli chcesz webhoki |
-| **Auto-update cron** | `Y` — codzienny git pull o 6:00 |
+| **Auto-update cron** | `Y` — codzienny git pull o 2:00 |
 
 ### 1.4 — Zapisz Tailscale IP
 
@@ -376,7 +376,7 @@ sudo tailscale funnel --bg 7777
 | Zaktualizować kod | `su - claude -c 'cd ~/claude-cron && git pull' && systemctl restart claude-cron` |
 | Sprawdzić Tailscale IP | `tailscale ip -4` |
 
-> Auto-update cron na VPS robi `git pull` codziennie o 6:00 i restartuje serwis. Nie musisz pamiętać.
+> Auto-update cron na VPS robi `git pull` codziennie o 2:00 i restartuje serwis. Nie musisz pamiętać.
 
 ---
 

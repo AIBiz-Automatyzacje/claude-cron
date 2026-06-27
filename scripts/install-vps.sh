@@ -410,7 +410,7 @@ echo ""
 echo -e "${CYAN}Auto-update${NC}"
 echo "─────────────────────────────────────"
 echo ""
-echo -e "  Codzienny cron (6:00) — automatycznie pulluje"
+echo -e "  Codzienny cron (2:00) — automatycznie pulluje"
 echo -e "  vault-git i claude-cron, potem restartuje service."
 echo ""
 
@@ -434,7 +434,8 @@ if [[ "$SETUP_AUTOUPDATE" =~ ^[Yy]$ ]]; then
   fi
 
   # Build cron command
-  CRON_CMD="0 6 * * * su - $CLAUDE_USER -c \"cd $VAULT_GIT && git pull && cd $INSTALL_DIR && git pull\" && systemctl restart $SERVICE_NAME"
+  # 02:00 — okno maintenance ciche, by restart nie kolidował z porannymi jobami (zob. lib/config.js MAINTENANCE_WINDOW).
+  CRON_CMD="0 2 * * * su - $CLAUDE_USER -c \"cd $VAULT_GIT && git pull && cd $INSTALL_DIR && git pull\" && systemctl restart $SERVICE_NAME"
 
   # Add to root crontab (avoid duplicates)
   EXISTING_CRON=$(crontab -l 2>/dev/null | grep -v "$SERVICE_NAME" || true)
@@ -443,7 +444,7 @@ if [[ "$SETUP_AUTOUPDATE" =~ ^[Yy]$ ]]; then
   else
     echo "$CRON_CMD" | crontab -
   fi
-  ok "Cron: codziennie o 6:00 — auto-update + restart"
+  ok "Cron: codziennie o 2:00 — auto-update + restart"
 else
   info "Pominięto — możesz dodać ręcznie później"
 fi

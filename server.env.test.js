@@ -41,7 +41,7 @@ after(() => {
   if (child) child.kill('SIGKILL');
 });
 
-test('GET /api/env zwraca maintenance_window ze startHour:6 (kontrakt z config)', async () => {
+test('GET /api/env zwraca maintenance_window ze startHour:2 (kontrakt z config)', async () => {
   // Act
   const res = await fetch(`http://localhost:${TEST_PORT}/api/env`);
   const body = await res.json();
@@ -49,6 +49,6 @@ test('GET /api/env zwraca maintenance_window ze startHour:6 (kontrakt z config)'
   // Assert — pole obecne i równe stałej z config.js
   assert.equal(res.status, 200);
   assert.ok(body.maintenance_window, 'odpowiedź zawiera maintenance_window');
-  assert.equal(body.maintenance_window.startHour, 6);
+  assert.equal(body.maintenance_window.startHour, 2);
   assert.deepEqual(body.maintenance_window, MAINTENANCE_WINDOW);
 });

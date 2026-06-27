@@ -7,7 +7,7 @@ const {
   overlapsMaintenanceWindow,
 } = require('./render-helpers');
 
-const MAINTENANCE_WINDOW = { startHour: 6, startMin: 0, endHour: 6, endMin: 15 };
+const MAINTENANCE_WINDOW = { startHour: 2, startMin: 0, endHour: 2, endMin: 15 };
 
 // === pollSignature ===
 
@@ -268,28 +268,28 @@ test('computeWeekOccurrences: nullowe wejścia nie rzucają', () => {
 
 // === overlapsMaintenanceWindow ===
 
-test('overlapsMaintenanceWindow: job dokładnie o 6:00 (granica startu) → true', () => {
-  assert.equal(overlapsMaintenanceWindow('0 6 * * *', MAINTENANCE_WINDOW), true);
+test('overlapsMaintenanceWindow: job dokładnie o 2:00 (granica startu) → true', () => {
+  assert.equal(overlapsMaintenanceWindow('0 2 * * *', MAINTENANCE_WINDOW), true);
 });
 
-test('overlapsMaintenanceWindow: 6:10 wewnątrz okna 6:00-6:15 → true', () => {
-  assert.equal(overlapsMaintenanceWindow('10 6 * * *', MAINTENANCE_WINDOW), true);
+test('overlapsMaintenanceWindow: 2:10 wewnątrz okna 2:00-2:15 → true', () => {
+  assert.equal(overlapsMaintenanceWindow('10 2 * * *', MAINTENANCE_WINDOW), true);
 });
 
-test('overlapsMaintenanceWindow: 6:15 (granica końca, inclusive) → true', () => {
-  assert.equal(overlapsMaintenanceWindow('15 6 * * *', MAINTENANCE_WINDOW), true);
+test('overlapsMaintenanceWindow: 2:15 (granica końca, inclusive) → true', () => {
+  assert.equal(overlapsMaintenanceWindow('15 2 * * *', MAINTENANCE_WINDOW), true);
 });
 
 test('overlapsMaintenanceWindow: 9:00 poza oknem → false', () => {
   assert.equal(overlapsMaintenanceWindow('0 9 * * *', MAINTENANCE_WINDOW), false);
 });
 
-test('overlapsMaintenanceWindow: 5:59 tuż przed oknem → false', () => {
-  assert.equal(overlapsMaintenanceWindow('59 5 * * *', MAINTENANCE_WINDOW), false);
+test('overlapsMaintenanceWindow: 1:59 tuż przed oknem → false', () => {
+  assert.equal(overlapsMaintenanceWindow('59 1 * * *', MAINTENANCE_WINDOW), false);
 });
 
-test('overlapsMaintenanceWindow: 6:16 tuż po oknie → false', () => {
-  assert.equal(overlapsMaintenanceWindow('16 6 * * *', MAINTENANCE_WINDOW), false);
+test('overlapsMaintenanceWindow: 2:16 tuż po oknie → false', () => {
+  assert.equal(overlapsMaintenanceWindow('16 2 * * *', MAINTENANCE_WINDOW), false);
 });
 
 test('overlapsMaintenanceWindow: highFreq (minutowy) odpala też w oknie → true', () => {
@@ -310,5 +310,5 @@ test('overlapsMaintenanceWindow: nieobsługiwany kształt → false', () => {
 });
 
 test('overlapsMaintenanceWindow: brak window → false (degradacja cicha)', () => {
-  assert.equal(overlapsMaintenanceWindow('0 6 * * *', null), false);
+  assert.equal(overlapsMaintenanceWindow('0 2 * * *', null), false);
 });
