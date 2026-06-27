@@ -9,6 +9,7 @@ let expandedRuns = new Set(); // track expanded run details
 let currentEnv = 'local'; // 'local' or 'vps'
 let vpsConfigured = false;
 let webhookBaseUrl = ''; // public URL for webhook links (from VPS env)
+let maintenanceWindow = null; // { startHour, startMin, endHour, endMin } z /api/env — okno restartu VPS (R5)
 
 // Guard poll() — tanie podpisy payloadu, pomijamy innerHTML gdy bez zmian.
 let lastRunsSig = null;
@@ -18,6 +19,7 @@ let lastStatus = {}; // ostatni payload /api/status (część podpisu poll histo
 const { mapStatus, mapTrigger } = EnumMap;
 const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = RenderHelpers;
 const { computeWeekOccurrences, startOfWeek } = RenderHelpers;
+const { overlapsMaintenanceWindow } = RenderHelpers;
 
 let zadaniaView = 'lista'; // 'lista' | 'kalendarz'
 
@@ -268,10 +270,19 @@ function updateSchedulePreview() {
   if (!cron) {
     preview.textContent = 'Tylko webhook (bez harmonogramu)';
     preview.style.color = 'var(--cyan)';
+    updateMaintenanceWarning(cron);
     return;
   }
   preview.textContent = cronToHuman(cron);
   preview.style.color = 'var(--cyan)';
+  updateMaintenanceWarning(cron);
+}
+
+// Pokaż/ukryj ostrzeżenie o pokryciu z oknem restartu VPS (R5).
+function updateMaintenanceWarning(cron) {
+  const warning = document.getElementById('maintenance-warning');
+  if (!warning) return;
+  warning.hidden = !overlapsMaintenanceWindow(cron, maintenanceWindow);
 }
 
 // === Load data ===
@@ -806,7 +817,7 @@ function openCreateModal() {
   document.getElementById('form-timeout').value = '10';
   document.getElementById('form-idle-timeout').value = '5';
   document.getElementById('form-retries').value = '1';
-  document.getElementById('form-wake').checked = false;
+  document.getElementById('form-wake').checked = true;
   document.getElementById('form-discord').checked = false;
   document.getElementById('form-routine').checked = false;
   document.getElementById('form-job-type').value = 'claude';
@@ -1124,6 +1135,7 @@ async function init() {
     const env = await fetch('/api/env').then(r => r.json());
     vpsConfigured = env.vps_configured;
     webhookBaseUrl = env.webhook_base_url || '';
+    maintenanceWindow = env.maintenance_window || null;
     if (vpsConfigured) {
       document.getElementById('env-toggle').style.display = '';
       // Fetch VPS webhook_base_url

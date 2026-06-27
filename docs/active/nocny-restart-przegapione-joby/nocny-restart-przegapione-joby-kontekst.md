@@ -1,7 +1,7 @@
 # Kontekst: Nadrabianie jobów przegapionych przez nocny restart VPS
 
 **Branch:** `feature/nocny-restart-przegapione-joby`
-**Ostatnia aktualizacja:** 2026-06-27
+**Ostatnia aktualizacja:** 2026-06-27 (Faza 1 zamknięta — implementacja + testy PASS)
 
 ## Powiązane pliki
 
@@ -37,6 +37,16 @@
 3. **Ekstrakcja `computeMissedJobs(...)` jako pure funkcja.** `(jobs, lastActive, now, timezone) → jobIds[]` budująca `new Cron(expr, { timezone })`. Fix strefy + collapse unit-testowalne bez mockowania czasu/db. `detectMissedJobs` zostaje cienkim wrapperem I/O.
 4. **`MAINTENANCE_WINDOW` w config.js + ekspozycja przez `/api/env`.** Jedno źródło prawdy; front pobiera z API zamiast duplikować stałą. Helper overlap jest pure i przyjmuje window jako arg.
 5. **Warning to pure helper `overlapsMaintenanceWindow(cronExpr, window)`.** Reuse `parseCronForCalendar`; `highFreq` traktujemy jako pokrywające się (odpala też w oknie).
+
+## Stan implementacji (Faza 1 — zamknięta 2026-06-27)
+
+Wszystkie 4 IU ukończone. `node --test` (cały suite): **106/106 PASS**, zero regresji. Brak build/typecheck/lint w stacku (czysty Node.js CommonJS + vanilla browser JS, brak bundlera) — walidacja składni przez `node --check` (6/6 OK).
+
+Odchylenia od planu (uzasadnione, nie osłabienia):
+1. **Unit 1 — eksport `migrate` z `module.exports`.** Plan nie wymieniał eksportu, ale jest konieczny, by test scenariusza R2 (idempotencja) mógł wywołać `migrate(conn)` ponownie na tym samym połączeniu.
+2. **Unit 1 — backfill czyta/zapisuje `wake_backfill_done` bezpośrednio przez przekazany `db` (`db.prepare(...)`), nie przez `getState/setState`.** Te helpery wołają `getDb()`, który w trakcie `migrate()` nie ma jeszcze przypisanego globalnego połączenia (migrate jest wołany wewnątrz getDb przed `db = ...`). Plan wprost wskazywał użycie przekazanego `db`.
+3. **Unit 3/4 — scenariusze E2E przeniesione do Operator checklist.** Projekt to backend Node.js + vanilla browser JS bez `.env.e2e` ani harnessu E2E. Pure helper `overlapsMaintenanceWindow` pokryty 7 testami `node:test`.
+4. **Unit 4 — pominięto toggle warningu w `saveJob`.** Warning jest czysto informacyjny i już reaktywnie synchronizowany przez `updateSchedulePreview` (wołane przy każdej zmianie freq/time/day/interval); osobny toggle w saveJob byłby martwym kodem.
 
 ## Otwarte pytania (odroczone do implementacji)
 

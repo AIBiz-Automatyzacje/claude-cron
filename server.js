@@ -2,7 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { PORT, PUBLIC_DIR, VPS_API_URL, WEBHOOK_ENABLED, WEBHOOK_BASE_URL } = require('./lib/config');
+const { PORT, PUBLIC_DIR, VPS_API_URL, WEBHOOK_ENABLED, WEBHOOK_BASE_URL, MAINTENANCE_WINDOW } = require('./lib/config');
 const db = require('./lib/db');
 const computeNextRun = require('./lib/next-run');
 const scheduler = require('./lib/scheduler');
@@ -177,7 +177,7 @@ async function handleApi(req, res) {
 
   // GET /api/env — environment info
   if (method === 'GET' && urlPath === '/api/env') {
-    return json(res, { vps_configured: !!VPS_API_URL, webhook_base_url: WEBHOOK_BASE_URL });
+    return json(res, { vps_configured: !!VPS_API_URL, webhook_base_url: WEBHOOK_BASE_URL, maintenance_window: MAINTENANCE_WINDOW });
   }
 
   // Proxy /api/vps/* -> VPS instance /api/*

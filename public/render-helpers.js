@@ -182,9 +182,27 @@
     return new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff);
   }
 
+  // Czy job o danym cron_expr pokrywa się z oknem restartu VPS (R5).
+  // window: { startHour, startMin, endHour, endMin } z /api/env (maintenance_window).
+  // - nieparsowalny/webhook-only → false (nie ostrzegamy o czymś bez harmonogramu),
+  // - highFreq (minutowy/godzinowy) → true (odpala też w oknie),
+  // - inaczej: porównanie {hour,minute} z przedziałem [start, end], granice inclusive.
+  function overlapsMaintenanceWindow(cronExpr, window) {
+    if (!window) return false;
+    const parsed = parseCronForCalendar(cronExpr);
+    if (!parsed) return false;
+    if (parsed.highFreq) return true;
+
+    const fireMinutes = parsed.hour * 60 + parsed.minute;
+    const startMinutes = window.startHour * 60 + window.startMin;
+    const endMinutes = window.endHour * 60 + window.endMin;
+    return fireMinutes >= startMinutes && fireMinutes <= endMinutes;
+  }
+
   const api = {
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
     parseCronForCalendar, computeWeekOccurrences, startOfWeek, formatHourMinute,
+    overlapsMaintenanceWindow,
   };
 
   if (typeof module !== 'undefined' && module.exports) {

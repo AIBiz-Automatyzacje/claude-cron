@@ -119,7 +119,7 @@ z rzeczywistością. Sam restart zajmuje ~kilka sekund, więc okno **6:00–6:15
 
 ## Implementation Units
 
-- [ ] **Unit 1: `run_on_wake` opt-out — schema, createJob default, jednorazowy backfill**
+- [x] **Unit 1: `run_on_wake` opt-out — schema, createJob default, jednorazowy backfill**
 
 **Cel:** Nowe joby domyślnie `run_on_wake=1`; istniejące joby w bazie dostają jednorazowy backfill bez clobberowania opt-outów.
 
@@ -157,7 +157,7 @@ z rzeczywistością. Sam restart zajmuje ~kilka sekund, więc okno **6:00–6:15
 
 ---
 
-- [ ] **Unit 2: Fix strefy czasowej w `detectMissedJobs` + ekstrakcja pure `computeMissedJobs`**
+- [x] **Unit 2: Fix strefy czasowej w `detectMissedJobs` + ekstrakcja pure `computeMissedJobs`**
 
 **Cel:** Detekcja przegapionych jobów liczy cron z tą samą strefą co `scheduleJob`; logika collapse/strefy staje się unit-testowalna.
 
@@ -196,7 +196,7 @@ z rzeczywistością. Sam restart zajmuje ~kilka sekund, więc okno **6:00–6:15
 
 ---
 
-- [ ] **Unit 3: `MAINTENANCE_WINDOW` w config.js + ekspozycja przez `/api/env`**
+- [x] **Unit 3: `MAINTENANCE_WINDOW` w config.js + ekspozycja przez `/api/env`**
 
 **Cel:** Stała okna restartu (6:00–6:15) w jednym źródle prawdy i dostępna dla frontu.
 
@@ -233,7 +233,7 @@ z rzeczywistością. Sam restart zajmuje ~kilka sekund, więc okno **6:00–6:15
 
 ---
 
-- [ ] **Unit 4: Warning okna restartu w formularzu + domyślny checkbox wake + pure helper overlap**
+- [x] **Unit 4: Warning okna restartu w formularzu + domyślny checkbox wake + pure helper overlap**
 
 **Cel:** Formularz pokazuje ostrzeżenie przy planowaniu joba w oknie restartu; nowy job ma domyślnie zaznaczony wake.
 
