@@ -21,10 +21,10 @@
 - [x] Test: `getTodayRunStats` zwraca `{ success, failed }` typu `number` (happy path + zero-runs COALESCE→0)
 
 #### Weryfikacja
-- [ ] Weryfikacja: `node --test` (cały suite) przechodzi bez regresji
-- [ ] Weryfikacja: `grep -n "better-sqlite3" lib/ server.js package.json` zwraca pusto
-- [ ] Weryfikacja: `grep -n "node:sqlite" lib/db.js` pokazuje import `DatabaseSync`
-- [ ] Weryfikacja: `grep -c "\.pragma(" lib/db.js` zwraca `0`
+- [x] Weryfikacja: `node --test` (cały suite) przechodzi bez regresji
+- [x] Weryfikacja: `grep -n "better-sqlite3" lib/ server.js package.json` zwraca pusto
+- [x] Weryfikacja: `grep -n "node:sqlite" lib/db.js` pokazuje import `DatabaseSync`
+- [x] Weryfikacja: `grep -c "\.pragma(" lib/db.js` zwraca `0`
 
 ---
 
@@ -44,9 +44,9 @@
 - [x] Test: Guard z wersją poniżej minimum produkuje komunikat zawierający wymaganą wersję
 
 #### Weryfikacja
-- [ ] Weryfikacja: `node --test lib/runtime-guard.test.js` przechodzi
-- [ ] Weryfikacja: `grep -n "disable-warning=ExperimentalWarning" package.json` pokazuje flagę w `start`
-- [ ] Weryfikacja: `node -e "require('./lib/runtime-guard')"` na wspieranym Node nie rzuca; `grep -n "MIN_NODE_VERSION" lib/` pokazuje stałą
+- [x] Weryfikacja: `node --test lib/runtime-guard.test.js` przechodzi
+- [x] Weryfikacja: `grep -n "disable-warning=ExperimentalWarning" package.json` pokazuje flagę w `start`
+- [x] Weryfikacja: `node -e "require('./lib/runtime-guard')"` na wspieranym Node nie rzuca; `grep -n "MIN_NODE_VERSION" lib/` pokazuje stałą
 
 #### Operator checklist
 - [ ] Operator startuje serwer na wspieranym Node → brak `ExperimentalWarning` na stderr, czysty start (smoke-test nie blokuje)
@@ -63,15 +63,36 @@
 - [x] `scripts/install-vps.sh:438` — cron-guard: `systemctl restart` tylko gdy `node -v` ≥ minimum; inaczej `git pull` zostaje, restart wstrzymany + log
 
 #### Testy
-- [ ] Test [Manual]: Na realnym VPS ze starym Node cron robi `git pull`, ale NIE restartuje serwisu; log zawiera ostrzeżenie o niekompatybilnym Node
+- [ ] Test [Manual]: Na realnym VPS ze starym Node cron robi `git pull`, ale NIE restartuje serwisu; log zawiera ostrzeżenie o niekompatybilnym Node — wymaga operatora (Operator checklist faza 1)
 
 #### Weryfikacja
-- [ ] Weryfikacja: `bash -n scripts/install-vps.sh` (brak błędów składni)
-- [ ] Weryfikacja: `grep -n "22.13\|disable-warning=ExperimentalWarning" scripts/install-vps.sh` pokazuje próg + flagę
-- [ ] Weryfikacja: `grep -n "better-sqlite3\|build-essential" scripts/install-vps.sh` — brak build-tools pod b-s3 (lub komentarz uzasadniający)
+- [x] Weryfikacja: `bash -n scripts/install-vps.sh` (brak błędów składni)
+- [x] Weryfikacja: `grep -n "22.13\|disable-warning=ExperimentalWarning" scripts/install-vps.sh` pokazuje próg + flagę
+- [x] Weryfikacja: `grep -n "better-sqlite3\|build-essential" scripts/install-vps.sh` — brak build-tools pod b-s3 (lub komentarz uzasadniający)
 
 #### Operator checklist
 - [ ] Operator uruchamia zaktualizowany `install-vps.sh` na świeżym VPS → Node ≥22.13, serwis `is-active`, cron z guardem wersji
+
+## Do poprawy po review fazy 1
+
+- [x] 🟠 [P2] **scripts/install-vps.sh:48-62** — `is_node_supported` (i wstrzykiwany `cron-node-guard.sh`) sprawdza tylko dolny próg, brak górnej granicy `<25`. Na Node 25/26 instalator i cron-guard zrestartują serwis, a `runtime-guard.js` ubije go `exit(1)` przy starcie — scenariusz padu jobów, któremu guard ma zapobiegać. Dodać górną granicę spójną z `engines >=22.13 <25` w OBU kopiach (funkcja + heredoc).
+- [x] 🟠 [P2] **lib/runtime-guard.test.js** — brak testu error-case dla `enforceNodeVersion` (efekt `exit(1)`, rdzeń R3). `enforceNodeVersion()` czyta `process.versions.node` bez parametru wstrzykiwalnego — droga fail-fast nietestowalna. Refaktor: `enforceNodeVersion(version = process.versions.node, { onFail })` z DI exit/stderr + test happy (wspierany Node nie woła onFail) i error (Node <22.13 woła onFail z komunikatem zawierającym wykrytą i wymaganą wersję).
+- [ ] 🟡 [P3] **scripts/install-vps.sh:503** — `$VAULT_GIT` niecytowany w `CRON_CMD` (`su - $CLAUDE_USER -c "..."`); ścieżka ze spacją/metaznakami rozsypie crontab. Wektor za granicą zaufania (operator root), ale krucha konkatenacja — escaping/walidacja.
+- [ ] 🟡 [P3] **scripts/install-vps.sh:48-62** — duplikacja logiki porównania wersji między `is_node_supported` a heredoc `cron-node-guard.sh`; przy naprawie P2 zaktualizować OBIE kopie (ryzyko rozjazdu).
+- [ ] 🟡 [P3] **lib/db.test.js:443** — smoke-test R4 error-case używa stringa `'0'` zamiast BigInt; dodać przypadek `n: 0n` (realny scenariusz regresji node:sqlite, string to tylko proxy).
+- [ ] 🟡 [P3] **lib/db.js:142** — `assertDbReturnsNumbers(conn)` bez jawnej walidacji `conn` (fail-fast); niski priorytet, dodanie guardu może być over-engineering — obserwacja.
+- [ ] 🟡 [P3] **lib/runtime-guard.js:21** — `parseVersion` gubi pre-release tag (`'0-nightly'`→0); bezpieczne dla [22.13,25), bez akcji.
+- [ ] 🟡 [P3] **lib/config.js:50** — komentarz "node:sqlite stabilne dopiero od 22.5" myli (22.5 realnie zepsute, 22.13 pierwszy bezflagowy); wartość 22.13 poprawna, do doprecyzowania.
+- [ ] 🟡 [P3] **lib/db.test.js:86** — `getTodayRunStats` używa `assert.equal` (luźne `==`), bez asercji typu; dodać `typeof === 'number'`.
+- [ ] 🟡 [P3] **lib/db.test.js** — brak asercji `typeof === 'number'` na `lastInsertRowid`/`.changes` (jawny scenariusz typu z planu Unit 1).
+- [ ] 🟡 [P3] **lib/runtime-guard.test.js** — `parseVersion`/`compareVersions` bez bezpośredniego testu (tylko tranzytywnie przez `isNodeSupported`); coding-rules §2 niespełnione dla tych eksportów.
+
+## Operator checklist faza 1
+
+- [ ] Operator: start serwera na wspieranym Node (>=22.13 <25) → brak `ExperimentalWarning` na stderr, czysty start, smoke-test nie blokuje (Unit 2) — Operator action: na maszynie z Node w zakresie uruchom `npm start`, obserwuj stderr przez kilka cykli jobów; potwierdź zero `ExperimentalWarning`.
+- [ ] Operator: efekt `exit(1)` na faktycznie niewspieranym runtime (Node <22.13) — Operator action: na maszynie z Node <22.13 (lub przez nvm/fnm przełącz wersję) uruchom `node server.js`; potwierdź czytelny komunikat na stderr z wykrytą i wymaganą wersją oraz kod wyjścia 1.
+- [ ] Operator: `install-vps.sh` na świeżym VPS → Node >=22.13, serwis `is-active`, cron z guardem wersji (Unit 3) — Operator action: na czystym VPS uruchom `scripts/install-vps.sh`; po zakończeniu `systemctl is-active <serwis>` zwraca `active`, `crontab -l` (jako $CLAUDE_USER) zawiera wpis z `cron-node-guard.sh`, `node -v` >=22.13.
+- [ ] Operator: scenariusz negatywny cron-guard — zdegradowany Node → `git pull` przechodzi, `systemctl restart` wstrzymany, ostrzeżenie w logu/journal (Unit 3, R5) — Operator action: na VPS sztucznie zdegraduj Node poniżej 22.13, wywołaj cron-guard ręcznie; potwierdź że repo się zaktualizowało (git pull), serwis NIE został zrestartowany, a `journalctl`/log zawiera ostrzeżenie o niekompatybilnym Node.
 
 ## Faza 2 — Smart setup lokalny (Mac/Win) + sprzątanie
 

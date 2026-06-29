@@ -11,10 +11,15 @@ REPO="https://github.com/AIBiz-Automatyzacje/claude-cron.git"
 SERVICE_NAME="claude-cron"
 CLAUDE_USER="claude"
 
-# Minimalna wersja Node — node:sqlite stabilne dopiero od 22.13 (spójne z
-# package.json "engines" i lib/config.js MIN_NODE_VERSION). Format: major.minor.
+# Wspierany zakres Node — node:sqlite stabilne dopiero od 22.13, górna granica
+# wykluczająca <25 (spójne z package.json "engines >=22.13 <25" i lib/config.js
+# MIN_NODE_VERSION/MAX_NODE_VERSION). Bez górnej granicy instalator/cron-guard
+# zrestartowałby serwis na Node 25+, który lib/runtime-guard.js ubije exit(1)
+# przy starcie — dokładnie scenariusz padu jobów, któremu guard ma zapobiegać.
+# Format: major.minor (min) i major (max, wykluczające).
 MIN_NODE_MAJOR=22
 MIN_NODE_MINOR=13
+MAX_NODE_MAJOR=25
 
 # Colors
 RED='\033[0;31m'
@@ -45,14 +50,20 @@ fi
 
 info "Checking Node.js..."
 
-# Zwraca 0 (true) gdy zainstalowany Node spełnia minimum (major.minor >= MIN_NODE_MAJOR.MIN_NODE_MINOR).
-# node:sqlite jest stabilne dopiero od 22.13 — niższy Node wywala serwer przy starcie (lib/runtime-guard.js).
+# Zwraca 0 (true) gdy zainstalowany Node mieści się w [MIN.MIN_MINOR, MAX_MAJOR)
+# — czyli >= 22.13 ORAZ major < 25 (górna granica wykluczająca, spójna z "engines").
+# node:sqlite jest stabilne dopiero od 22.13 — niższy Node wywala serwer przy starcie
+# (lib/runtime-guard.js); Node 25+ też (górna granica), więc oba progi muszą blokować.
 is_node_supported() {
   local raw major minor
   raw=$(node -v 2>/dev/null | sed 's/v//')
   major=$(echo "$raw" | cut -d. -f1)
   minor=$(echo "$raw" | cut -d. -f2)
   [ -n "$major" ] && [ -n "$minor" ] || return 1
+  # Górna granica wykluczająca: major >= MAX_NODE_MAJOR (25+) → niewspierane.
+  if [ "$major" -ge "$MAX_NODE_MAJOR" ]; then
+    return 1
+  fi
   if [ "$major" -gt "$MIN_NODE_MAJOR" ]; then
     return 0
   fi
@@ -64,7 +75,7 @@ is_node_supported() {
 
 if command -v node &>/dev/null; then
   if ! is_node_supported; then
-    warn "Node.js $(node -v) is too old (>=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} required for node:sqlite)"
+    warn "Node.js $(node -v) is unsupported (need >=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} <${MAX_NODE_MAJOR} for node:sqlite)"
     ask "Install Node.js 22 LTS? [Y/n]: "
     read -r INSTALL_NODE
     INSTALL_NODE="${INSTALL_NODE:-Y}"
@@ -72,7 +83,7 @@ if command -v node &>/dev/null; then
       curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
       apt-get install -y nodejs
     else
-      fail "Node.js >=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} required"
+      fail "Node.js >=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} <${MAX_NODE_MAJOR} required"
     fi
   fi
   ok "Node.js $(node -v)"
@@ -468,6 +479,7 @@ set -uo pipefail
 
 MIN_NODE_MAJOR=$MIN_NODE_MAJOR
 MIN_NODE_MINOR=$MIN_NODE_MINOR
+MAX_NODE_MAJOR=$MAX_NODE_MAJOR
 SERVICE_NAME="$SERVICE_NAME"
 CRON_LOG="$CRON_LOG"
 
@@ -486,11 +498,17 @@ if [ -z "\$MAJOR" ] || [ -z "\$MINOR" ]; then
   exit 1
 fi
 
+# Górna granica wykluczająca: major >= MAX (25+) → niekompatybilny (lib/runtime-guard.js ubije serwis).
+if [ "\$MAJOR" -ge "\$MAX_NODE_MAJOR" ]; then
+  log_warn "Restart serwisu WSTRZYMANY: Node v\$RAW jest niekompatybilny (wymagane >=\${MIN_NODE_MAJOR}.\${MIN_NODE_MINOR} <\${MAX_NODE_MAJOR} dla node:sqlite). Kod zaktualizowany przez git pull, ale serwis NIE został zrestartowany, by uniknąć padu wszystkich jobów. Zaktualizuj Node i zrestartuj ręcznie: systemctl restart \$SERVICE_NAME"
+  exit 1
+fi
+
 if [ "\$MAJOR" -gt "\$MIN_NODE_MAJOR" ] || { [ "\$MAJOR" -eq "\$MIN_NODE_MAJOR" ] && [ "\$MINOR" -ge "\$MIN_NODE_MINOR" ]; }; then
   exit 0
 fi
 
-log_warn "Restart serwisu WSTRZYMANY: Node v\$RAW jest niekompatybilny (wymagane >=\${MIN_NODE_MAJOR}.\${MIN_NODE_MINOR} dla node:sqlite). Kod zaktualizowany przez git pull, ale serwis NIE został zrestartowany, by uniknąć padu wszystkich jobów. Zaktualizuj Node i zrestartuj ręcznie: systemctl restart \$SERVICE_NAME"
+log_warn "Restart serwisu WSTRZYMANY: Node v\$RAW jest niekompatybilny (wymagane >=\${MIN_NODE_MAJOR}.\${MIN_NODE_MINOR} <\${MAX_NODE_MAJOR} dla node:sqlite). Kod zaktualizowany przez git pull, ale serwis NIE został zrestartowany, by uniknąć padu wszystkich jobów. Zaktualizuj Node i zrestartuj ręcznie: systemctl restart \$SERVICE_NAME"
 exit 1
 GUARD
   chmod +x "$GUARD_SCRIPT"
