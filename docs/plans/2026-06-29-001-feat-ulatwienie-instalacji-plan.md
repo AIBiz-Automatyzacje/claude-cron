@@ -120,7 +120,7 @@ VPS** (nocny auto-update nie może zrestartować serwisu na niekompatybilnym Nod
 
 > Ląduje pierwsza i samodzielnie. Po jej merge VPS/Mac/Win działają na `node:sqlite` z fail-fast guardami. Faza 2 (lokalny smart setup) jest niezależna i może iść później.
 
-- [ ] **Unit 1: Migracja `lib/db.js` na `node:sqlite` + `package.json` (engines, usunięcie deps)**
+- [x] **Unit 1: Migracja `lib/db.js` na `node:sqlite` + `package.json` (engines, usunięcie deps)**
 
 **Cel:** `lib/db.js` używa `DatabaseSync` z `node:sqlite`; `better-sqlite3` znika z projektu; `engines` pinuje poprawne okno Node.
 
@@ -160,7 +160,7 @@ VPS** (nocny auto-update nie może zrestartować serwisu na niekompatybilnym Nod
 
 ---
 
-- [ ] **Unit 2: Guardy startowe — wersja Node (fail-fast) + smoke-test typów DB + wyciszenie ExperimentalWarning**
+- [x] **Unit 2: Guardy startowe — wersja Node (fail-fast) + smoke-test typów DB + wyciszenie ExperimentalWarning**
 
 **Cel:** Serwer odmawia startu z czytelnym komunikatem na niekompatybilnym Node lub gdy DB zwraca złe typy; logi czyste (bez ExperimentalWarning).
 
@@ -204,7 +204,7 @@ VPS** (nocny auto-update nie może zrestartować serwisu na niekompatybilnym Nod
 
 ---
 
-- [ ] **Unit 3: Zabezpieczenie VPS — próg Node ≥22.13, usunięcie build-tools dla b-s3, guard cron auto-update**
+- [x] **Unit 3: Zabezpieczenie VPS — próg Node ≥22.13, usunięcie build-tools dla b-s3, guard cron auto-update**
 
 **Cel:** `install-vps.sh` gwarantuje kompatybilny Node; nocny auto-update nie zrestartuje serwisu na Node bez `node:sqlite`.
 

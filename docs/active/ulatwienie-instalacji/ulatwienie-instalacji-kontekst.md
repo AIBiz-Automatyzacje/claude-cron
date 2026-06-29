@@ -39,6 +39,22 @@
 6. **Cienki bootstrap (shell) + gruby `setup.mjs` (Node)** — eliminuje duplikację bash↔PowerShell.
 7. **`readBigInts: false` (default)** — `number` wszędzie; node:sqlite rzuca `ERR_OUT_OF_RANGE` przy INTEGER > 2^53 (bezpieczniej niż b-s3).
 
+## Postęp implementacji
+
+### Faza 1 — ukończona (2026-06-29)
+
+**Unit 1 — migracja `node:sqlite`:** `lib/db.js` używa `DatabaseSync` z `node:sqlite`; oba PRAGMA przez `db.exec(...)` (zero `.pragma()`). `better-sqlite3` usunięty z `package.json`, dodane `engines: ">=22.13 <25"`. Suite 121 testów PASS, agregaty zwracają `number`.
+
+**Unit 2 — guardy startowe:** `lib/runtime-guard.js` (self-executing, zero zależności od `node:sqlite`) importuje `MIN_NODE_VERSION`/`MAX_NODE_VERSION` z `config.js` (single source of truth). `server.js` woła go pierwszą linią. Smoke-test `assertDbReturnsNumbers(conn)` + typed error `DbTypeError` w `lib/db.js`, wołany po `getDb()` w starcie. `start` w `package.json` ma `--disable-warning=ExperimentalWarning`.
+
+**Unit 3 — VPS:** próg Node rozbity na `MIN_NODE_MAJOR=22`/`MIN_NODE_MINOR=13` (bash porównuje liczby całkowite, nie float). Funkcja `is_node_supported`. Build-tools (`build-essential`/`python3`) usunięte — pozostał tylko komentarz uzasadniający (koffi prebuilt, pg czysty JS). `ExecStart` z flagą wyciszenia. Cron-guard zaimplementowany jako wygenerowany skrypt `scripts/cron-node-guard.sh` (chmod +x, własność `$CLAUDE_USER`) uruchamiany w `CRON_CMD` jako `$CLAUDE_USER` — pewniejszy niż wielolinijkowy one-liner w crontab; `git pull` zawsze, `systemctl restart` tylko po PASS guarda.
+
+### Decyzje z implementacji
+
+- **Test '24.0.0' → true (NIE false).** Scenariusz w planie deklarował `false (poza górną granicą <25)`, ale to wewnętrznie sprzeczne: `24 < 25`. Źródło prawdy = `engines >=22.13 <25`, więc 24 jest wspierane. Test odzwierciedla `true`.
+- **Brak typecheck/eslint** — projekt to czysty CommonJS bez TypeScript i bez konfiguracji ESLint. Zamiast typecheck: `node -c` (składnia OK na wszystkich plikach). Brak kroku `vite build` (brak frontendowego buildu).
+- **Cron-guard jako osobny skrypt, nie inline.** Cron roota uruchamia komendę w czystym shellu; guard musi czytać wersję Node usera `claude` — `su - $CLAUDE_USER -c '... && bash GUARD'`.
+
 ## Otwarte pytania (odroczone do implementacji)
 
 - Dokładny patch portable Node (najnowszy stabilny 22.x LTS w momencie implementacji).

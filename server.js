@@ -1,3 +1,4 @@
+require('./lib/runtime-guard'); // MUSI być pierwszy: fail-fast na złym Node PRZED require node:sqlite
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -416,8 +417,11 @@ const server = http.createServer(async (req, res) => {
 
 // === Start ===
 
-// Init DB
-db.getDb();
+// Init DB (migrate() wykonuje się wewnątrz getDb())
+const conn = db.getDb();
+
+// Smoke-test typów: fail-fast gdy node:sqlite zwraca agregaty jako nie-number (R4)
+db.assertDbReturnsNumbers(conn);
 
 // Reaper: osierocone runy 'running' z przerwanego procesu → 'killed' (gasi wiszący kill-bar)
 const reaped = db.reapOrphanedRuns();

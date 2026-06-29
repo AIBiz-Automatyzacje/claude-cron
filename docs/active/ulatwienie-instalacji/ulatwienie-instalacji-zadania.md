@@ -9,16 +9,16 @@
 **Delegate:** feature-builder-data · **Wymagania:** R1, R2 · **Zależności:** brak
 
 #### Implementacja
-- [ ] `lib/db.js:1` — import → `const { DatabaseSync } = require('node:sqlite')`
-- [ ] `lib/db.js:22` — `new DatabaseSync(target)`
-- [ ] `lib/db.js:23-24` — `db.pragma(...)` → `db.exec('PRAGMA journal_mode = WAL')` + `db.exec('PRAGMA foreign_keys = ON')`
-- [ ] `package.json` — usuń `better-sqlite3` z `dependencies`; dodaj `"engines": { "node": ">=22.13 <25" }`
-- [ ] `lib/db.test.js` — charakteryzacja parytetu (suite zielony przed nowymi asercjami)
+- [x] `lib/db.js:1` — import → `const { DatabaseSync } = require('node:sqlite')`
+- [x] `lib/db.js:22` — `new DatabaseSync(target)`
+- [x] `lib/db.js:23-24` — `db.pragma(...)` → `db.exec('PRAGMA journal_mode = WAL')` + `db.exec('PRAGMA foreign_keys = ON')`
+- [x] `package.json` — usuń `better-sqlite3` z `dependencies`; dodaj `"engines": { "node": ">=22.13 <25" }`
+- [x] `lib/db.test.js` — charakteryzacja parytetu (suite zielony przed nowymi asercjami)
 
 #### Testy
-- [ ] Test: Pełny `lib/db.test.js` PASS na `node:sqlite` — `ROW_NUMBER() OVER`, `ON DELETE CASCADE`, `PRAGMA table_info`, `datetime('now','localtime')`, backfill guard flagą `state`
-- [ ] Test: `createJob` zwraca `lastInsertRowid` jako `number`; `deleteOldRoutineRuns`/`reapOrphanedRuns` zwracają `.changes` jako `number`
-- [ ] Test: `getTodayRunStats` zwraca `{ success, failed }` typu `number` (happy path + zero-runs COALESCE→0)
+- [x] Test: Pełny `lib/db.test.js` PASS na `node:sqlite` — `ROW_NUMBER() OVER`, `ON DELETE CASCADE`, `PRAGMA table_info`, `datetime('now','localtime')`, backfill guard flagą `state`
+- [x] Test: `createJob` zwraca `lastInsertRowid` jako `number`; `deleteOldRoutineRuns`/`reapOrphanedRuns` zwracają `.changes` jako `number`
+- [x] Test: `getTodayRunStats` zwraca `{ success, failed }` typu `number` (happy path + zero-runs COALESCE→0)
 
 #### Weryfikacja
 - [ ] Weryfikacja: `node --test` (cały suite) przechodzi bez regresji
@@ -32,16 +32,16 @@
 **Delegate:** feature-builder-data · **Wymagania:** R3, R4 · **Zależności:** Unit 1
 
 #### Implementacja
-- [ ] Stwórz `lib/runtime-guard.js` (self-executing: porównanie `process.versions.node` z `MIN_NODE_VERSION`; poniżej → czytelny komunikat na stderr + `process.exit(1)`; ZERO zależności od `node:sqlite`)
-- [ ] `server.js` — `require('./lib/runtime-guard')` jako pierwsza linia; po `migrate()` wołaj smoke-test typów
-- [ ] `lib/db.js` lub `lib/config.js` — eksport `MIN_NODE_VERSION` + funkcja smoke-testu (`assertDbReturnsNumbers(db)`)
-- [ ] `package.json` — `"start": "node --disable-warning=ExperimentalWarning server.js"`
-- [ ] Stwórz `lib/runtime-guard.test.js`; rozszerz `lib/db.test.js` o smoke-test
+- [x] Stwórz `lib/runtime-guard.js` (self-executing: porównanie `process.versions.node` z `MIN_NODE_VERSION`; poniżej → czytelny komunikat na stderr + `process.exit(1)`; ZERO zależności od `node:sqlite`)
+- [x] `server.js` — `require('./lib/runtime-guard')` jako pierwsza linia; po `migrate()` wołaj smoke-test typów
+- [x] `lib/db.js` lub `lib/config.js` — eksport `MIN_NODE_VERSION` + funkcja smoke-testu (`assertDbReturnsNumbers(db)`)
+- [x] `package.json` — `"start": "node --disable-warning=ExperimentalWarning server.js"`
+- [x] Stwórz `lib/runtime-guard.test.js`; rozszerz `lib/db.test.js` o smoke-test
 
 #### Testy
-- [ ] Test: `isNodeSupported('22.13.0', '22.13')` → true; `'22.12.5'` → false; `'24.0.0'` → false; `'22.22.3'` → true
-- [ ] Test: Smoke-test — `:memory:` DB z agregatem `number` przechodzi; symulacja nie-number → typed error (error case R4)
-- [ ] Test: Guard z wersją poniżej minimum produkuje komunikat zawierający wymaganą wersję
+- [x] Test: `isNodeSupported('22.13.0', '22.13')` → true; `'22.12.5'` → false; `'24.0.0'` → false; `'22.22.3'` → true
+- [x] Test: Smoke-test — `:memory:` DB z agregatem `number` przechodzi; symulacja nie-number → typed error (error case R4)
+- [x] Test: Guard z wersją poniżej minimum produkuje komunikat zawierający wymaganą wersję
 
 #### Weryfikacja
 - [ ] Weryfikacja: `node --test lib/runtime-guard.test.js` przechodzi
@@ -57,10 +57,10 @@
 **Delegate:** feature-builder-data · **Wymagania:** R5 · **Zależności:** Unit 1
 
 #### Implementacja
-- [ ] `scripts/install-vps.sh:41-63` — próg z `<18` na `<22.13` → instaluj 22.x LTS
-- [ ] `scripts/install-vps.sh:87` — usuń `build-essential`/`python3` instalowane dla `better-sqlite3` (po weryfikacji, że nie potrzebne dla `koffi`/`pg`)
-- [ ] `scripts/install-vps.sh:266` — `ExecStart` dodaj `--disable-warning=ExperimentalWarning`
-- [ ] `scripts/install-vps.sh:438` — cron-guard: `systemctl restart` tylko gdy `node -v` ≥ minimum; inaczej `git pull` zostaje, restart wstrzymany + log
+- [x] `scripts/install-vps.sh:41-63` — próg z `<18` na `<22.13` → instaluj 22.x LTS
+- [x] `scripts/install-vps.sh:87` — usuń `build-essential`/`python3` instalowane dla `better-sqlite3` (po weryfikacji, że nie potrzebne dla `koffi`/`pg`)
+- [x] `scripts/install-vps.sh:266` — `ExecStart` dodaj `--disable-warning=ExperimentalWarning`
+- [x] `scripts/install-vps.sh:438` — cron-guard: `systemctl restart` tylko gdy `node -v` ≥ minimum; inaczej `git pull` zostaje, restart wstrzymany + log
 
 #### Testy
 - [ ] Test [Manual]: Na realnym VPS ze starym Node cron robi `git pull`, ale NIE restartuje serwisu; log zawiera ostrzeżenie o niekompatybilnym Node

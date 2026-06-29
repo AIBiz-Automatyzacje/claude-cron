@@ -11,6 +11,11 @@ REPO="https://github.com/AIBiz-Automatyzacje/claude-cron.git"
 SERVICE_NAME="claude-cron"
 CLAUDE_USER="claude"
 
+# Minimalna wersja Node — node:sqlite stabilne dopiero od 22.13 (spójne z
+# package.json "engines" i lib/config.js MIN_NODE_VERSION). Format: major.minor.
+MIN_NODE_MAJOR=22
+MIN_NODE_MINOR=13
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -40,23 +45,39 @@ fi
 
 info "Checking Node.js..."
 
+# Zwraca 0 (true) gdy zainstalowany Node spełnia minimum (major.minor >= MIN_NODE_MAJOR.MIN_NODE_MINOR).
+# node:sqlite jest stabilne dopiero od 22.13 — niższy Node wywala serwer przy starcie (lib/runtime-guard.js).
+is_node_supported() {
+  local raw major minor
+  raw=$(node -v 2>/dev/null | sed 's/v//')
+  major=$(echo "$raw" | cut -d. -f1)
+  minor=$(echo "$raw" | cut -d. -f2)
+  [ -n "$major" ] && [ -n "$minor" ] || return 1
+  if [ "$major" -gt "$MIN_NODE_MAJOR" ]; then
+    return 0
+  fi
+  if [ "$major" -eq "$MIN_NODE_MAJOR" ] && [ "$minor" -ge "$MIN_NODE_MINOR" ]; then
+    return 0
+  fi
+  return 1
+}
+
 if command -v node &>/dev/null; then
-  NODE_VER=$(node -v | sed 's/v//' | cut -d. -f1)
-  if [ "$NODE_VER" -lt 18 ]; then
-    warn "Node.js $(node -v) is too old (18+ required)"
-    ask "Install Node.js 22? [Y/n]: "
+  if ! is_node_supported; then
+    warn "Node.js $(node -v) is too old (>=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} required for node:sqlite)"
+    ask "Install Node.js 22 LTS? [Y/n]: "
     read -r INSTALL_NODE
     INSTALL_NODE="${INSTALL_NODE:-Y}"
     if [[ "$INSTALL_NODE" =~ ^[Yy]$ ]]; then
       curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
       apt-get install -y nodejs
     else
-      fail "Node.js 18+ required"
+      fail "Node.js >=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} required"
     fi
   fi
   ok "Node.js $(node -v)"
 else
-  info "Node.js not found — installing Node.js 22..."
+  info "Node.js not found — installing Node.js 22 LTS..."
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
   ok "Node.js $(node -v)"
@@ -80,13 +101,11 @@ systemctl enable cron 2>/dev/null || true
 systemctl start cron 2>/dev/null || true
 ok "cron"
 
-# ============ 3. BUILD TOOLS (for better-sqlite3) ============
-
-if ! dpkg -l | grep -q build-essential 2>/dev/null; then
-  info "Installing build tools (needed for SQLite)..."
-  apt-get update -qq && apt-get install -y -qq build-essential python3
-fi
-ok "Build tools"
+# ============ 3. (build tools usunięte) ============
+# Build-essential/python3 były instalowane wyłącznie pod natywną kompilację
+# better-sqlite3. Projekt używa teraz wbudowanego node:sqlite (lib/db.js), a
+# pozostałe zależności nie wymagają kompilacji: koffi dostarcza prebuilt binaries,
+# pg jest czystym JS. Brak kroku build-tools = szybsza i lżejsza instalacja.
 
 # ============ 4. DEDICATED USER ============
 
@@ -263,7 +282,7 @@ After=network.target
 Type=simple
 User=$CLAUDE_USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$NODE_PATH $INSTALL_DIR/server.js
+ExecStart=$NODE_PATH --disable-warning=ExperimentalWarning $INSTALL_DIR/server.js
 Restart=on-failure
 RestartSec=10
 
@@ -433,9 +452,55 @@ if [[ "$SETUP_AUTOUPDATE" =~ ^[Yy]$ ]]; then
     VAULT_GIT="${VAULT_GIT/#\~/$CLAUDE_HOME}"
   fi
 
+  # Pre-check wersji Node dla crona — wstrzymuje restart, gdy Node serwisu jest
+  # niekompatybilny (np. operator zdegradował Node po instalacji). git pull i tak
+  # się wykona (kod się zaktualizuje), ale restart na złym Node tylko ubiłby wszystkie
+  # joby (node:sqlite rzuca przy starcie — zob. lib/runtime-guard.js). Skrypt zapisany
+  # obok instalacji, uruchamiany jako user $CLAUDE_USER (ten sam Node co serwis).
+  GUARD_SCRIPT="$INSTALL_DIR/scripts/cron-node-guard.sh"
+  CRON_LOG="$CLAUDE_HOME/claude-cron-update.log"
+
+  cat > "$GUARD_SCRIPT" <<GUARD
+#!/usr/bin/env bash
+# Auto-generowany przez install-vps.sh — pre-check Node przed restartem serwisu.
+# Exit 0 = Node kompatybilny (restart OK). Exit 1 = niekompatybilny (wstrzymaj restart).
+set -uo pipefail
+
+MIN_NODE_MAJOR=$MIN_NODE_MAJOR
+MIN_NODE_MINOR=$MIN_NODE_MINOR
+SERVICE_NAME="$SERVICE_NAME"
+CRON_LOG="$CRON_LOG"
+
+log_warn() {
+  local msg="\$1"
+  logger -t "\$SERVICE_NAME-update" "\$msg" 2>/dev/null || true
+  echo "[\$(date '+%Y-%m-%d %H:%M:%S')] \$msg" >> "\$CRON_LOG" 2>/dev/null || true
+}
+
+RAW=\$(node -v 2>/dev/null | sed 's/v//')
+MAJOR=\$(echo "\$RAW" | cut -d. -f1)
+MINOR=\$(echo "\$RAW" | cut -d. -f2)
+
+if [ -z "\$MAJOR" ] || [ -z "\$MINOR" ]; then
+  log_warn "Restart serwisu WSTRZYMANY: nie udało się odczytać wersji Node (node -v puste). Kod zaktualizowany przez git pull, ale serwis działa na starym kodzie do ręcznej interwencji."
+  exit 1
+fi
+
+if [ "\$MAJOR" -gt "\$MIN_NODE_MAJOR" ] || { [ "\$MAJOR" -eq "\$MIN_NODE_MAJOR" ] && [ "\$MINOR" -ge "\$MIN_NODE_MINOR" ]; }; then
+  exit 0
+fi
+
+log_warn "Restart serwisu WSTRZYMANY: Node v\$RAW jest niekompatybilny (wymagane >=\${MIN_NODE_MAJOR}.\${MIN_NODE_MINOR} dla node:sqlite). Kod zaktualizowany przez git pull, ale serwis NIE został zrestartowany, by uniknąć padu wszystkich jobów. Zaktualizuj Node i zrestartuj ręcznie: systemctl restart \$SERVICE_NAME"
+exit 1
+GUARD
+  chmod +x "$GUARD_SCRIPT"
+  chown "$CLAUDE_USER:$CLAUDE_USER" "$GUARD_SCRIPT" 2>/dev/null || true
+  ok "Cron Node guard: $GUARD_SCRIPT"
+
   # Build cron command
   # 02:00 — okno maintenance ciche, by restart nie kolidował z porannymi jobami (zob. lib/config.js MAINTENANCE_WINDOW).
-  CRON_CMD="0 2 * * * su - $CLAUDE_USER -c \"cd $VAULT_GIT && git pull && cd $INSTALL_DIR && git pull\" && systemctl restart $SERVICE_NAME"
+  # git pull ZAWSZE; restart tylko gdy guard (uruchomiony jako $CLAUDE_USER) potwierdzi kompatybilny Node.
+  CRON_CMD="0 2 * * * su - $CLAUDE_USER -c \"cd $VAULT_GIT && git pull && cd $INSTALL_DIR && git pull && bash $GUARD_SCRIPT\" && systemctl restart $SERVICE_NAME"
 
   # Add to root crontab (avoid duplicates)
   EXISTING_CRON=$(crontab -l 2>/dev/null | grep -v "$SERVICE_NAME" || true)

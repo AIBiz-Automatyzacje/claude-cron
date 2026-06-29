@@ -4,7 +4,7 @@
   "description": "Puls — scheduler agentów AI (Claude Code), AIBIZ",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node --disable-warning=ExperimentalWarning server.js",
     "test": "node --test",
     "install:mac": "bash scripts/install-macos.sh",
     "uninstall:mac": "bash scripts/uninstall-macos.sh",
@@ -12,8 +12,10 @@
     "uninstall:win": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-windows.ps1",
     "install:vps": "bash scripts/install-vps.sh"
   },
+  "engines": {
+    "node": ">=22.13 <25"
+  },
   "dependencies": {
-    "better-sqlite3": "^12.0.0",
     "croner": "^10.0.0",
     "gray-matter": "^4.0.3",
     "koffi": "^2.0.0",
