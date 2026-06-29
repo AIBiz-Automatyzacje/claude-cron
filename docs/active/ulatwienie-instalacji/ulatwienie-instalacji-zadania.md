@@ -109,9 +109,9 @@
 - [ ] Test [Manual]: Windows — `install.ps1` analogicznie (zip → `node.exe`)
 
 #### Weryfikacja
-- [ ] Weryfikacja: `bash -n install.sh` (brak błędów składni)
-- [ ] Weryfikacja: `grep -n "SHASUMS256\|nodejs.org/dist" install.sh install.ps1` pokazuje oficjalne źródło + weryfikację sumy
-- [ ] Weryfikacja: `grep -n "setup.mjs" install.sh install.ps1` pokazuje przekazanie sterowania
+- [x] Weryfikacja: `bash -n install.sh` (brak błędów składni) — PASS (exit 0, review fazy 2)
+- [x] Weryfikacja: `grep -n "SHASUMS256\|nodejs.org/dist" install.sh install.ps1` pokazuje oficjalne źródło + weryfikację sumy — PASS (review fazy 2)
+- [x] Weryfikacja: `grep -n "setup.mjs" install.sh install.ps1` pokazuje przekazanie sterowania — PASS (review fazy 2)
 
 #### Operator checklist
 - [ ] Operator na czystym Macu i Windowsie: bootstrap stawia portable Node bez globalnej instalacji i bez zmian PATH
@@ -135,9 +135,9 @@
 - [ ] Test [Manual]: brak `claude` w PATH → setup zatrzymuje się z handoff, niczego nie instaluje
 
 #### Weryfikacja
-- [ ] Weryfikacja: `node --test setup.test.mjs` przechodzi
-- [ ] Weryfikacja: `grep -n "node.exe\|bin/node\|disable-warning" setup.mjs` pokazuje absolutną ścieżkę + flagę w hooku
-- [ ] Weryfikacja: `grep -n "claude" setup.mjs` pokazuje detekcję warunku wstępnego (handoff)
+- [x] Weryfikacja: `node --test setup.test.mjs` przechodzi — PASS (tests 17 / pass 17, review fazy 2)
+- [x] Weryfikacja: `grep -n "node.exe\|bin/node\|disable-warning" setup.mjs` pokazuje absolutną ścieżkę + flagę w hooku — PASS (review fazy 2)
+- [x] Weryfikacja: `grep -n "claude" setup.mjs` pokazuje detekcję warunku wstępnego (handoff) — PASS (review fazy 2)
 
 #### Operator checklist
 - [ ] Operator na Macu i Windowsie: po setup hook autostartu wstaje serwer w detached procesie (portable Node, bez fnm/nvm na PATH)
@@ -156,9 +156,9 @@
 - [ ] Test [Manual]: `npm run uninstall:mac` po instalacji czysto usuwa hook z `settings.json` i plik hooka; `.node/` tylko za zgodą
 
 #### Weryfikacja
-- [ ] Weryfikacja: `test ! -f scripts/install-macos.sh && test ! -f scripts/install-windows.ps1` (usunięte)
-- [ ] Weryfikacja: `grep -n "install.sh\|install.ps1" package.json` pokazuje przepięte skrypty
-- [ ] Weryfikacja: `grep -rn "install-macos.sh\|install-windows.ps1" .` (poza historią git) zwraca pusto
+- [x] Weryfikacja: `test ! -f scripts/install-macos.sh && test ! -f scripts/install-windows.ps1` (usunięte) — PASS (oba usunięte, review fazy 2)
+- [x] Weryfikacja: `grep -n "install.sh\|install.ps1" package.json` pokazuje przepięte skrypty — PASS (install:mac/win, review fazy 2)
+- [ ] Weryfikacja: `grep -rn "install-macos.sh\|install-windows.ps1" .` (poza historią git) zwraca pusto — FAIL (review fazy 2: referencje w docs/plans, MIGRACJA-PULS.md, kontekst, sam plik zadań — żaden żywy skrypt/package.json; pliki realnie usunięte. Checkbox literalnie FAIL — historyczne wzmianki dokumentacyjne)
 
 ---
 
@@ -174,5 +174,30 @@
 - [ ] Test [Manual]: czytelnik na czystym Windows przechodzi instalację z README bez instalowania VS Build Tools
 
 #### Weryfikacja
-- [ ] Weryfikacja: `grep -in "build tools\|better-sqlite3" README.md` zwraca pusto (lub tylko kontekst historyczny)
-- [ ] Weryfikacja: `grep -n "install.sh\|install.ps1\|.node" README.md` pokazuje nowy flow
+- [x] Weryfikacja: `grep -in "build tools\|better-sqlite3" README.md` zwraca pusto (lub tylko kontekst historyczny) — PASS (pusto, review fazy 2)
+- [x] Weryfikacja: `grep -n "install.sh\|install.ps1\|.node" README.md` pokazuje nowy flow — PASS (review fazy 2)
+
+## Do poprawy po review fazy 2
+
+- [x] 🔴 [P1] **setup.mjs:245-259 (main/ask)** — UNDER-IMPLEMENTATION / regresja vs setup.sh: `setup.mjs` NIE persystuje `CLAUDE_CRON_WORKSPACE` ani nie pyta o VPS / nie ustawia `CLAUDE_CRON_VPS_URL` (stary setup.sh:77-116,152-160 robił oba). Te zmienne realnie konsumowane: server.js:131 (503 „VPS not configured"), lib/config.js:14,21, scripts/inbox/inbox-pull.mjs:34, inbox-push.mjs:28-29. Efekt: po świeżej instalacji dashboard nie ma połączenia z VPS, workspace spada na `process.cwd()`. Utrata działającej ścieżki konfiguracji bez zamiennika. Zaimplementować persystencję env (workspace + VPS, ew. Discord) lub świadomie udokumentować nowy mechanizm konfiguracji.
+- [x] 🟠 [P2] **setup.mjs:231-237 (registerHook)** — pusty `catch { existing = {} }` przy uszkodzonym settings.json → `fs.writeFileSync` (linia 241) NADPISUJE cały plik, tracąc permissions/inne hooki/env usera. Narusza regułę „NIGDY pusty catch". Fail-fast z czytelnym komunikatem (nie nadpisuj) albo backup pliku przed zapisem.
+- [x] 🟠 [P2] **setup.sh, setup-windows.ps1 (root, nieusunięte)** — dwie konkurencyjne ścieżki instalacji (narusza R10 „koniec dwóch ścieżek"). Pliki osierocone (nie w README/package.json), ale wciąż w repo, zawierają STARY bugowany hook `spawn('node', ['server.js'])` (setup.sh:202, setup-windows.ps1:225) — defekt który zadanie naprawia (R7). Usunąć root `setup.sh`/`setup-windows.ps1`; zaktualizować wzmiankę w `MIGRACJA-PULS.md:282`.
+- [x] 🟠 [P2] **setup.test.mjs** — brak testów dla `isClaudeInstalled(probe)` (setup.mjs:172, rdzeń R9). DI-friendly: probe `{status:0}` → true (happy), `{status:1}` → false (error). Min. 1 happy + 1 error case.
+- [x] 🟠 [P2] **setup.test.mjs** — brak testów dla `detectPortableNodeBin(execPath, platform, repoDir, arch)` (setup.mjs:163, logika R7). Dwie gałęzie: execPath zawiera `.node/` (zwraca execPath) vs fallback (`resolveNodeBinPath`). Pure funkcja — min. 1 test execPath-match + 1 test fallback.
+- [x] 🟡 [P3] **setup.mjs:7,13** — nagłówek deklaruje „Pytania konfiguracyjne (VPS, workspace, autostart, Discord)" — `main()` po fixie P1 pyta o wszystkie cztery (workspace + VPS + Discord + autostart), nagłówek zgodny z kodem.
+- [ ] 🟡 [P3] **setup.mjs:234** — pusty catch bez logu (ten sam blok co P2); minimum: log ostrzeżenia że settings.json nieparsowalny.
+- [ ] 🟡 [P3] **setup.mjs:197-204 (runSmokeTest)** — smoke-test woła `db.getDb()` bez DI ścieżki → materializuje PRODUKCYJNĄ bazę (data/.db) w trakcie setupu. Rozważyć `:memory:` przez `setDbPath()`.
+- [ ] 🟡 [P3] **setup.mjs:37-47,163-169** — `detectPortableNodeBin` fallback buduje ścieżkę z `arch` bez walidacji (process.arch może dać ia32/ppc64; install.ps1 dopuszcza x86 nieznany install.sh) i bez guardu istnienia → martwa ścieżka node, niemy fail detached. Walidacja arch w `{arm64,x64}` (+ x86 win).
+- [ ] 🟡 [P3] **scripts/uninstall-macos.sh:58 / scripts/uninstall-windows.ps1** — inline JS `JSON.parse(readFileSync(settings.json))` bez try/catch; uszkodzony plik przerwie uninstall stack-trace'em. Owinąć w czytelny komunikat (fail-loud akceptowalny, ale nie surowy stack).
+- [ ] 🟡 [P3] **setup.test.mjs** — rozbieżność liczby testów (commit deklaruje 20, plik ma 17). Bookkeeping/raportowanie, nie defekt zachowania. Skorygować opis lub dopisać brakujące testy (patrz P2 TEST).
+- (info) **setup.mjs:130 (http.get timeout)** — poprawnie zabezpieczone przez `req.on('timeout')`; bez akcji.
+- (info) **install.sh:115 (grep checksum)** — wzorzec sufiksu z kotwicą `$` poprawny; bez akcji.
+
+## Operator checklist faza 2
+
+- [ ] Operator: bootstrap portable Node przez `install.sh` (Mac) i `install.ps1` (Win) na czystej maszynie — Operator action: na czystym Mac uruchom `bash install.sh`, na czystym Windows `powershell -ExecutionPolicy Bypass -File install.ps1`; potwierdź pobranie portable Node do `.node/`, weryfikację SHASUMS256, brak zmian systemowego Node/PATH, odpalenie `setup.mjs`.
+- [ ] Operator: integralność archiwum Node opiera się tylko na SHASUMS256 (bez GPG) — Operator action: świadome ograniczenie scope (plan: „tani guard"); jeśli wymagany wyższy poziom zaufania, rozważ dodanie weryfikacji podpisu GPG SHASUMS256.txt.sig na realnym środowisku sieciowym.
+- [ ] Operator: hook autostartu wstaje detached server.js z portable Node (bez fnm/nvm na PATH) — Operator action: w realnej sesji Claude Code na Mac/Win wyślij UserPromptSubmit w workspace; potwierdź że hook spawnuje detached serwer i serwer wstaje (port 7777), bez fnm/nvm na PATH.
+- [ ] Operator: brak `claude` w PATH → setup zatrzymuje się z handoff i niczego nie instaluje — Operator action: na maszynie bez Claude CLI w PATH uruchom `node setup.mjs`; potwierdź komunikat handoffu + `process.exit(1)`, brak instalacji.
+- [ ] Operator: README curl|bash one-liner — niejednoznaczność nazwy `install.sh` (Claude CLI vs repo) — Operator action: przy realnym przejściu README potwierdź że czytelnik rozróżnia `claude.ai/install.sh` (prerequisite Claude Code) od `bash install.sh` (repo Pulsa po sklonowaniu); doprecyzować jeśli mylące.
+- [ ] Operator: `npm run uninstall:mac` / `uninstall:win` po realnej instalacji — Operator action: po instalacji uruchom uninstall; potwierdź usunięcie wpisu hooka z settings.json (przez `removeHookFromSettings`) + pliku hooka, oraz że `.node/` usuwane tylko za flagą `--remove-node`/`-RemoveNode` (confirm-before-delete).

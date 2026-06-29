@@ -168,6 +168,35 @@ export function detectPortableNodeBin(execPath, platform, repoDir, arch) {
   return resolveNodeBinPath(platform, nodeBase, NODE_VERSION, arch);
 }
 
+// === Pure helper: upsert `export VAR="value"` w treści shell RC (zsh/bash) ===
+// Zwraca nową treść pliku. Gdy linia `export VAR=...` już istnieje — podmienia ją
+// (idempotentny re-run nie duplikuje). Gdy nie ma — dopisuje na końcu z komentarzem.
+// Lustro logiki ze starego setup.sh (grep -q + sed | echo >>).
+export function upsertEnvLine(rcContent, varName, value, comment) {
+  const content = typeof rcContent === 'string' ? rcContent : '';
+  const exportLine = `export ${varName}=${JSON.stringify(value)}`;
+  const lineRegex = new RegExp(`^export ${varName}=.*$`, 'm');
+
+  if (lineRegex.test(content)) {
+    return content.replace(lineRegex, exportLine);
+  }
+
+  const prefix = content.length > 0 && !content.endsWith('\n') ? `${content}\n` : content;
+  const commentLine = comment ? `# ${comment}\n` : '';
+  return `${prefix}\n${commentLine}${exportLine}\n`;
+}
+
+// === Pure helper: budowa URL-a VPS z hosta + portu (lustro setup.sh:97-107) ===
+// Pusty/biały host → null (tryb tylko lokalny, env nie zapisywany).
+export function buildVpsUrl(host, port) {
+  const trimmedHost = typeof host === 'string' ? host.trim() : '';
+  if (!trimmedHost) {
+    return null;
+  }
+  const resolvedPort = String(port || '').trim() || '7777';
+  return `http://${trimmedHost}:${resolvedPort}`;
+}
+
 // === Pure helper: wykrycie Claude CLI w PATH (DI: funkcja sprawdzająca) ===
 export function isClaudeInstalled(probe) {
   const result = probe('claude');
@@ -225,14 +254,36 @@ function writeHook(workspace, repoDir, nodeBin) {
   return hookFile;
 }
 
+// Plik RC powłoki do persystencji env (zsh domyślny na macOS; bash jako fallback).
+function resolveShellRc() {
+  const shell = process.env.SHELL || '';
+  const rcName = shell.includes('bash') ? '.bashrc' : '.zshrc';
+  return path.join(os.homedir(), rcName);
+}
+
+// Persystuje `export VAR="value"` w shell RC (idempotentnie). Zwraca ścieżkę pliku RC.
+function persistEnvVar(rcFile, varName, value, comment) {
+  const current = fs.existsSync(rcFile) ? fs.readFileSync(rcFile, 'utf-8') : '';
+  const updated = upsertEnvLine(current, varName, value, comment);
+  fs.writeFileSync(rcFile, updated, 'utf-8');
+  return rcFile;
+}
+
 function registerHook(workspace, hookFile, nodeBin) {
   const settingsFile = path.join(workspace, '.claude', 'settings.json');
   let existing = {};
   if (fs.existsSync(settingsFile)) {
+    const raw = fs.readFileSync(settingsFile, 'utf-8');
     try {
-      existing = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
-    } catch {
-      existing = {};
+      existing = JSON.parse(raw);
+    } catch (error) {
+      // Fail-fast: NIE nadpisujemy uszkodzonego settings.json — zniszczyłoby to
+      // permissions/inne hooki/env usera. Każemy userowi naprawić ręcznie.
+      throw new Error(
+        `Plik ${settingsFile} jest niepoprawnym JSON-em (${error.message}). ` +
+          'Setup NIE nadpisze go, by nie utracić Twoich permissions/hooków/env. ' +
+          'Napraw plik ręcznie (albo usuń go, jeśli nie zawiera nic ważnego) i uruchom setup ponownie.',
+      );
     }
   }
   const command = `${JSON.stringify(nodeBin)} ${JSON.stringify(hookFile)}`;
@@ -254,6 +305,8 @@ async function main() {
   const nodeBin = detectPortableNodeBin(process.execPath, process.platform, REPO_DIR, process.arch);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
+  const rcFile = resolveShellRc();
+
   try {
     const workspaceInput = await ask(rl, 'Ścieżka do workspace [' + os.homedir() + ']: ', os.homedir());
     const workspace = path.resolve(sanitizeDroppedPath(workspaceInput));
@@ -262,6 +315,26 @@ async function main() {
       process.exit(1);
     }
     console.log(`[ok] Workspace: ${workspace}`);
+    persistEnvVar(rcFile, 'CLAUDE_CRON_WORKSPACE', workspace, 'Claude-Cron workspace');
+    console.log(`[ok] Zapisano CLAUDE_CRON_WORKSPACE w ${rcFile}`);
+
+    const vpsHost = await ask(rl, 'Tailscale IP VPS-a (puste = tryb tylko lokalny): ');
+    const vpsPort = vpsHost ? await ask(rl, 'Port VPS [7777]: ', '7777') : '7777';
+    const vpsUrl = buildVpsUrl(vpsHost, vpsPort);
+    if (vpsUrl) {
+      persistEnvVar(rcFile, 'CLAUDE_CRON_VPS_URL', vpsUrl, 'Claude-Cron VPS connection');
+      console.log(`[ok] VPS: ${vpsUrl} (zapisano w ${rcFile})`);
+    } else {
+      console.log('[info] Tryb tylko lokalny — joby działają gdy Mac nie śpi.');
+    }
+
+    const discordUrl = await ask(rl, 'Discord webhook URL (puste = pomiń): ');
+    if (discordUrl) {
+      persistEnvVar(rcFile, 'DISCORD_WEBHOOK_URL', discordUrl, 'Claude-Cron Discord notifications');
+      console.log(`[ok] Discord webhook zapisany w ${rcFile}`);
+    } else {
+      console.log('[info] Pominięto Discord.');
+    }
 
     const installHook = (await ask(rl, 'Zainstalować autostart? [Y/n]: ', 'Y')).toLowerCase();
     if (installHook === 'y') {
@@ -271,6 +344,8 @@ async function main() {
     } else {
       console.log('[info] Pominięto autostart.');
     }
+
+    console.log(`\n[info] Załaduj zmienne środowiskowe: source ${rcFile}`);
   } finally {
     rl.close();
   }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { test } from 'node:test';
 
 import {
@@ -6,6 +7,10 @@ import {
   mergeHookIntoSettings,
   removeHookFromSettings,
   buildHookSource,
+  detectPortableNodeBin,
+  isClaudeInstalled,
+  upsertEnvLine,
+  buildVpsUrl,
   NODE_VERSION,
 } from './setup.mjs';
 
@@ -184,4 +189,64 @@ test('buildHookSource trzyma guard darwin dla caffeinate', () => {
   const source = buildHookSource('/repo', '/repo/.node/x/bin/node');
   assert.ok(source.includes("process.platform === 'darwin'"), 'caffeinate pod guardem darwin');
   assert.ok(source.includes('caffeinate'));
+});
+
+// === detectPortableNodeBin — execPath-match vs fallback (logika R7) ===
+
+test('detectPortableNodeBin zwraca execPath gdy wskazuje na .node/ (portable Node odpalił setup)', () => {
+  const execPath = `${path.sep}repo${path.sep}.node${path.sep}node-v${NODE_VERSION}-darwin-arm64${path.sep}bin${path.sep}node`;
+  const result = detectPortableNodeBin(execPath, 'darwin', '/repo', 'arm64');
+  assert.equal(result, execPath);
+});
+
+test('detectPortableNodeBin fallback buduje ścieżkę z layoutu .node/ gdy execPath spoza .node/', () => {
+  const result = detectPortableNodeBin('/usr/local/bin/node', 'darwin', '/repo', 'arm64');
+  assert.equal(
+    result,
+    path.join('/repo', '.node', `node-v${NODE_VERSION}-darwin-arm64`, 'bin', 'node'),
+  );
+});
+
+// === isClaudeInstalled — DI probe (rdzeń R9) ===
+
+test('isClaudeInstalled → true gdy probe zwraca status 0 (Claude w PATH)', () => {
+  const result = isClaudeInstalled(() => ({ status: 0 }));
+  assert.equal(result, true);
+});
+
+test('isClaudeInstalled → false gdy probe zwraca status 1 (brak Claude)', () => {
+  const result = isClaudeInstalled(() => ({ status: 1 }));
+  assert.equal(result, false);
+});
+
+// === upsertEnvLine — idempotentna persystencja export VAR w shell RC ===
+
+test('upsertEnvLine dopisuje export gdy zmiennej nie ma w treści', () => {
+  const result = upsertEnvLine('# moje rc\nexport PATH=/x\n', 'CLAUDE_CRON_WORKSPACE', '/ws', 'Claude-Cron workspace');
+  assert.ok(result.includes('export CLAUDE_CRON_WORKSPACE="/ws"'));
+  assert.ok(result.includes('export PATH=/x'), 'istniejąca treść zachowana');
+  assert.ok(result.includes('# Claude-Cron workspace'));
+});
+
+test('upsertEnvLine podmienia istniejącą linię (idempotentny re-run, brak duplikatu)', () => {
+  const initial = upsertEnvLine('', 'CLAUDE_CRON_VPS_URL', 'http://old:7777');
+  const updated = upsertEnvLine(initial, 'CLAUDE_CRON_VPS_URL', 'http://new:7777');
+  const occurrences = updated.match(/export CLAUDE_CRON_VPS_URL=/g) || [];
+  assert.equal(occurrences.length, 1, 'tylko jedna linia export — bez duplikatu');
+  assert.ok(updated.includes('export CLAUDE_CRON_VPS_URL="http://new:7777"'));
+});
+
+// === buildVpsUrl — host+port → URL, pusty host → null ===
+
+test('buildVpsUrl składa URL z hosta i portu', () => {
+  assert.equal(buildVpsUrl('100.64.0.1', '7777'), 'http://100.64.0.1:7777');
+});
+
+test('buildVpsUrl domyślny port 7777 gdy port pusty', () => {
+  assert.equal(buildVpsUrl('100.64.0.1', ''), 'http://100.64.0.1:7777');
+});
+
+test('buildVpsUrl zwraca null dla pustego/białego hosta (tryb tylko lokalny)', () => {
+  assert.equal(buildVpsUrl('', '7777'), null);
+  assert.equal(buildVpsUrl('   ', '7777'), null);
 });

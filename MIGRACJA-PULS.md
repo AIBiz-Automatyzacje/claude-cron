@@ -279,7 +279,7 @@ Sprawdź na realnych danych:
 ### Windows (parytet Mac+Win — system działa na obu)
 Rebrand jest **platform-agnostyczny**: Node + statyczne `public/` + daemon przez `schtasks "ClaudeCron"` (już w `lib/platform.js`). Nowy front serwuje się na Windows identycznie — **zero osobnej roboty frontowej**. Po deployu: restart daemona Windows analogicznie do Mac (`schtasks /End /TN ClaudeCron` → relaunch, lub re-logon).
 
-> **Stary fork `claude-cron-windows` — zarchiwizowany** (`_ARCHIWUM-claude-cron-windows`, 2026-06-22). Był to porzucony staruszek (kod z kwietnia, stary schemat bez `routine/job_type/command`); rdzeń Windows już dawno wmergowany do main (`405ce1e`). Wyciągnięto z niego 2 zaległe fixy: (1) **regex webhooka z query string** `server.js` `/^\/webhook\/([a-zA-Z0-9_-]+)(?:\?|$)/` — main 404-ował na `?param=...`; (2) **sanityzacja hosta VPS** w `setup-windows.ps1` (strip protokołu/slasha/portu). Folder do usunięcia po weryfikacji, że nic więcej nie trzeba.
+> **Stary fork `claude-cron-windows` — zarchiwizowany** (`_ARCHIWUM-claude-cron-windows`, 2026-06-22). Był to porzucony staruszek (kod z kwietnia, stary schemat bez `routine/job_type/command`); rdzeń Windows już dawno wmergowany do main (`405ce1e`). Wyciągnięto z niego 2 zaległe fixy: (1) **regex webhooka z query string** `server.js` `/^\/webhook\/([a-zA-Z0-9_-]+)(?:\?|$)/` — main 404-ował na `?param=...`; (2) **sanityzacja hosta VPS** w ówczesnym `setup-windows.ps1` (strip protokołu/slasha/portu) — od fazy 2 „ułatwienie instalacji" root `setup.sh`/`setup-windows.ps1` usunięte, konfigurację robi wspólny `setup.mjs` (`buildVpsUrl`). Folder do usunięcia po weryfikacji, że nic więcej nie trzeba.
 
 ---
 
