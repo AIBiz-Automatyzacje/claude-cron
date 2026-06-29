@@ -244,7 +244,7 @@ VPS** (nocny auto-update nie może zrestartować serwisu na niekompatybilnym Nod
 
 > Niezależna od Fazy 1 w sensie DB, ale Unit 5 (hook z absolutną ścieżką) zakłada portable Node z Unit 4.
 
-- [ ] **Unit 4: Portable Node bootstrap — `install.sh` (Mac/Linux) + `install.ps1` (Windows)**
+- [x] **Unit 4: Portable Node bootstrap — `install.sh` (Mac/Linux) + `install.ps1` (Windows)**
 
 **Cel:** Cienki bootstrap per-OS stawia pinowany portable Node w `.node/` (z weryfikacją sumy) i przekazuje sterowanie do `setup.mjs`.
 
@@ -285,7 +285,7 @@ VPS** (nocny auto-update nie może zrestartować serwisu na niekompatybilnym Nod
 
 ---
 
-- [ ] **Unit 5: Wspólny `setup.mjs` — pytania, hook z absolutną ścieżką Node, settings.json, smoke-test**
+- [x] **Unit 5: Wspólny `setup.mjs` — pytania, hook z absolutną ścieżką Node, settings.json, smoke-test**
 
 **Cel:** Jedna ścieżka konfiguracji (Node, identyczna Mac/Win): generuje hook autostartu wołający portable Node po absolutnej ścieżce, rejestruje w `settings.json`, woła smoke-test, obsługuje warunek wstępny Claude Code.
 
@@ -315,9 +315,9 @@ VPS** (nocny auto-update nie może zrestartować serwisu na niekompatybilnym Nod
 - `setup.sh:195-253` (kształt hooka + rejestracja w settings.json), `setup.sh:210` (guard `darwin` dla caffeinate).
 
 **Scenariusze testowe:**
-- [Unit] `resolveNodeBinPath('darwin', base)` → `.../bin/node`; `('win32', base)` → `...\node.exe`.
-- [Unit] `mergeHookIntoSettings`: pusty settings → dodaje wpis; settings z istniejącym wpisem hooka → bez duplikatu (idempotencja).
-- [Unit] Generowany hook zawiera absolutną ścieżkę node (nie goły `'node'`) i flagę `--disable-warning=ExperimentalWarning`.
+- [x] [Unit] `resolveNodeBinPath('darwin', base)` → `.../bin/node`; `('win32', base)` → `...\node.exe`.
+- [x] [Unit] `mergeHookIntoSettings`: pusty settings → dodaje wpis; settings z istniejącym wpisem hooka → bez duplikatu (idempotencja).
+- [x] [Unit] Generowany hook zawiera absolutną ścieżkę node (nie goły `'node'`) i flagę `--disable-warning=ExperimentalWarning`.
 - [Manual] Brak `claude` w PATH → setup zatrzymuje się z handoff-komunikatem, niczego nie instaluje.
 
 **Weryfikacja:**
@@ -330,7 +330,7 @@ VPS** (nocny auto-update nie może zrestartować serwisu na niekompatybilnym Nod
 
 ---
 
-- [ ] **Unit 6: Sprzątanie skryptów + przepięcie `package.json` + uninstall pod nowy layout**
+- [x] **Unit 6: Sprzątanie skryptów + przepięcie `package.json` + uninstall pod nowy layout**
 
 **Cel:** Koniec dwóch konkurencyjnych ścieżek instalacji; `package.json` i uninstall spójne z nowym flow.
 
@@ -365,7 +365,7 @@ VPS** (nocny auto-update nie może zrestartować serwisu na niekompatybilnym Nod
 
 ---
 
-- [ ] **Unit 7: README — nowy flow instalacji (one-liner + checksum), usunięcie wymogu VS Build Tools**
+- [x] **Unit 7: README — nowy flow instalacji (one-liner + checksum), usunięcie wymogu VS Build Tools**
 
 **Cel:** Dokumentacja odzwierciedla nowy, prostszy flow; znika wymóg VS Build Tools; opisany trust `curl|bash`/`irm|iex`.
 

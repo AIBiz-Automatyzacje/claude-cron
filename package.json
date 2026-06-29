@@ -6,9 +6,9 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server.js",
     "test": "node --test",
-    "install:mac": "bash scripts/install-macos.sh",
+    "install:mac": "bash install.sh",
     "uninstall:mac": "bash scripts/uninstall-macos.sh",
-    "install:win": "powershell -ExecutionPolicy Bypass -File scripts/install-windows.ps1",
+    "install:win": "powershell -ExecutionPolicy Bypass -File install.ps1",
     "uninstall:win": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-windows.ps1",
     "install:vps": "bash scripts/install-vps.sh"
   },

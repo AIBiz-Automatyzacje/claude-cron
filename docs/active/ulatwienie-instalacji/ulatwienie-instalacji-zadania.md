@@ -100,9 +100,9 @@
 **Delegate:** feature-builder-data · **Wymagania:** R6, R8 · **Zależności:** brak (równoległy do Fazy 1)
 
 #### Implementacja
-- [ ] Stwórz `install.sh` (Mac/Linux bootstrap): wykryj platformę+arch, pobierz z `nodejs.org/dist/v<ver>/`, weryfikuj `SHASUMS256.txt`, rozpakuj do `.node/`, `exec .node/.../node setup.mjs`
-- [ ] Stwórz `install.ps1` (Windows bootstrap): analogicznie (zip → `node.exe`)
-- [ ] Detect-and-touch-only-missing: pomiń pobieranie gdy `.node/` z poprawną wersją istnieje; nie dotykaj systemowego Node/PATH/profilu
+- [x] Stwórz `install.sh` (Mac/Linux bootstrap): wykryj platformę+arch, pobierz z `nodejs.org/dist/v<ver>/`, weryfikuj `SHASUMS256.txt`, rozpakuj do `.node/`, `exec .node/.../node setup.mjs`
+- [x] Stwórz `install.ps1` (Windows bootstrap): analogicznie (zip → `node.exe`)
+- [x] Detect-and-touch-only-missing: pomiń pobieranie gdy `.node/` z poprawną wersją istnieje; nie dotykaj systemowego Node/PATH/profilu
 
 #### Testy
 - [ ] Test [Manual]: Mac — `bash install.sh` pobiera portable Node do `.node/`, weryfikuje sumę, odpala `setup.mjs`
@@ -122,16 +122,16 @@
 **Delegate:** feature-builder-data · **Wymagania:** R7, R8, R9 · **Zależności:** Unit 4, Unit 2
 
 #### Implementacja
-- [ ] Stwórz `setup.mjs` (pytania, generowanie hooka, merge `settings.json`, wywołanie smoke-testu, setup env)
-- [ ] Migruj logikę z `setup.sh:162-270` i `setup-windows.ps1:190-315` do `setup.mjs` (shell zostaje cienki)
-- [ ] Hook: absolutna ścieżka portable Node wypalona w `spawn()` + komendzie w `settings.json` + `--disable-warning=ExperimentalWarning` w args
-- [ ] Claude Code precondition: wykryj `claude` w PATH; brak → handoff-komunikat, NIE instaluj
-- [ ] Stwórz `setup.test.mjs` (pure helpery)
+- [x] Stwórz `setup.mjs` (pytania, generowanie hooka, merge `settings.json`, wywołanie smoke-testu, setup env)
+- [x] Migruj logikę z `setup.sh:162-270` i `setup-windows.ps1:190-315` do `setup.mjs` (shell zostaje cienki)
+- [x] Hook: absolutna ścieżka portable Node wypalona w `spawn()` + komendzie w `settings.json` + `--disable-warning=ExperimentalWarning` w args
+- [x] Claude Code precondition: wykryj `claude` w PATH; brak → handoff-komunikat, NIE instaluj
+- [x] Stwórz `setup.test.mjs` (pure helpery)
 
 #### Testy
-- [ ] Test: `resolveNodeBinPath('darwin', base)` → `.../bin/node`; `('win32', base)` → `...\node.exe`
-- [ ] Test: `mergeHookIntoSettings` — pusty settings dodaje wpis; istniejący wpis → bez duplikatu (idempotencja)
-- [ ] Test: generowany hook zawiera absolutną ścieżkę node (nie goły `'node'`) + flagę `--disable-warning=ExperimentalWarning`
+- [x] Test: `resolveNodeBinPath('darwin', base)` → `.../bin/node`; `('win32', base)` → `...\node.exe`
+- [x] Test: `mergeHookIntoSettings` — pusty settings dodaje wpis; istniejący wpis → bez duplikatu (idempotencja)
+- [x] Test: generowany hook zawiera absolutną ścieżkę node (nie goły `'node'`) + flagę `--disable-warning=ExperimentalWarning`
 - [ ] Test [Manual]: brak `claude` w PATH → setup zatrzymuje się z handoff, niczego nie instaluje
 
 #### Weryfikacja
@@ -148,9 +148,9 @@
 **Delegate:** feature-builder-data · **Wymagania:** R10 · **Zależności:** Unit 4, Unit 5
 
 #### Implementacja
-- [ ] Usuń `scripts/install-macos.sh`, `scripts/install-windows.ps1` (martwe LaunchAgent/Scheduled Task)
-- [ ] `package.json` — `install:mac` → `bash install.sh`; `install:win` → `powershell -ExecutionPolicy Bypass -File install.ps1`
-- [ ] `scripts/uninstall-macos.sh`, `scripts/uninstall-windows.ps1` — nowy layout: usuń wpis hooka z `settings.json` + plik hooka; `.node/` tylko za zgodą/flagą (confirm-before-delete)
+- [x] Usuń `scripts/install-macos.sh`, `scripts/install-windows.ps1` (martwe LaunchAgent/Scheduled Task)
+- [x] `package.json` — `install:mac` → `bash install.sh`; `install:win` → `powershell -ExecutionPolicy Bypass -File install.ps1`
+- [x] `scripts/uninstall-macos.sh`, `scripts/uninstall-windows.ps1` — nowy layout: usuń wpis hooka z `settings.json` + plik hooka; `.node/` tylko za zgodą/flagą (confirm-before-delete)
 
 #### Testy
 - [ ] Test [Manual]: `npm run uninstall:mac` po instalacji czysto usuwa hook z `settings.json` i plik hooka; `.node/` tylko za zgodą
@@ -166,9 +166,9 @@
 **Delegate:** feature-builder-data · **Wymagania:** R10 · **Zależności:** Unit 4, Unit 5, Unit 6
 
 #### Implementacja
-- [ ] `README.md` — sekcje Mac/Win: nowy entry point `install.sh`/`install.ps1`
-- [ ] `README.md:201-210` — usuń sekcję VS Build Tools
-- [ ] `README.md` — zaktualizuj wymaganą wersję Node; dodaj notkę trust/checksum dla `curl|bash`/`irm|iex`; wzmianka o portable Node `.node/`
+- [x] `README.md` — sekcje Mac/Win: nowy entry point `install.sh`/`install.ps1`
+- [x] `README.md:201-210` — usuń sekcję VS Build Tools
+- [x] `README.md` — zaktualizuj wymaganą wersję Node; dodaj notkę trust/checksum dla `curl|bash`/`irm|iex`; wzmianka o portable Node `.node/`
 
 #### Testy
 - [ ] Test [Manual]: czytelnik na czystym Windows przechodzi instalację z README bez instalowania VS Build Tools

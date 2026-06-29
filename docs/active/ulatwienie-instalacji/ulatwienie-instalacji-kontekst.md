@@ -55,12 +55,48 @@
 - **Brak typecheck/eslint** — projekt to czysty CommonJS bez TypeScript i bez konfiguracji ESLint. Zamiast typecheck: `node -c` (składnia OK na wszystkich plikach). Brak kroku `vite build` (brak frontendowego buildu).
 - **Cron-guard jako osobny skrypt, nie inline.** Cron roota uruchamia komendę w czystym shellu; guard musi czytać wersję Node usera `claude` — `su - $CLAUDE_USER -c '... && bash GUARD'`.
 
-## Otwarte pytania (odroczone do implementacji)
+### Faza 2 — ukończona (2026-06-29)
 
-- Dokładny patch portable Node (najnowszy stabilny 22.x LTS w momencie implementacji).
-- Mechanika one-linera `curl|bash`/`irm|iex` (klonuje repo vs zakłada sklonowane).
-- Layout `.node/` (flat vs zagnieżdżony `<dist-name>/`).
-- `MIN_NODE_VERSION` w `config.js` vs dedykowanym module guarda.
+**Unit 4 — portable Node bootstrap:** `install.sh` (Mac/Linux, tar.gz) + `install.ps1` (Windows, zip). Wykrycie platformy+arch, pobranie z `nodejs.org/dist/v22.17.0`, weryfikacja `SHASUMS256` (shasum/sha256sum unix, Get-FileHash win), rozpak do `.node/`, detect-and-touch-only-missing, `exec`/`&` handoff do `setup.mjs`. Layout zagnieżdżony `.node/node-v<ver>-<platform>-<arch>/` (rozstrzygnięcie odroczonej decyzji). Patch pinowany do 22.17.0 (stabilny 22.x LTS w oknie). `bash -n install.sh` OK; `install.ps1` do weryfikacji operatorem na Windows (brak pwsh na macOS).
+
+**Unit 5 — wspólny `setup.mjs`:** ESM, pure helpery (`resolveNodeBinPath(platform, baseDir, nodeVersion, arch)`, `mergeHookIntoSettings`, `removeHookFromSettings`, `buildHookSource(repoDir, nodeBinPath)`, `detectPortableNodeBin(execPath, platform, repoDir, arch)`, `isClaudeInstalled(probe)`) + cienka skorupa I/O w `main()`. Hook wypala ABSOLUTNĄ ścieżkę z `process.execPath` (realnie działający portable Node z `.node/`), `resolveNodeBinPath` to fallback. Flaga `--disable-warning=ExperimentalWarning` w args spawn. Detekcja `claude` w PATH (which/where) → handoff bez instalacji. Smoke-test DB po konfiguracji. Pytania zredukowane do workspace + autostart.
+
+**Unit 6 — sprzątanie:** usunięte martwe `scripts/install-macos.sh` + `scripts/install-windows.ps1`. `package.json`: `install:mac` → `bash install.sh`, `install:win` → `powershell -ExecutionPolicy Bypass -File install.ps1`. Uninstall (mac/win) pod nowy layout: usuwa wpis hooka z `settings.json` przez wspólny `removeHookFromSettings` (single source of truth markera), usuwa plik hooka; `.node/` tylko za flagą `--remove-node`/`-RemoveNode` (confirm-before-delete). Uninstall przyjmuje workspace jako 1. arg (domyślnie `$HOME`).
+
+**Unit 7 — README:** nowy entry point `install.sh`/`install.ps1`, usunięta sekcja VS Build Tools, notka trust/checksum dla `curl|bash`/`irm|iex`, wzmianka o portable Node `.node/`, zredukowana tabela pytań setup (Mac+Win: z 4 na 2 — workspace + autostart).
+
+### Decyzje z implementacji (Faza 2)
+
+- **Hook z `process.execPath`, nie rekonstrukcja ze stałych.** `detectPortableNodeBin` preferuje binarkę, która realnie odpaliła setup; `resolveNodeBinPath` (parametryzowany platform+ver+arch dla testowalności obu OS) to fallback.
+- **`.gitignore` += `.node/`** — portable binarki (~50 MB) nie wchodzą do repo (higiena/security). Poza zakresem „Pliki" planu, ale konieczne.
+- **`removeHookFromSettings` w `setup.mjs`** (nie duplikat parsowania JSON w bash/ps) — lustro `mergeHookIntoSettings`, jedno źródło markera; uninstall woła go przez portable Node z fallbackiem systemowym.
+- **Patch portable Node = 22.17.0** (najnowszy stabilny 22.x LTS w oknie `>=22.13 <25`).
+- **Brak typecheck/eslint** (czysty CommonJS/ESM) — zamiast tego `node --check` na `setup.mjs`/`setup.test.mjs`, `bash -n` na shellu. Brak `vite build` (brak frontendowego buildu).
+
+### Walidacja Fazy 2 (2026-06-29)
+
+- `node --test` (cały suite): **141 PASS / 0 FAIL** (121 z Fazy 1 + 20 nowych w `setup.test.mjs`).
+- `node --check setup.mjs` / `node --check setup.test.mjs`: OK. `bash -n install.sh` / `bash -n scripts/uninstall-macos.sh`: OK.
+- Wszystkie checkboxy Weryfikacja CLI/grep (Unit 4–7) PASS: SHASUMS256+nodejs.org+setup.mjs w install.sh/ps1; martwe skrypty usunięte; package.json przepięte; README bez build-tools/better-sqlite3, z nowym flow.
+- Manual/Operator: Windows (`install.ps1`, brak pwsh na macOS), brak `claude` w PATH, realne pobranie portable Node, uninstall end-to-end — do operatora.
+
+### Review fazy 1 (2026-06-29)
+
+Severity gate: **ZASTRZEZENIA** (0× P1, 2× P2, 14× P3 + findingi OPERATOR). Raport: `review-faza-1.md`.
+
+Kluczowe wnioski:
+- **P2 KOD** — bash `is_node_supported` + cron-guard sprawdzaja tylko dolny prog; brak gornej granicy `<25` rozjezdza sie z `engines`/`runtime-guard.js`. Na Node 25/26 cron zrestartuje serwis, ktory padnie `exit(1)` — scenariusz, ktoremu guard ma zapobiegac.
+- **P2 TEST** — `enforceNodeVersion` (efekt fail-fast `exit(1)`, rdzen R3) jest nietestowalny (czyta `process.versions.node` bez DI) i nieprzetestowany. Potrzebny refaktor z wstrzykiwana wersja + DI exit/stderr.
+- Bookkeeping Weryfikacja: wszystkie 11 checkboxow CLI/grep PASS (suite 121, runtime-guard 10).
+- E2E: brak scenariuszy przegladarkowych (warstwa DB/runtime/VPS).
+- 5 findingow OPERATOR (start na realnym Node, exit(1) na <22.13, install-vps na swiezym VPS, negatywny cron-guard) → sekcja "Operator checklist faza 1" w pliku zadan.
+
+## Otwarte pytania (rozstrzygnięte w implementacji)
+
+- ~~Dokładny patch portable Node~~ → **22.17.0** (najnowszy stabilny 22.x LTS w oknie).
+- ~~Mechanika one-linera `curl|bash`/`irm|iex`~~ → README opisuje wariant „pobierz → obejrzyj skrypt → uruchom" + checksum SHASUMS256; bootstrap zakłada repo sklonowane obok `setup.mjs`.
+- ~~Layout `.node/`~~ → **zagnieżdżony** `.node/node-v<ver>-<platform>-<arch>/` (zgodny z natywnym layoutem dystrybucji Node, bez post-processingu rozpaku).
+- ~~`MIN_NODE_VERSION` w `config.js` vs module guarda~~ → w `config.js` (single source of truth, Faza 1).
 
 ## Zależności
 
