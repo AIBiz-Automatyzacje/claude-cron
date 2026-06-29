@@ -1,0 +1,27 @@
+{
+  "wersja": 1,
+  "zadanie": "ulatwienie-instalacji",
+  "fazy": [
+    {
+      "numer": 1,
+      "nazwa": "Migracja DB (globalna) + guardy + VPS",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 2,
+      "nazwa": "Smart setup lokalny (Mac/Win) + sprzątanie",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    }
+  ],
+  "zakonczenie": {
+    "walidacja": "done",
+    "complete": "done",
+    "compound": "done"
+  }
+}
