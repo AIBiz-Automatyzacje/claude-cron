@@ -1,7 +1,7 @@
 ---
 title: "feat: Migracja claude-cron → Puls (rebrand + nowy front z dema + 2 dodatki backendu)"
 type: feat
-status: active
+status: completed
 date: 2026-06-23
 origin: MIGRACJA-PULS.md
 design_md: null          # brak docs/DESIGN.md; źródło designu = puls-demo/style.css (zaakceptowany 1:1, kopiowany w całości)
@@ -10,6 +10,9 @@ figma_screens: {}        # wzorzec wizualny: puls-demo/index.html + style.css (n
 ---
 
 # feat: Migracja claude-cron → Puls (rebrand + nowy front z dema + 2 dodatki backendu)
+
+> **Status: ZREALIZOWANE — wszystkie 4 fazy ukończone, 80/80 PASS.** Archiwum: `docs/completed/migracja-puls-rebrand/`.
+> Reszta otwarta = wyłącznie operatorska weryfikacja wizualna widoku kalendarza tygodnia na realnych danych (Unit 9).
 
 ## Przegląd
 
