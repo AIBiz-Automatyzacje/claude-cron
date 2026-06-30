@@ -18,8 +18,8 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 - [x] Test: `curl|bash` na czystym katalogu → repo w `~/claude-cron`, setup startuje, pytania czytają z klawiatury (symulacja skryptowa `install.test.sh`)
 - [x] Test: uruchomienie z już sklonowanego repo → tryb lokalny, bez pobierania tarballa
 - [x] Test: [KONTRAKT DANYCH] re-run one-linera z plikiem `data/SENTINEL` → po update plik istnieje, baza nietknięta, `.node/` zachowany
-- [ ] Weryfikacja: `bash -n install.sh` przechodzi
-- [ ] Weryfikacja: `grep -n "/dev/tty\|archive/refs/heads/main.tar.gz\|setup.mjs" install.sh` pokazuje fix TTY + bootstrap
+- [x] Weryfikacja: `bash -n install.sh` przechodzi
+- [x] Weryfikacja: `grep -n "/dev/tty\|archive/refs/heads/main.tar.gz\|setup.mjs" install.sh` pokazuje fix TTY + bootstrap
 - [ ] Operator: odpalenie one-linera na czystym Macu (lub w temp) — potwierdzenie pełnego przebiegu
 
 ---
@@ -38,7 +38,7 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 - [ ] Test: uruchomienie z już sklonowanego repo → tryb lokalny, bez pobierania zip (skrypt na dysku) [OPERATOR/Windows — suite `install.ps1.Tests.ps1` parytet 1:1 z install.test.sh]
 - [ ] Test: [KONTRAKT DANYCH] re-run one-linera z plikiem `data\SENTINEL` → po update plik istnieje, baza nietknięta, `.node\` zachowany [OPERATOR/Windows — suite `install.ps1.Tests.ps1`]
 - [ ] Weryfikacja: parse PowerShell przechodzi bez błędów
-- [ ] Weryfikacja: `grep -n "archive/refs/heads/main.zip\|Expand-Archive\|setup.mjs\|PSScriptRoot" install.ps1` pokazuje bootstrap + detekcję trybu
+- [x] Weryfikacja: `grep -n "archive/refs/heads/main.zip\|Expand-Archive\|setup.mjs\|PSScriptRoot" install.ps1` pokazuje bootstrap + detekcję trybu
 - [ ] Operator: odpalenie one-linera na czystym Windows — potwierdzenie pełnego przebiegu (pytania + auto-start + auto-open)
 
 ---
@@ -54,8 +54,8 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 - [x] Test: `buildOpenBrowserCommand('darwin','http://localhost:7777')` → cmd `open` z URL (happy path)
 - [x] Test: `buildOpenBrowserCommand('win32', url)` → `Start-Process`/`cmd start` z URL
 - [x] Test: `buildOpenBrowserCommand('linux', url)` → `null` (error case — caller nie crashuje, link wypisany)
-- [ ] Weryfikacja: `node --test setup.test.mjs` przechodzi (nowe testy zielone)
-- [ ] Weryfikacja: `node --check setup.mjs` ok; `grep -n "buildOpenBrowserCommand\|open\|Start-Process" setup.mjs` pokazuje auto-open Mac/Win + wypisanie linku
+- [x] Weryfikacja: `node --test setup.test.mjs` przechodzi (nowe testy zielone)
+- [x] Weryfikacja: `node --check setup.mjs` ok; `grep -n "buildOpenBrowserCommand\|open\|Start-Process" setup.mjs` pokazuje auto-open Mac/Win + wypisanie linku
 - [ ] Operator: po one-linerze serwer działa i przeglądarka sama otwiera `localhost:7777` (Mac i Windows); link też widoczny w terminalu
 
 ---
@@ -71,10 +71,10 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 - [x] Dopisz że serwer i przeglądarka startują same (desktop)
 - [ ] Test: czytelnik na czystym Macu przechodzi instalację samym one-linerem [Manual/OPERATOR]
 - [ ] Test: czytelnik na czystym Windows przechodzi instalację samym one-linerem [Manual/OPERATOR]
-- [ ] Weryfikacja: `grep -n "raw.githubusercontent.*install.sh" README.md` pokazuje one-liner Mac
-- [ ] Weryfikacja: `grep -n "raw.githubusercontent.*install.ps1" README.md` pokazuje one-liner Windows
-- [ ] Weryfikacja: `grep -n "install-vps.sh" README.md` pokazuje one-liner VPS
-- [ ] Weryfikacja: `grep -n "node-v22.17.0-darwin-arm64/bin/node server.js" README.md` zwraca pusto (brzydki krok usunięty)
+- [x] Weryfikacja: `grep -n "raw.githubusercontent.*install.sh" README.md` pokazuje one-liner Mac
+- [x] Weryfikacja: `grep -n "raw.githubusercontent.*install.ps1" README.md` pokazuje one-liner Windows
+- [x] Weryfikacja: `grep -n "install-vps.sh" README.md` pokazuje one-liner VPS
+- [x] Weryfikacja: `grep -n "node-v22.17.0-darwin-arm64/bin/node server.js" README.md` zwraca pusto (brzydki krok usunięty)
 
 ---
 
