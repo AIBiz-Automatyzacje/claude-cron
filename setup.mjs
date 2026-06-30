@@ -246,6 +246,55 @@ function sanitizeDroppedPath(input) {
   return value;
 }
 
+// === Pure helper: komenda natywnego okna wyboru folderu per OS ===
+// darwin → osascript 'choose folder' (Finder); win32 → PowerShell FolderBrowserDialog.
+// Zwraca null dla platform bez GUI pickera (np. linux/VPS) → caller spada do pytania tekstowego.
+export function buildFolderPickerCommand(platform, promptText) {
+  const text = String(promptText ?? '');
+  if (platform === 'darwin') {
+    const escaped = text.replace(/"/g, '\\"');
+    return {
+      cmd: 'osascript',
+      args: ['-e', `POSIX path of (choose folder with prompt "${escaped}")`],
+    };
+  }
+  if (platform === 'win32') {
+    const escaped = text.replace(/'/g, "''");
+    const script =
+      'Add-Type -AssemblyName System.Windows.Forms;' +
+      '$f = New-Object System.Windows.Forms.FolderBrowserDialog;' +
+      `$f.Description = '${escaped}';` +
+      "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }";
+    return {
+      cmd: 'powershell',
+      args: ['-NoProfile', '-Command', script],
+    };
+  }
+  return null;
+}
+
+// === Pure helper: wynik pickera → ścieżka albo null ===
+// Anulowanie okna: osascript kończy status!=0; PowerShell status=0 z pustym stdout.
+// Brak binarki/GUI: spawnSync zwraca { status: null, error }. Wszystkie → null (fallback).
+export function parseFolderPickerResult(result) {
+  if (!result || result.status !== 0 || typeof result.stdout !== 'string') {
+    return null;
+  }
+  const value = result.stdout.trim();
+  return value || null;
+}
+
+// === I/O shell: odpal natywne okno wyboru folderu (DI: spawn) ===
+function pickFolderGui(promptText, spawn = spawnSync) {
+  const command = buildFolderPickerCommand(process.platform, promptText);
+  if (!command) {
+    return null;
+  }
+  // spawnSync nie rzuca przy braku binarki — zwraca { status: null, error } → parse da null.
+  const result = spawn(command.cmd, command.args, { encoding: 'utf8' });
+  return parseFolderPickerResult(result);
+}
+
 function writeHook(workspace, repoDir, nodeBin) {
   const hooksDir = path.join(workspace, '.claude', 'hooks');
   const hookFile = path.join(hooksDir, 'claude-cron-autostart.js');
@@ -308,8 +357,21 @@ async function main() {
   const rcFile = resolveShellRc();
 
   try {
-    const workspaceInput = await ask(rl, 'Ścieżka do workspace [' + os.homedir() + ']: ', os.homedir());
-    const workspace = path.resolve(sanitizeDroppedPath(workspaceInput));
+    const workspaceDefault = process.env.CLAUDE_CRON_WORKSPACE || os.homedir();
+    let workspace;
+    const pickedFolder = pickFolderGui('Wybierz folder workspace (vault) dla Claude-Cron');
+    if (pickedFolder) {
+      workspace = path.resolve(pickedFolder);
+      console.log(`[ok] Wybrano w oknie: ${workspace}`);
+    } else {
+      // Brak GUI / anulowano okno → pytanie tekstowe (możliwy drag & drop z Findera).
+      const workspaceInput = await ask(
+        rl,
+        `Ścieżka do workspace (możesz przeciągnąć folder z Findera) [${workspaceDefault}]: `,
+        workspaceDefault,
+      );
+      workspace = path.resolve(sanitizeDroppedPath(workspaceInput));
+    }
     if (!fs.existsSync(workspace)) {
       console.error(`[error] Folder workspace nie istnieje: ${workspace}`);
       process.exit(1);

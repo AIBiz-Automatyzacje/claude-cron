@@ -11,6 +11,8 @@ import {
   isClaudeInstalled,
   upsertEnvLine,
   buildVpsUrl,
+  buildFolderPickerCommand,
+  parseFolderPickerResult,
   NODE_VERSION,
 } from './setup.mjs';
 
@@ -249,4 +251,50 @@ test('buildVpsUrl domyślny port 7777 gdy port pusty', () => {
 test('buildVpsUrl zwraca null dla pustego/białego hosta (tryb tylko lokalny)', () => {
   assert.equal(buildVpsUrl('', '7777'), null);
   assert.equal(buildVpsUrl('   ', '7777'), null);
+});
+
+// === buildFolderPickerCommand — natywne okno wyboru folderu per OS ===
+
+test('buildFolderPickerCommand darwin → osascript choose folder z promptem', () => {
+  const cmd = buildFolderPickerCommand('darwin', 'Wybierz vault');
+  assert.equal(cmd.cmd, 'osascript');
+  assert.ok(cmd.args.join(' ').includes('choose folder'));
+  assert.ok(cmd.args.join(' ').includes('Wybierz vault'));
+});
+
+test('buildFolderPickerCommand win32 → powershell FolderBrowserDialog', () => {
+  const cmd = buildFolderPickerCommand('win32', 'Wybierz vault');
+  assert.equal(cmd.cmd, 'powershell');
+  assert.ok(cmd.args.join(' ').includes('FolderBrowserDialog'));
+});
+
+test('buildFolderPickerCommand escapuje cudzysłów w promptcie (darwin)', () => {
+  const cmd = buildFolderPickerCommand('darwin', 'A "B" C');
+  assert.ok(cmd.args.some((a) => a.includes('A \\"B\\" C')));
+});
+
+test('buildFolderPickerCommand zwraca null dla platformy bez GUI pickera (linux)', () => {
+  assert.equal(buildFolderPickerCommand('linux', 'x'), null);
+});
+
+// === parseFolderPickerResult — wynik spawna → ścieżka albo null ===
+
+test('parseFolderPickerResult zwraca przyciętą ścieżkę przy status 0', () => {
+  assert.equal(
+    parseFolderPickerResult({ status: 0, stdout: '/Users/x/vault/\n' }),
+    '/Users/x/vault/',
+  );
+});
+
+test('parseFolderPickerResult → null przy anulowaniu osascript (status 1)', () => {
+  assert.equal(parseFolderPickerResult({ status: 1, stdout: '' }), null);
+});
+
+test('parseFolderPickerResult → null przy anulowaniu PowerShell (status 0, pusty stdout)', () => {
+  assert.equal(parseFolderPickerResult({ status: 0, stdout: '  \n' }), null);
+});
+
+test('parseFolderPickerResult → null gdy brak binarki/GUI (status null, error)', () => {
+  assert.equal(parseFolderPickerResult({ status: null, error: new Error('ENOENT') }), null);
+  assert.equal(parseFolderPickerResult(null), null);
 });
