@@ -14,10 +14,11 @@
 //  w setup.test.mjs; I/O (pytania, zapis plików) to cienka skorupa w main().
 // ============================================
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +31,13 @@ export const NODE_VERSION = '22.17.0';
 const REPO_DIR = path.dirname(fileURLToPath(import.meta.url));
 const HOOK_MARKER = 'claude-cron-autostart';
 const EXPERIMENTAL_WARNING_FLAG = '--disable-warning=ExperimentalWarning';
+
+// Dashboard claude-cron — port wolny z założenia (kolizji nie obsługujemy, poza scope).
+export const DASHBOARD_PORT = 7777;
+export const DASHBOARD_URL = `http://localhost:${DASHBOARD_PORT}`;
+// Limit pollowania serwera po spawnie, zanim wypiszemy link / otworzymy przeglądarkę.
+const SERVER_POLL_ATTEMPTS = 20;
+const SERVER_POLL_INTERVAL_MS = 500;
 
 // === Pure helper: ścieżka binarki portable Node (layout install.sh / install.ps1) ===
 // darwin/linux: <base>/node-v<ver>-<platform>-<arch>/bin/node
@@ -284,6 +292,21 @@ export function parseFolderPickerResult(result) {
   return value || null;
 }
 
+// === Pure helper: komenda otwarcia URL-a w domyślnej przeglądarce per OS ===
+// darwin → `open <url>`; win32 → `cmd /c start "" <url>` (pusty tytuł, by start nie
+// potraktował URL-a jako tytułu okna). Każda inna platforma (linux/headless) → null:
+// caller NIE spawnuje i polega na wypisanym linku. Best-effort — brak detekcji DISPLAY.
+export function buildOpenBrowserCommand(platform, url) {
+  const target = String(url ?? '');
+  if (platform === 'darwin') {
+    return { cmd: 'open', args: [target] };
+  }
+  if (platform === 'win32') {
+    return { cmd: 'cmd', args: ['/c', 'start', '', target] };
+  }
+  return null;
+}
+
 // === I/O shell: odpal natywne okno wyboru folderu (DI: spawn) ===
 function pickFolderGui(promptText, spawn = spawnSync) {
   const command = buildFolderPickerCommand(process.platform, promptText);
@@ -293,6 +316,83 @@ function pickFolderGui(promptText, spawn = spawnSync) {
   // spawnSync nie rzuca przy braku binarki — zwraca { status: null, error } → parse da null.
   const result = spawn(command.cmd, command.args, { encoding: 'utf8' });
   return parseFolderPickerResult(result);
+}
+
+// === I/O shell: ping dashboardu (HTTP GET /api/status) — true gdy serwer odpowiada ===
+function pingDashboard() {
+  return new Promise((resolve) => {
+    const req = http.get(
+      `${DASHBOARD_URL}/api/status`,
+      { timeout: 1000 },
+      (res) => {
+        res.resume();
+        resolve(true);
+      },
+    );
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+// === I/O shell: spawn detached serwera portable Nodem (reuse wzorca z buildHookSource) ===
+// cwd=REPO_DIR, --disable-warning, detached+unref (proces przeżyje setup). Na darwin
+// caffeinate trzyma Maca wybudzonego, póki serwer żyje (guard platformy).
+function spawnServer(nodeBin, repoDir) {
+  const child = spawn(nodeBin, [EXPERIMENTAL_WARNING_FLAG, 'server.js'], {
+    cwd: repoDir,
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  if (process.platform === 'darwin' && child.pid) {
+    spawn('caffeinate', ['-w', String(child.pid)], {
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+  }
+}
+
+// === I/O shell: poll dashboardu aż odpowie albo wyczerpie limit prób (nie crashuje) ===
+async function waitForDashboard() {
+  for (let attempt = 0; attempt < SERVER_POLL_ATTEMPTS; attempt += 1) {
+    if (await pingDashboard()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, SERVER_POLL_INTERVAL_MS));
+  }
+  return false;
+}
+
+// === I/O shell: auto-open dashboardu w przeglądarce (best-effort, Mac/Win) ===
+// Null command (linux/headless) → nic nie robimy, link już wypisany. spawnSync nie
+// rzuca przy braku binarki (zwraca { error }) — auto-open padło, link i tak jest.
+function openDashboard() {
+  const command = buildOpenBrowserCommand(process.platform, DASHBOARD_URL);
+  if (!command) {
+    return;
+  }
+  spawnSync(command.cmd, command.args, { stdio: 'ignore' });
+}
+
+// === I/O shell: zapewnij że serwer działa, ZAWSZE wypisz link, otwórz przeglądarkę ===
+// Ping → jeśli down, spawn detached + poll. Link wypisywany BEZWARUNKOWO (nawet gdy
+// serwer nie wstał). Auto-open dopiero po potwierdzeniu odpowiedzi (Mac/Win, best-effort).
+async function startServerAndOpen(nodeBin, repoDir) {
+  let running = await pingDashboard();
+  if (!running) {
+    spawnServer(nodeBin, repoDir);
+    running = await waitForDashboard();
+  }
+
+  console.log(`\n🫀  Dashboard: ${DASHBOARD_URL}`);
+  if (!running) {
+    console.log('[info] Serwer nie odpowiedział w czasie — otwórz link ręcznie po chwili.');
+    return;
+  }
+  openDashboard();
 }
 
 function writeHook(workspace, repoDir, nodeBin) {
@@ -415,6 +515,9 @@ async function main() {
   console.log('\n[info] Smoke-test bazy danych...');
   await runSmokeTest();
   console.log('[ok] Smoke-test DB przeszedł — typy zgodne.');
+
+  // Auto-start serwera + auto-open przeglądarki (Mac/Win). Link wypisany ZAWSZE.
+  await startServerAndOpen(nodeBin, REPO_DIR);
 
   console.log('\n🕹️  Gotowe!\n');
 }

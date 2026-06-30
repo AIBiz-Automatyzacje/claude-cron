@@ -48,11 +48,20 @@ apt update && apt install -y git curl
 
 ### 1.3 — Odpal installer
 
+Jedna komenda — pobiera i odpala installer prosto z `main`:
+
 ```bash
-git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git /tmp/claude-cron-install && bash /tmp/claude-cron-install/scripts/install-vps.sh
+curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/scripts/install-vps.sh | sudo bash
 ```
 
-Installer zrobi wszystko automatycznie. Po drodze zapyta:
+> **🔒 Wykonujesz kod z internetu.** Ta komenda odpala skrypt prosto z GitHuba jako `root`. Jeśli wolisz najpierw go obejrzeć:
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/scripts/install-vps.sh -o install-vps.sh
+> # otwórz install-vps.sh w edytorze, przejrzyj — dopiero potem:
+> sudo bash install-vps.sh
+> ```
+
+Installer zrobi wszystko automatycznie (`git clone` repo, portable Node z weryfikacją `SHASUMS256`, systemd). Po drodze zapyta:
 
 | Pytanie | Co wpisać |
 |---------|-----------|
@@ -79,11 +88,14 @@ Przykład: `100.86.100.113`
 ## 💻 Krok 2 — Instalacja lokalna
 
 > **🔒 O komendach `curl … | bash` i `irm … | iex`**
-> Instalacja Claude Code (i wielu narzędzi CLI) odpala skrypt prosto z internetu — to wygodne, ale wykonujesz kod, którego nie widziałeś. Świadomie omija to ostrzeżenia Gatekeeper (Mac) / SmartScreen (Windows). Zanim odpalisz, możesz **najpierw obejrzeć skrypt**:
-> - Mac/Linux: `curl -fsSL https://claude.ai/install.sh -o install.sh` → otwórz `install.sh` w edytorze → dopiero potem `bash install.sh`
-> - Windows: `irm https://claude.ai/install.ps1 -OutFile install.ps1` → otwórz `install.ps1` → dopiero potem `.\install.ps1`
+> Instalacja Pulsa (i Claude Code, i wielu narzędzi CLI) odpala skrypt prosto z internetu — to wygodne, ale **wykonujesz kod, którego nie widziałeś**. Świadomie omija to ostrzeżenia Gatekeeper (Mac) / SmartScreen (Windows). Zanim odpalisz, możesz **najpierw obejrzeć skrypt** — pobierz do pliku, przejrzyj w edytorze, dopiero potem uruchom:
+> - Mac/Linux: `curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/install.sh -o install.sh` → otwórz `install.sh` → dopiero potem `bash install.sh`
+> - Windows: `irm https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/install.ps1 -OutFile install.ps1` → otwórz `install.ps1` → dopiero potem `.\install.ps1`
+> - VPS: `curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/scripts/install-vps.sh -o install-vps.sh` → otwórz `install-vps.sh` → dopiero potem `sudo bash install-vps.sh`
 >
-> Installer Pulsa (`install.sh` / `install.ps1`) pobiera przenośny Node z `nodejs.org` i **weryfikuje sumę kontrolną `SHASUMS256`** przed rozpakowaniem — uszkodzone lub podmienione archiwum przerywa instalację.
+> (to samo dotyczy installera Claude Code — `curl -fsSL https://claude.ai/install.sh -o install.sh` / `irm https://claude.ai/install.ps1 -OutFile install.ps1`)
+>
+> Installer Pulsa (`install.sh` / `install.ps1`) pobiera przenośny Node z `nodejs.org` i **weryfikuje sumę kontrolną `SHASUMS256`** przed rozpakowaniem — uszkodzone lub podmienione archiwum przerywa instalację. Dotyczy to obu komend: i `curl … | bash`, i `irm … | iex` wykonują kod z internetu, więc weryfikacja sumy jest twardym warunkiem każdego toru.
 
 Wybierz swoją platformę:
 
@@ -114,49 +126,32 @@ brew install --cask tailscale
 ```
 Albo pobierz z [tailscale.com/download](https://tailscale.com/download).
 
-#### Krok 2 — Stwórz folder na projekt
-
-Wybierz folder w którym chcesz trzymać claude-cron i wejdź do niego w terminalu. Przykład:
+#### Krok 2 — Wklej jedną komendę
 
 ```bash
-cd ~/Documents
+curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/install.sh | bash
 ```
 
-#### Krok 3 — Sklonuj repo
+To wszystko. Ta jedna komenda:
 
-```bash
-git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git
-cd claude-cron
-```
+1. Pobiera repo do `~/claude-cron` (bez `git` — przez tarball, więc nie odpala instalacji Xcode CLT),
+2. Stawia przenośny Node w `.node/` (weryfikując sumę `SHASUMS256` z nodejs.org),
+3. Przekazuje sterowanie do `setup.mjs`, który **pyta o 4 rzeczy** (odpowiadasz w terminalu):
 
-#### Krok 4 — Uruchom installer
+| Pytanie | Co wpisać |
+|---------|-----------|
+| **1. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). Otworzy się **natywne okno wyboru folderu** (macOS `osascript` „choose folder" w Finderze) — zaznacz folder i kliknij OK. Jeśli okno się nie pojawi, wpisz ścieżkę w terminalu |
+| **2. VPS** | Tailscale IP VPS-a z kroku 1.4 (np. `100.86.100.113`) albo Enter, jeśli używasz Pulsa tylko lokalnie |
+| **3. Discord** | URL webhooka Discord do powiadomień albo Enter, żeby pominąć |
+| **4. Autostart** | `Y` — serwer startuje automatycznie z każdą sesją Claude Code |
 
-```bash
-bash install.sh
-```
+#### Gotowe 🎉
 
-`install.sh` to cienki bootstrap: stawia przenośny Node w `.node/` (weryfikując sumę `SHASUMS256` z nodejs.org), a potem przekazuje sterowanie do `setup.mjs`, który pyta o konfigurację. Następnie pyta o 2 rzeczy:
+Po odpowiedziach **serwer startuje sam w tle**, a **przeglądarka otwiera się automatycznie** na retro arcade dashboardzie. Link jest też zawsze wypisany w terminalu jako siatka bezpieczeństwa:
 
-| Krok | Co wpisać |
-|------|-----------|
-| **1. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). **Tip:** przeciągnij folder z Findera do terminala — automatycznie wklei ścieżkę |
-| **2. Autostart** | `Y` — serwer startuje automatycznie z każdą sesją Claude Code |
+**[http://localhost:7777](http://localhost:7777)**
 
-#### Krok 5 — Odpal serwer
-
-```bash
-.node/node-v22.17.0-darwin-arm64/bin/node server.js
-```
-
-> **Procesor Intel?** Zamień w ścieżce `darwin-arm64` na `darwin-x64`. Jeśli włączyłeś autostart, możesz ten krok pominąć — hook autostartu odpala serwer sam (z wypaloną ścieżką do portable Node).
-
-> **To pierwszy i ostatni raz kiedy uruchamiasz serwer ręcznie.** Jeśli włączyłeś autostart — od następnej sesji Claude Code serwer odpali się sam w tle. Nie musisz nic robić.
-
-#### Krok 6 — Sprawdź dashboard
-
-Otwórz w przeglądarce: **[http://localhost:7777](http://localhost:7777)**
-
-Powinieneś zobaczyć retro arcade dashboard. Gotowe! 🎉
+> Od następnej sesji Claude Code (jeśli włączyłeś autostart) serwer odpala się sam — nie musisz nic robić, nigdy nie uruchamiasz go ręcznie.
 
 ---
 
@@ -197,47 +192,34 @@ winget install Tailscale.Tailscale
 ```
 Albo pobierz z [tailscale.com/download](https://tailscale.com/download).
 
-#### Krok 2 — Stwórz folder na projekt
+#### Krok 2 — Wklej jedną komendę
 
-W Eksploratorze plików stwórz folder gdzie chcesz, np. `C:\Users\<ty>\Documents\Kodowanie\`. Potem **kliknij prawym przyciskiem na folder → "Open in Terminal"** (Windows 11) lub otwórz PowerShell i wejdź do folderu:
-
-```powershell
-cd $env:USERPROFILE\Documents\Kodowanie
-```
-
-#### Krok 3 — Sklonuj repo
+W PowerShell:
 
 ```powershell
-git clone https://github.com/AIBiz-Automatyzacje/claude-cron.git
-cd claude-cron
+irm https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/install.ps1 | iex
 ```
 
-#### Krok 4 — Uruchom installer
+To wszystko. Ta jedna komenda:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
+1. Pobiera repo do `$HOME\claude-cron` (bez `git` — przez zip + `Expand-Archive`),
+2. Stawia przenośny Node w `.node\` (weryfikując sumę `SHASUMS256` z nodejs.org),
+3. Przekazuje sterowanie do `setup.mjs`, który **pyta o 4 rzeczy** (odpowiadasz w terminalu):
 
-`install.ps1` to cienki bootstrap: stawia przenośny Node w `.node\` (weryfikując sumę `SHASUMS256` z nodejs.org), a potem przekazuje sterowanie do `setup.mjs`, który pyta o konfigurację. Następnie pyta o 2 rzeczy:
+| Pytanie | Co wpisać |
+|---------|-----------|
+| **1. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). Otworzy się **natywne okno wyboru folderu** (Windows `FolderBrowserDialog`) — zaznacz folder i kliknij OK. Jeśli okno się nie pojawi, wklej pełną ścieżkę w terminalu, np. `C:\Users\kacpe\OneDrive\Obsidian\Vault` |
+| **2. VPS** | Tailscale IP VPS-a z kroku 1.4 (np. `100.86.100.113`) albo Enter, jeśli używasz Pulsa tylko lokalnie |
+| **3. Discord** | URL webhooka Discord do powiadomień albo Enter, żeby pominąć |
+| **4. Autostart** | `Y` — serwer startuje automatycznie z Claude Code |
 
-| Krok | Co wpisać |
-|------|-----------|
-| **1. Workspace** | **Wklej pełną ścieżkę** do folderu, np. `C:\Users\kacpe\OneDrive\Obsidian\Vault`. Drag & drop z Eksploratora **nie działa** w PowerShell — musisz wkleić ścieżkę ręcznie |
-| **2. Autostart** | `Y` — serwer startuje automatycznie z Claude Code |
+#### Gotowe 🎉
 
-#### Krok 5 — Odpal serwer
+Po odpowiedziach **serwer startuje sam w tle**, a **przeglądarka otwiera się automatycznie** na dashboardzie. Link jest też zawsze wypisany w terminalu:
 
-```powershell
-.node\node-v22.17.0-win-x64\node.exe server.js
-```
+**[http://localhost:7777](http://localhost:7777)**
 
-> Jeśli włączyłeś autostart, możesz ten krok pominąć — hook autostartu odpala serwer sam (z wypaloną ścieżką do portable Node).
-
-#### Krok 6 — Sprawdź dashboard
-
-Otwórz w przeglądarce: **[http://localhost:7777](http://localhost:7777)**
-
-Gotowe! 🎉
+> Od następnej sesji Claude Code (jeśli włączyłeś autostart) serwer odpala się sam — nigdy nie uruchamiasz go ręcznie.
 
 ---
 
@@ -316,18 +298,19 @@ sudo tailscale funnel --bg 7777
 
 | Co chcesz zrobić | Komenda |
 |------------------|---------|
-| Uruchomić ręcznie | `cd ~/Documents/Kodowanie/claude-cron && .node/node-v22.17.0-darwin-arm64/bin/node server.js` |
-| Zaktualizować kod | `cd ~/Documents/Kodowanie/claude-cron && git pull` |
+| Wymusić start serwera | Odpal nową sesję Claude Code w workspace — hook autostartu startuje serwer sam |
+| Przeinstalować od nowa | `curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/install.sh \| bash` (re-run nie kasuje bazy ani `.node/`) |
+| Zaktualizować kod | `cd ~/claude-cron && git pull` |
 | Sprawdzić co zajmuje port | `lsof -i :7777` |
 
 ### 🪟 Windows
 
 | Co chcesz zrobić | Komenda |
 |------------------|---------|
-| Uruchomić ręcznie | `cd $env:USERPROFILE\Documents\Kodowanie\claude-cron; .node\node-v22.17.0-win-x64\node.exe server.js` |
-| Zaktualizować kod | `cd $env:USERPROFILE\Documents\Kodowanie\claude-cron; git pull` |
+| Wymusić start serwera | Odpal nową sesję Claude Code w workspace — hook autostartu startuje serwer sam |
+| Przeinstalować od nowa | `irm https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/install.ps1 \| iex` (re-run nie kasuje bazy ani `.node\`) |
+| Zaktualizować kod | `cd $HOME\claude-cron; git pull` |
 | Sprawdzić co zajmuje port | `netstat -ano \| findstr :7777` |
-| Uruchomić na innym porcie | `$env:CLAUDE_CRON_PORT=7778; .node\node-v22.17.0-win-x64\node.exe server.js` |
 
 ### Na VPS-ie (przez SSH)
 
@@ -404,18 +387,19 @@ sudo systemctl restart claude-cron
 
 ### Port 7777 jest zajęty
 
+Sprawdź co trzyma port:
+
 🍎 Mac:
 ```bash
 lsof -i :7777
-CLAUDE_CRON_PORT=7778 .node/node-v22.17.0-darwin-arm64/bin/node server.js
 ```
 
 🪟 Windows:
 ```powershell
 netstat -ano | findstr :7777
-$env:CLAUDE_CRON_PORT = 7778
-.node\node-v22.17.0-win-x64\node.exe server.js
 ```
+
+Najczęściej to wcześniej uruchomiony serwer Pulsa — wystarczy go ubić. Hook autostartu odpali nowy proces przy następnej sesji Claude Code.
 
 ---
 
@@ -427,7 +411,7 @@ $env:CLAUDE_CRON_PORT = 7778
 2. Usuń z `~/.zshrc` zmienne `CLAUDE_CRON_VPS_URL`, `CLAUDE_CRON_WORKSPACE`, `DISCORD_WEBHOOK_URL`
 3. Usuń folder repo:
    ```bash
-   rm -rf ~/Documents/Kodowanie/claude-cron
+   rm -rf ~/claude-cron
    ```
 
 ### 🪟 Windows
@@ -438,7 +422,7 @@ $env:CLAUDE_CRON_PORT = 7778
    [Environment]::SetEnvironmentVariable('CLAUDE_CRON_WORKSPACE', $null, 'User')
    [Environment]::SetEnvironmentVariable('CLAUDE_CRON_VPS_URL', $null, 'User')
    [Environment]::SetEnvironmentVariable('DISCORD_WEBHOOK_URL', $null, 'User')
-   Remove-Item -Recurse -Force $env:USERPROFILE\Documents\Kodowanie\claude-cron
+   Remove-Item -Recurse -Force $HOME\claude-cron
    ```
 
 > Dane (historia jobów, baza SQLite) są w folderze `data/` wewnątrz repo — usuwane razem z nim.

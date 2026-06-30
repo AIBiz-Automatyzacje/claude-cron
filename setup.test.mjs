@@ -13,6 +13,7 @@ import {
   buildVpsUrl,
   buildFolderPickerCommand,
   parseFolderPickerResult,
+  buildOpenBrowserCommand,
   NODE_VERSION,
 } from './setup.mjs';
 
@@ -297,4 +298,23 @@ test('parseFolderPickerResult → null przy anulowaniu PowerShell (status 0, pus
 test('parseFolderPickerResult → null gdy brak binarki/GUI (status null, error)', () => {
   assert.equal(parseFolderPickerResult({ status: null, error: new Error('ENOENT') }), null);
   assert.equal(parseFolderPickerResult(null), null);
+});
+
+// === buildOpenBrowserCommand — auto-open URL w przeglądarce per OS (Mac/Win) ===
+
+test('buildOpenBrowserCommand darwin → open z URL (happy path)', () => {
+  const cmd = buildOpenBrowserCommand('darwin', 'http://localhost:7777');
+  assert.equal(cmd.cmd, 'open');
+  assert.deepEqual(cmd.args, ['http://localhost:7777']);
+});
+
+test('buildOpenBrowserCommand win32 → cmd start z URL', () => {
+  const cmd = buildOpenBrowserCommand('win32', 'http://localhost:7777');
+  assert.equal(cmd.cmd, 'cmd');
+  assert.ok(cmd.args.includes('start'), 'win32 musi użyć start do otwarcia URL');
+  assert.ok(cmd.args.includes('http://localhost:7777'), 'URL musi trafić do args');
+});
+
+test('buildOpenBrowserCommand linux → null (caller nie spawnuje, link wypisany)', () => {
+  assert.equal(buildOpenBrowserCommand('linux', 'http://localhost:7777'), null);
 });

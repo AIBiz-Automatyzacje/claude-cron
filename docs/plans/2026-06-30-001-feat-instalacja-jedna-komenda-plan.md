@@ -156,7 +156,7 @@ Audyt obecnego flow wykazał dopieszczony środek (`install.sh`/`install.ps1` + 
 
 ## Implementation Units
 
-- [ ] **Unit 1: `install.sh` (Mac/Linux) tryb dualny — bootstrap przez curl|tar (bez git) + fix TTY**
+- [x] **Unit 1: `install.sh` (Mac/Linux) tryb dualny — bootstrap przez curl|tar (bez git) + fix TTY** *(impl + testy headless: `bash -n` ✅, `install.test.sh` 4/4 ✅, grep ✅; operator pending)*
 
 **Cel:** `curl|bash` pobiera repo bez `git` do `~/claude-cron` i odpala setup z działającym stdin.
 **Wymagania:** R1, R2 · **Zależności:** brak · **Delegate:** feature-builder-data
@@ -188,7 +188,7 @@ Audyt obecnego flow wykazał dopieszczony środek (`install.sh`/`install.ps1` + 
 
 ---
 
-- [ ] **Unit 2: `install.ps1` (Windows) tryb dualny — bootstrap przez irm|Expand-Archive (bez git)**
+- [ ] **Unit 2: `install.ps1` (Windows) tryb dualny — bootstrap przez irm|Expand-Archive (bez git)** *(impl gotowa; PARTIAL — GATE 0 + parse-check + Pester wymagają realnego Windows, do operatora; headless zastępczo: nawiasy 40/40, grep ✅, referencyjny `install.test.sh` 4/4 ✅)*
 
 **Cel:** `irm|iex` pobiera repo bez `git` do `$HOME\claude-cron` i odpala setup z działającymi pytaniami — parytet z Unitem 1.
 **Wymagania:** R3 · **Zależności:** brak (równoległy do Unit 1) · **Delegate:** feature-builder-data
@@ -228,7 +228,7 @@ wdrażamy Windowsa na założeniu „prawdopodobnie działa".
 
 ---
 
-- [ ] **Unit 3: `setup.mjs` — auto-start serwera + auto-open przeglądarki (Mac/Win)**
+- [x] **Unit 3: `setup.mjs` — auto-start serwera + auto-open przeglądarki (Mac/Win)** *(impl + testy: `node --test` 161/161 ✅, `node --check` ✅, grep ✅; operator pending)*
 
 **Cel:** Po konfiguracji serwer startuje sam, ZAWSZE wypisuje link do dashboardu, a na Mac/Win dodatkowo
 sam otwiera przeglądarkę (best-effort). VPS nie dotyczy — nie woła `setup.mjs`.
@@ -260,7 +260,7 @@ sam otwiera przeglądarkę (best-effort). VPS nie dotyczy — nie woła `setup.m
 
 ---
 
-- [ ] **Unit 4: README — trójplatformowe one-linery + korekty**
+- [x] **Unit 4: README — trójplatformowe one-linery + korekty** *(impl + grep-weryfikacje ✅, „brzydki krok" usunięty; manualne przejścia czytelnika do operatora)*
 
 **Cel:** Dokumentacja odzwierciedla flow „1 komenda" na każdym torze.
 **Wymagania:** R6 · **Zależności:** Unit 1, 2, 3 · **Delegate:** feature-builder-data

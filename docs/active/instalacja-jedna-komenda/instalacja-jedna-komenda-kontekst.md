@@ -1,7 +1,7 @@
 # Kontekst: Instalacja Pulsa jedną komendą
 
 **Branch:** `feature/one-command-install`
-**Ostatnia aktualizacja:** 2026-06-30
+**Ostatnia aktualizacja:** 2026-06-30 (Faza 1 — implementacja domknięta)
 
 ## Powiązane pliki
 
@@ -39,6 +39,31 @@
 - **Warunek wstępny:** Claude Code (`claude` w PATH) — `setup.mjs` wykrywa brak i kieruje. Bez zmian.
 - **Kolejność:** Unit 1 ∥ Unit 2 → Unit 3 → Unit 4. Merge do `main` po teście (one-liner pobiera `main`).
 - **Operator (niewykonalne headless):** test pełnego przebiegu na czystym Mac i czystym Windows; GATE 0 Windows.
+
+## Status implementacji (Faza 1)
+
+- **Unit 1 (`install.sh`)** — completed. Tryb dualny + fix TTY (`< /dev/tty`) + kontrakt danych (allowlist
+  `data/`+`.node/`, atomowy swap). Dodano `install.test.sh` (czysty bash, symulacja bootstrap/preserve, 4/4 PASS).
+  `rm -rf` utwardzony `${node_base:?}` (SC2115, defense-in-depth).
+- **Unit 2 (`install.ps1`)** — partial. Implementacja (tryb dualny, bootstrap przez `Expand-Archive`, fail-fast
+  `throw`, kontrakt danych) gotowa. Handoff = wariant DOMYŚLNY (`& $NodeExe setup.mjs`, bez przekierowania stdin);
+  łatka „czytaj z konsoli" (CONIN$) wyizolowana w `Invoke-Setup` z komentarzem GATE 0 — gotowa do dołączenia.
+  Dodano `install.ps1.Tests.ps1` (parytet 1:1 z `install.test.sh`). **Do operatora (Windows):** GATE 0 (czy
+  pytania czytają wpisywany tekst pod `irm|iex`), parse-check PowerShell, uruchomienie suite Pester. Headless
+  zweryfikowano zastępczo: balans nawiasów 40/40, grep z planu PASS, referencyjny `install.test.sh` 4/4 PASS.
+- **Unit 3 (`setup.mjs`)** — completed. Auto-start serwera (spawn detached, portable Node, `--disable-warning`),
+  poll, ZAWSZE print linku, pure `buildOpenBrowserCommand` (darwin `open` / win32 `cmd /c start ""` / inne `null`),
+  auto-open best-effort. 3 nowe testy w `setup.test.mjs` (darwin/win32/linux) — zielone.
+- **Unit 4 (`README.md`)** — completed. Trójplatformowe one-linery, usunięcie ręcznego startu `.node/...server.js`,
+  „pyta o 2 rzeczy"→4. Dodatkowo ujednolicono ścieżkę repo na `~/claude-cron` / `$HOME\claude-cron` (spójność z
+  nowym flow Unit 1/2) w „Przydatne komendy" i „Odinstalowanie".
+
+## Walidacja Fazy 1
+
+- `bash -n install.sh` ✅, `node --check setup.mjs` ✅, `node --test` → **161/161 PASS**, `install.test.sh` → **4/4 PASS**.
+- Grep-weryfikacje z planu (install.sh / install.ps1 / setup.mjs / README) — wszystkie PASS; „brzydki krok" usunięty (grep pusty).
+- `lint`/`build` — n/a: projekt nie ma eslint configu ani skryptu build/vite (Node CLI/serwer; `npm test = node --test`).
+- **Operator (niewykonalne headless):** GATE 0 + parse-check + Pester na czystym Windows; pełny przebieg one-linera na Mac i Windows.
 
 ## Źródła
 - Requirements doc: brak (`docs/brainstorms/` nie istnieje)
