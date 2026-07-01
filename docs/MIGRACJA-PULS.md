@@ -318,6 +318,24 @@ Testy piszemy **wertykalnie razem z nowym kodem**: nowy endpoint `recent` → je
 
 ---
 
+## SEKCJA 10 — Powiązanie z kursem: połączony instalator VPS (B1)
+
+> Decyzja produktowa (kurs „Osobisty Asystent AI", 01.07). Nie część rebrandu frontu — osobny wątek na instalatorze `scripts/install-vps.sh`, ale zapisane tu, żeby nie zginęło.
+
+Kurs łączy dwie lekcje VPS w jedną („B1 — Asystent w chmurze"), bo dziś kursant przechodzi **dwa osobne instalatory** pokrywające się w ~60%:
+- `obsidian-vps-installer` (repo `AIBiz-Automatyzacje/obsidian-vps-installer`) — środowisko + Claude CLI + login + Obsidian Sync/Remote
+- `scripts/install-vps.sh` (to repo) — Node + Claude CLI + login + Tailscale + scheduler
+
+**Cel: `install-vps.sh` wchłania kroki Obsidian** (headless `ob` install + `ob sync-setup` + `ob sync-config --file-types …,unsupported` + dwukierunkowy Remote), tak żeby **jedna komenda** postawiła: środowisko + login Claude (raz) + dwukierunkowy sync + Tailscale + Puls. Po merge'u `obsidian-vps-installer` do wycofania.
+
+Konsekwencje:
+- Dziś `install-vps.sh` NIE klonuje vaulta ani nie konfiguruje Obsidian Sync — zakłada gotowe repo `~/vault-git` (tylko `git pull` w auto-update cronie). Po merge'u ma to ogarnąć sam (login Obsidian + `sync-setup` + `sync-config`).
+- ⚠️ **Pamiętać o `--file-types …,unsupported`** — bez tego raporty HTML/JSON ze skilli zostają na VPS i nie docierają na komputer (zweryfikowane 27.06; przewodnik `Zasoby/Tech/obsidian-headless-vps-guide.md` sekcja 3).
+- Login do Claude ma lecieć **raz** (dziś jest dublowany między dwoma instalatorami).
+- Audyt kursu z pełnym kontekstem lekcji B1/B4: `…/asystent_obsidian/Aktualizacja/Co poprawić?.md` (sekcje „B1", „B4").
+
+---
+
 ## Załącznik — pliki repo dotknięte
 
 **Front (przepisać/podmienić):** `public/index.html`, `public/style.css`, `public/app.js`, +`public/logo-puls.png`, +`public/favicon.png`
