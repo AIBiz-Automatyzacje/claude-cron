@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 5 -->
+<!-- rule-count: 6 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -18,3 +18,6 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **Instalator `curl|bash` z pytaniami: podepnij `/dev/tty`, nie dziedzicz stdin**: W `curl ... | bash` (i `irm|iex`) stdin to pipe z treścią skryptu, nie klawiatura — każde `read`/`readline` cicho dostaje EOF i instalator leci z domyślnymi. Przy handoffie do interaktywnego procesu rób `exec ... < /dev/tty` (Unix) / czytaj z `CONIN$` (Windows), z fallbackiem gdy tty niedostępne. Testuj ZAWSZE przez prawdziwy pipe — lokalne `bash install.sh` ukrywa bug. Bonus: re-run bootstrap chroni dane allowlistą stanowych katalogów (`data/`,`.node/`) + atomowy swap, `rm -rf "${var:?}/..."` zawsze z guardem.
   Source: docs/solutions/deployment-issues/2026-06-30-curl-bash-instalator-interaktywny-tty.md
+
+- **Skrypt ładowany przez `iex` = czyste ASCII; entry-point guard w Node = `realpathSync` po obu stronach**: Plik `.ps1` puszczany przez `irm|iex` trzymaj w ASCII — BOM łamie `iex`, a brak BOM na PS 5.1 czyta UTF-8 jako ANSI i wywala parser; diakrytyki tylko w plikach czytanych jawnym `-Encoding UTF8`/`node`. Pod `irm|iex` NIE rób `exit` bez guardu na `$PSScriptRoot` (zamyka sesję hosta). Persystencję env pisz per platforma: Windows → `[Environment]::SetEnvironmentVariable(...,'User')`, nie `.zshrc`. W Node porównuj entry-point przez `fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))` — macOS symlinkuje `/var`,`/tmp` do `/private/*` i goły `path.resolve` cicho blokuje `main()`. Instalator testuj prawdziwym `curl|bash`/`irm|iex` z env-override źródła (ZIP/TARBALL URL + TOPDIR) PRZED mergem.
+  Source: docs/solutions/deployment-issues/2026-07-01-instalator-cross-platform-irm-iex-encoding-env-symlink.md
