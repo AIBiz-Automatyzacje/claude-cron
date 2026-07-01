@@ -83,7 +83,7 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 - [x] `bash -n install.sh`, `node --check setup.mjs`, `node --test` (cały suite + nowe testy — 161/161 PASS); parse `install.ps1` → OPERATOR/Windows (brak pwsh na macOS)
 - [x] Symulacja bootstrap Mac: tarball do temp, `INSTALL_DIR` na temp (nie `~/claude-cron`), weryfikacja rozpakowania + `setup.mjs`, sprzątanie (`install.test.sh` 4/4 PASS)
 - [x] Symulacja bootstrap Windows: zip do temp, `Expand-Archive`, weryfikacja `setup.mjs`, sprzątanie — ✅ 2026-07-01 `install.ps1.Tests.ps1` 4/4 PASS na realnym Win11 + PS 5.1
-- [ ] Merge do `main` dopiero po teście na realnych maszynach (one-liner pobiera `main`) — Windows ✅; Mac ⏳ (opcjonalnie szybki test w temp)
+- [x] Merge do `main` dopiero po teście na realnych maszynach (one-liner pobiera `main`) — ✅ 2026-07-01: oba systemy zweryfikowane live, fast-forward `d52d537..6713eff`, one-liner z main potwierdzony (nowy install.ps1/install.sh + main.zip 200)
 
 ---
 
