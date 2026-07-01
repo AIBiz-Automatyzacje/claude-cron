@@ -1,22 +1,22 @@
-﻿# ============================================
-#  CLAUDE-CRON — Portable Node bootstrap (Windows)
+# ============================================
+#  CLAUDE-CRON - Portable Node bootstrap (Windows)
 #
 #  Tryb DUALNY (parytet z install.sh dla Mac/Linux):
-#   - LOKALNY: skrypt leży obok setup.mjs (sklonowane repo) →
+#   - LOKALNY: skrypt leży obok setup.mjs (sklonowane repo) ->
 #     stawia przenośny Node w .node\ i odpala setup.mjs. Bez pobierania kodu.
-#   - BOOTSTRAP (irm|iex): skryptu nie ma na dysku ($PSScriptRoot puste) →
+#   - BOOTSTRAP (irm|iex): skryptu nie ma na dysku ($PSScriptRoot puste) ->
 #     pobiera repo zipem (bez git) do $HOME\claude-cron, zachowuje
 #     istniejące data\ i .node\ (re-run NIE kasuje bazy), po czym
 #     wchodzi w tryb lokalny w docelowym katalogu.
 #
-#  Bootstrap NIE zawiera logiki konfiguracyjnej — robi wyłącznie
+#  Bootstrap NIE zawiera logiki konfiguracyjnej - robi wyłącznie
 #  portable Node + pobranie kodu. Nie dotyka systemowego Node,
 #  PATH ani profilu PowerShell.
 # ============================================
 
 $ErrorActionPreference = "Stop"
 
-# Pinowany patch portable Node — najnowszy stabilny 22.x LTS,
+# Pinowany patch portable Node - najnowszy stabilny 22.x LTS,
 # spójny z oknem engines ">=22.13 <25".
 $NodeVersion = "22.17.0"
 
@@ -60,7 +60,7 @@ function Move-PreservedDirs {
         if (Test-Path -LiteralPath $src) {
             $dst = Join-Path $FreshDir $name
             # Świeży zip nie zawiera data\ ani .node\ (gitignore), ale
-            # gdyby zawierał — nie chcemy nadpisać żywych danych usera.
+            # gdyby zawierał - nie chcemy nadpisać żywych danych usera.
             if (Test-Path -LiteralPath $dst) {
                 Remove-Item -LiteralPath $dst -Recurse -Force
             }
@@ -84,12 +84,12 @@ function Expand-RepoFromZip {
 
     $freshDir = Join-Path $TmpDir $ZipTopDir
     if (-not (Test-Path -LiteralPath (Join-Path $freshDir "setup.mjs"))) {
-        throw "Po rozpakowaniu brak setup.mjs w $freshDir — uszkodzony lub nieoczekiwany zip."
+        throw "Po rozpakowaniu brak setup.mjs w $freshDir - uszkodzony lub nieoczekiwany zip."
     }
     return $freshDir
 }
 
-# Atomowy(-ish) swap: świeże repo → $InstallDir, stare → kosz w tmp.
+# Atomowy(-ish) swap: świeże repo -> $InstallDir, stare -> kosz w tmp.
 # Najpierw przenosi data\ i .node\ ze starej instalacji do świeżej.
 function Install-FreshRepo {
     param(
@@ -117,10 +117,10 @@ function Install-FreshRepo {
     Write-Host "[ok] Repo gotowe w $InstallDir" -ForegroundColor Green
 }
 
-# Pełny przebieg bootstrap → zwraca $InstallDir jako katalog repo.
+# Pełny przebieg bootstrap -> zwraca $InstallDir jako katalog repo.
 function Invoke-Bootstrap {
     Write-Host ""
-    Write-Host "🕹️  CLAUDE-CRON — instalacja jedną komendą" -ForegroundColor Cyan
+    Write-Host "CLAUDE-CRON - instalacja jedną komendą" -ForegroundColor Cyan
     Write-Host "========================================"
     Write-Host ""
     Write-Host "  Pobieram repo do $InstallDir (bez git) i konfiguruję." -ForegroundColor DarkGray
@@ -156,7 +156,7 @@ function Install-PortableNode {
     if (Test-Path -LiteralPath $nodeExe) {
         $installedVer = (& $nodeExe -v 2>$null) -replace '^v', ''
         if ($installedVer -eq $NodeVersion) {
-            Write-Host "[ok] Portable Node $NodeVersion już obecny — pomijam pobieranie." -ForegroundColor Green
+            Write-Host "[ok] Portable Node $NodeVersion już obecny - pomijam pobieranie." -ForegroundColor Green
             return $nodeExe
         }
     }
@@ -213,7 +213,7 @@ function Install-PortableNode {
 # skryptem, jak przy curl|bash na Macu), więc pytania setup.mjs czytają
 # z klawiatury bez przekierowania.
 #
-# GATE 0 — ZWERYFIKOWANE 2026-07-01 (Windows 11 + PowerShell 5.1): pod irm|iex
+# GATE 0 - ZWERYFIKOWANE 2026-07-01 (Windows 11 + PowerShell 5.1): pod irm|iex
 # pytania setup.mjs czytają klawiaturę, łatka CONIN$ okazała się niepotrzebna.
 function Invoke-Setup {
     param(
@@ -234,13 +234,13 @@ function Invoke-Setup {
 
 function Invoke-Main {
     # Tryb LOKALNY gdy skrypt leży na dysku obok setup.mjs.
-    # Pod irm|iex $PSScriptRoot jest puste → sygnał trybu bootstrap.
+    # Pod irm|iex $PSScriptRoot jest puste -> sygnał trybu bootstrap.
     $localRepo = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
     $isLocal   = $localRepo -and (Test-Path -LiteralPath (Join-Path $localRepo "setup.mjs"))
 
     if ($isLocal) {
         Write-Host ""
-        Write-Host "🕹️  CLAUDE-CRON — Portable Node bootstrap" -ForegroundColor Cyan
+        Write-Host "CLAUDE-CRON - Portable Node bootstrap" -ForegroundColor Cyan
         Write-Host "========================================"
         Write-Host ""
         Write-Host "  Stawiam przenośny Node $NodeVersion w .node\ (bez globalnej instalacji)" -ForegroundColor DarkGray
@@ -249,7 +249,7 @@ function Invoke-Main {
         $repoDir = $localRepo
     }
     else {
-        # Tryb BOOTSTRAP — irm|iex bez sklonowanego repo.
+        # Tryb BOOTSTRAP - irm|iex bez sklonowanego repo.
         $repoDir = Invoke-Bootstrap
     }
 

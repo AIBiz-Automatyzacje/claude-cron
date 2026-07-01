@@ -1,4 +1,4 @@
-﻿# Skryptowe testy install.ps1 — symulują bootstrap/preserve-swap bez sieci.
+# Skryptowe testy install.ps1 - symulują bootstrap/preserve-swap bez sieci.
 # Ładujemy install.ps1 w trybie lib-only (CLAUDE_CRON_LIB_ONLY=1), żeby
 # dostać same funkcje bez odpalania Invoke-Main (pobierania Node / setup.mjs).
 #
@@ -61,7 +61,7 @@ try {
         }
     }
 
-    # --- Test 3: KONTRAKT DANYCH — re-run z plikiem-strażnikiem nie kasuje data\ ---
+    # --- Test 3: KONTRAKT DANYCH - re-run z plikiem-strażnikiem nie kasuje data\ ---
     function Test-RerunPreservesSentinel {
         # Symulacja istniejącej instalacji w $InstallDir z plikiem-strażnikiem.
         New-Item -ItemType Directory -Path (Join-Path $InstallDir "data") -Force | Out-Null
@@ -70,7 +70,7 @@ try {
         Set-Content -Path (Join-Path $InstallDir "server.js") -Value "old-code"
         Set-Content -Path (Join-Path $InstallDir ".node\bin\node.exe") -Value "node"
 
-        # Świeże "rozpakowane repo" (jak z zipa) — nowy kod, BEZ data\.
+        # Świeże "rozpakowane repo" (jak z zipa) - nowy kod, BEZ data\.
         $fresh = Join-Path $Sandbox "t3-fresh"
         $tmp   = Join-Path $Sandbox "t3-tmp"
         New-Item -ItemType Directory -Path $fresh -Force | Out-Null
@@ -115,7 +115,7 @@ try {
         $script:InstallDir = Join-Path $Sandbox "claude-cron" # przywróć
     }
 
-    Write-Host "== install.ps1 — testy bootstrap/preserve =="
+    Write-Host "== install.ps1 - testy bootstrap/preserve =="
     Test-PreserveMovesDataAndNode
     Test-PreserveNoopWhenNoOld
     Test-RerunPreservesSentinel
