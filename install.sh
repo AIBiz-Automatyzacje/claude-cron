@@ -106,7 +106,7 @@ extract_repo_from_tarball() {
   local tmp_dir="$1"
   local archive="$tmp_dir/repo.tar.gz"
 
-  info "Pobieram repo (tarball brancha main, bez git)..." >&2
+  info "Pobieram repo (tarball, bez git)..." >&2
   download "$TARBALL_URL" "$archive" \
     || fail "Pobranie repo z $TARBALL_URL nie powiodło się (sprawdź połączenie)."
 

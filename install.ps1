@@ -76,7 +76,7 @@ function Expand-RepoFromZip {
 
     $archive = Join-Path $TmpDir "repo.zip"
 
-    Write-Host "[info] Pobieram repo (zip brancha main, bez git)..." -ForegroundColor Cyan
+    Write-Host "[info] Pobieram repo (zip, bez git)..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $ZipUrl -OutFile $archive -UseBasicParsing
 
     Write-Host "[info] Rozpakowuję repo..." -ForegroundColor Cyan
@@ -213,11 +213,8 @@ function Install-PortableNode {
 # skryptem, jak przy curl|bash na Macu), więc pytania setup.mjs czytają
 # z klawiatury bez przekierowania.
 #
-# GATE 0 (do wykonania przez operatora na realnym Windows): zweryfikuj
-# empirycznie, że pisanie działa. Jeśli operator wykryje EOF/auto-defaulty,
-# łatka „czytaj wprost z konsoli" jest analogią < /dev/tty z Maca — w PS:
-#   $tty = [System.IO.File]::Open('CONIN$', 'Open', 'Read')
-# i przekazanie jej jako stdin do procesu node. Punkt łatki = ta funkcja.
+# GATE 0 — ZWERYFIKOWANE 2026-07-01 (Windows 11 + PowerShell 5.1): pod irm|iex
+# pytania setup.mjs czytają klawiaturę, łatka CONIN$ okazała się niepotrzebna.
 function Invoke-Setup {
     param(
         [Parameter(Mandatory = $true)][string] $NodeExe,
@@ -225,7 +222,12 @@ function Invoke-Setup {
     )
     Write-Host "[info] Przekazuję sterowanie do setup.mjs..." -ForegroundColor Cyan
     & $NodeExe (Join-Path $RepoDir "setup.mjs")
-    exit $LASTEXITCODE
+    $code = $LASTEXITCODE
+    if ($code -ne 0) { Write-Warning "setup.mjs zakończył się kodem $code." }
+    # `exit` TYLKO gdy skrypt uruchomiony z pliku ($PSScriptRoot ustawione: -File / .\install.ps1).
+    # Pod irm|iex ($PSScriptRoot puste) `exit` zamknęłoby sesję PowerShell operatora,
+    # zanim zobaczy wypisany link do dashboardu (siatka bezpieczeństwa).
+    if ($PSScriptRoot) { exit $code }
 }
 
 # ============ MAIN ============
