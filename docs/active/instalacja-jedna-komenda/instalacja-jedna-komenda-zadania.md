@@ -20,7 +20,7 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 - [x] Test: [KONTRAKT DANYCH] re-run one-linera z plikiem `data/SENTINEL` → po update plik istnieje, baza nietknięta, `.node/` zachowany
 - [x] Weryfikacja: `bash -n install.sh` przechodzi
 - [x] Weryfikacja: `grep -n "/dev/tty\|archive/refs/heads/main.tar.gz\|setup.mjs" install.sh` pokazuje fix TTY + bootstrap
-- [ ] Operator: odpalenie one-linera na czystym Macu (lub w temp) — potwierdzenie pełnego przebiegu
+- [x] Operator: odpalenie one-linera na czystym Macu (lub w temp) — ✅ 2026-07-01: pełny przebieg w sandboxie (curl|tar, portable Node, folder picker osascript, pytania z `/dev/tty` czekały i czytały klawiaturę, link, auto-open)
 
 ---
 
@@ -56,7 +56,7 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 - [x] Test: `buildOpenBrowserCommand('linux', url)` → `null` (error case — caller nie crashuje, link wypisany)
 - [x] Weryfikacja: `node --test setup.test.mjs` przechodzi (nowe testy zielone)
 - [x] Weryfikacja: `node --check setup.mjs` ok; `grep -n "buildOpenBrowserCommand\|open\|Start-Process" setup.mjs` pokazuje auto-open Mac/Win + wypisanie linku
-- [ ] Operator: po one-linerze serwer działa i przeglądarka sama otwiera `localhost:7777` (Mac i Windows); link też widoczny w terminalu — Windows ✅ 2026-07-01 (serwer + auto-open + link); Mac ⏳ do potwierdzenia
+- [x] Operator: po one-linerze serwer działa i przeglądarka sama otwiera `localhost:7777` (Mac i Windows); link też widoczny w terminalu — ✅ 2026-07-01 Windows + Mac (oba: serwer + auto-open + link)
 
 ---
 
@@ -69,8 +69,8 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 - [x] Popraw „pyta o 2 rzeczy"→4 (workspace/VPS/Discord/autostart)
 - [x] Wspomnij okno wyboru folderu (Mac osascript / Windows FolderBrowserDialog)
 - [x] Dopisz że serwer i przeglądarka startują same (desktop)
-- [ ] Test: czytelnik na czystym Macu przechodzi instalację samym one-linerem [Manual/OPERATOR]
-- [ ] Test: czytelnik na czystym Windows przechodzi instalację samym one-linerem [Manual/OPERATOR]
+- [x] Test: czytelnik na czystym Macu przechodzi instalację samym one-linerem — ✅ 2026-07-01 (operator: pełny przebieg z brancha przez env-override)
+- [x] Test: czytelnik na czystym Windows przechodzi instalację samym one-linerem — ✅ 2026-07-01 (operator: pełny przebieg z brancha)
 - [x] Weryfikacja: `grep -n "raw.githubusercontent.*install.sh" README.md` pokazuje one-liner Mac
 - [x] Weryfikacja: `grep -n "raw.githubusercontent.*install.ps1" README.md` pokazuje one-liner Windows
 - [x] Weryfikacja: `grep -n "install-vps.sh" README.md` pokazuje one-liner VPS
