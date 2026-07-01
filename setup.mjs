@@ -403,18 +403,49 @@ function writeHook(workspace, repoDir, nodeBin) {
   return hookFile;
 }
 
-// Plik RC powłoki do persystencji env (zsh domyślny na macOS; bash jako fallback).
+// Plik RC powłoki do persystencji env na Unix (zsh domyślny na macOS; bash jako fallback).
 function resolveShellRc() {
   const shell = process.env.SHELL || '';
   const rcName = shell.includes('bash') ? '.bashrc' : '.zshrc';
   return path.join(os.homedir(), rcName);
 }
 
-// Persystuje `export VAR="value"` w shell RC (idempotentnie). Zwraca ścieżkę pliku RC.
-function persistEnvVar(rcFile, varName, value, comment) {
+// Pure: escape stringa do literału PowerShell w pojedynczych cudzysłowach ('' = literalny ').
+function psSingleQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+// Pure: komenda ustawienia User-scoped env var na Windows (rejestr HKCU\Environment).
+// Widoczna w NOWYCH procesach bez `source`. Pojedyncze cudzysłowy: backslashe ścieżek
+// (C:\Users\...) zostają dosłowne, inaczej niż przy JSON/double-quote.
+export function buildSetUserEnvCommand(varName, value) {
+  const script = `[Environment]::SetEnvironmentVariable(${psSingleQuote(varName)}, ${psSingleQuote(value)}, 'User')`;
+  return { cmd: 'powershell', args: ['-NoProfile', '-Command', script] };
+}
+
+// Windows: zapis do User Environment (rejestr). DI na spawn dla testowalności.
+function persistUserEnvWin32(varName, value, spawn = spawnSync) {
+  const { cmd, args } = buildSetUserEnvCommand(varName, value);
+  const result = spawn(cmd, args, { encoding: 'utf-8' });
+  if (result.status !== 0) {
+    const detail = result.stderr || result.error?.message || `kod ${result.status}`;
+    throw new Error(`Nie udało się zapisać ${varName} w środowisku użytkownika Windows: ${detail}`);
+  }
+}
+
+// Persystuje zmienną środowiskową per platforma i ustawia ją też w bieżącym procesie
+// (by autostart serwera w TEJ sesji widział wartość). Zwraca opis lokalizacji do komunikatu.
+// Windows → User Environment (rejestr); Unix → export w shell RC (idempotentnie).
+function persistEnvVar(varName, value, comment) {
+  if (process.platform === 'win32') {
+    persistUserEnvWin32(varName, value);
+    process.env[varName] = value;
+    return 'środowisku użytkownika Windows (otwórz nowy terminal)';
+  }
+  const rcFile = resolveShellRc();
   const current = fs.existsSync(rcFile) ? fs.readFileSync(rcFile, 'utf-8') : '';
-  const updated = upsertEnvLine(current, varName, value, comment);
-  fs.writeFileSync(rcFile, updated, 'utf-8');
+  fs.writeFileSync(rcFile, upsertEnvLine(current, varName, value, comment), 'utf-8');
+  process.env[varName] = value;
   return rcFile;
 }
 
@@ -454,8 +485,6 @@ async function main() {
   const nodeBin = detectPortableNodeBin(process.execPath, process.platform, REPO_DIR, process.arch);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
-  const rcFile = resolveShellRc();
-
   try {
     const workspaceDefault = process.env.CLAUDE_CRON_WORKSPACE || os.homedir();
     let workspace;
@@ -477,23 +506,23 @@ async function main() {
       process.exit(1);
     }
     console.log(`[ok] Workspace: ${workspace}`);
-    persistEnvVar(rcFile, 'CLAUDE_CRON_WORKSPACE', workspace, 'Claude-Cron workspace');
-    console.log(`[ok] Zapisano CLAUDE_CRON_WORKSPACE w ${rcFile}`);
+    const workspaceLoc = persistEnvVar('CLAUDE_CRON_WORKSPACE', workspace, 'Claude-Cron workspace');
+    console.log(`[ok] Zapisano CLAUDE_CRON_WORKSPACE w ${workspaceLoc}`);
 
     const vpsHost = await ask(rl, 'Tailscale IP VPS-a (puste = tryb tylko lokalny): ');
     const vpsPort = vpsHost ? await ask(rl, 'Port VPS [7777]: ', '7777') : '7777';
     const vpsUrl = buildVpsUrl(vpsHost, vpsPort);
     if (vpsUrl) {
-      persistEnvVar(rcFile, 'CLAUDE_CRON_VPS_URL', vpsUrl, 'Claude-Cron VPS connection');
-      console.log(`[ok] VPS: ${vpsUrl} (zapisano w ${rcFile})`);
+      const vpsLoc = persistEnvVar('CLAUDE_CRON_VPS_URL', vpsUrl, 'Claude-Cron VPS connection');
+      console.log(`[ok] VPS: ${vpsUrl} (zapisano w ${vpsLoc})`);
     } else {
-      console.log('[info] Tryb tylko lokalny — joby działają gdy Mac nie śpi.');
+      console.log('[info] Tryb tylko lokalny — joby działają gdy komputer nie śpi.');
     }
 
     const discordUrl = await ask(rl, 'Discord webhook URL (puste = pomiń): ');
     if (discordUrl) {
-      persistEnvVar(rcFile, 'DISCORD_WEBHOOK_URL', discordUrl, 'Claude-Cron Discord notifications');
-      console.log(`[ok] Discord webhook zapisany w ${rcFile}`);
+      const discordLoc = persistEnvVar('DISCORD_WEBHOOK_URL', discordUrl, 'Claude-Cron Discord notifications');
+      console.log(`[ok] Discord webhook zapisany w ${discordLoc}`);
     } else {
       console.log('[info] Pominięto Discord.');
     }
@@ -507,7 +536,11 @@ async function main() {
       console.log('[info] Pominięto autostart.');
     }
 
-    console.log(`\n[info] Załaduj zmienne środowiskowe: source ${rcFile}`);
+    const reloadHint =
+      process.platform === 'win32'
+        ? '\n[info] Zmienne zapisane w środowisku użytkownika — otwórz NOWY terminal, by je załadować.'
+        : `\n[info] Załaduj zmienne środowiskowe: source ${resolveShellRc()}`;
+    console.log(reloadHint);
   } finally {
     rl.close();
   }

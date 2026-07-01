@@ -14,6 +14,7 @@ import {
   buildFolderPickerCommand,
   parseFolderPickerResult,
   buildOpenBrowserCommand,
+  buildSetUserEnvCommand,
   NODE_VERSION,
 } from './setup.mjs';
 
@@ -317,4 +318,21 @@ test('buildOpenBrowserCommand win32 → cmd start z URL', () => {
 
 test('buildOpenBrowserCommand linux → null (caller nie spawnuje, link wypisany)', () => {
   assert.equal(buildOpenBrowserCommand('linux', 'http://localhost:7777'), null);
+});
+
+// === buildSetUserEnvCommand — persystencja env do User Environment na Windows ===
+
+test('buildSetUserEnvCommand → powershell SetEnvironmentVariable w User scope (happy path)', () => {
+  const { cmd, args } = buildSetUserEnvCommand('CLAUDE_CRON_WORKSPACE', 'C:\\Users\\a\\vault');
+  assert.equal(cmd, 'powershell');
+  assert.deepEqual(args.slice(0, 2), ['-NoProfile', '-Command']);
+  assert.ok(
+    args[2].includes("[Environment]::SetEnvironmentVariable('CLAUDE_CRON_WORKSPACE', 'C:\\Users\\a\\vault', 'User')"),
+    'backslashe ścieżki muszą zostać dosłowne (single-quote), scope = User',
+  );
+});
+
+test('buildSetUserEnvCommand escapuje pojedynczy cudzysłów w wartości (error case: iniekcja)', () => {
+  const { args } = buildSetUserEnvCommand('X', "a'b");
+  assert.ok(args[2].includes("'a''b'"), "pojedynczy ' musi być podwojony na '' (literał PS)");
 });
