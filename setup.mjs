@@ -556,7 +556,11 @@ async function main() {
 }
 
 // Uruchamiamy main() tylko gdy plik jest entry-pointem (nie podczas importu w testach).
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// realpathSync po obu stronach: na macOS /var to symlink do /private/var, więc goły
+// path.resolve(argv[1]) rozjeżdża się z fileURLToPath (setup pod /var/folders/... nie
+// odpalałby main). realpath normalizuje symlinki → działa też dla ścieżek symlinkowanych.
+const invokedRealPath = process.argv[1] ? fs.realpathSync(process.argv[1]) : '';
+if (invokedRealPath && invokedRealPath === fs.realpathSync(fileURLToPath(import.meta.url))) {
   main().catch((error) => {
     console.error(`[error] Setup nie powiódł się: ${error.message}`);
     process.exit(1);
