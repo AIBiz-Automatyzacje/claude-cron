@@ -1,4 +1,4 @@
-# Skryptowe testy install.ps1 — symulują bootstrap/preserve-swap bez sieci.
+﻿# Skryptowe testy install.ps1 — symulują bootstrap/preserve-swap bez sieci.
 # Ładujemy install.ps1 w trybie lib-only (CLAUDE_CRON_LIB_ONLY=1), żeby
 # dostać same funkcje bez odpalania Invoke-Main (pobierania Node / setup.mjs).
 #

@@ -1,4 +1,4 @@
-# ============================================
+﻿# ============================================
 #  CLAUDE-CRON — Portable Node bootstrap (Windows)
 #
 #  Tryb DUALNY (parytet z install.sh dla Mac/Linux):
