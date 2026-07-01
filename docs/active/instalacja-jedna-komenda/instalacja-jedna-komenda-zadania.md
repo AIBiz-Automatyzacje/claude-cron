@@ -35,7 +35,7 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 - [x] Kontrakt danych: przy istniejącym `$HOME\claude-cron` zachowaj `data\` + `.node\` (allowlist, atomowy swap)
 - [x] Test: parse PowerShell — ✅ 2026-07-01 `PARSE OK` (`Get-Content -Raw -Encoding UTF8` — plik jest UTF-8 bez BOM)
 - [x] Test: `irm|iex` na czystym Windows → repo w `$HOME\claude-cron`, setup startuje, pytania czytają z klawiatury (happy path) — ✅ 2026-07-01 (test z brancha przez env-override)
-- [x] Test: [SUITE] `install.ps1.Tests.ps1` (preserve/swap, parytet 1:1) — ✅ 2026-07-01 `4 PASS / 4`. ⚠ realny `.\install.ps1` w trybie lokalnym na PS 5.1 misreaduje UTF-8 bez BOM (otwarta decyzja: ASCII vs PS7-only)
+- [x] Test: [SUITE] `install.ps1.Tests.ps1` (preserve/swap, parytet 1:1) — ✅ 2026-07-01 `4 PASS / 4`. Tryb lokalny PS 5.1 NAPRAWIONY (`install.ps1` = czyste ASCII): `PARSE OK` pod DOMYŚLNYM kodowaniem (bez `-Encoding UTF8`)
 - [x] Test: [KONTRAKT DANYCH] re-run z `data\SENTINEL` → plik istnieje, baza nietknięta, `.node\` zachowany — ✅ 2026-07-01 (suite PASS + potwierdzone live: „Node już obecny - pomijam pobieranie")
 - [x] Weryfikacja: parse PowerShell przechodzi bez błędów — ✅ 2026-07-01 `PARSE OK`
 - [x] Weryfikacja: `grep -n "archive/refs/heads/main.zip\|Expand-Archive\|setup.mjs\|PSScriptRoot" install.ps1` pokazuje bootstrap + detekcję trybu
@@ -97,5 +97,7 @@ Testy operatorskie na realnym Win11 + PowerShell 5.1 wykryły i naprawiły (wszy
 4. **Fix: persystencja env pisała do `.zshrc` na Windows** (nieczytany) → win32 do User Environment (`[Environment]::SetEnvironmentVariable(...,'User')`), Unix bez zmian. Zweryfikowane w rejestrze.
 5. **Kosmetyka**: komunikaty bez zahardkodowanego „main"/„Mac".
 
-**Otwarta decyzja (na finalizację):** `install.ps1` bez BOM w trybie lokalnym (`.\install.ps1` / `npm install:win`) na PS 5.1 misreaduje diakrytyki (nie da się tam wstrzyknąć `-Encoding UTF8` ani BOM bez psucia `irm|iex`). Ścieżka one-liner (główna) działa. Opcje: (a) `install.ps1` w pełni ASCII — kosztem diakrytyków; (b) „tryb lokalny na Windows wymaga PS7"; (c) zostawić — one-liner wystarcza.
+**Decyzja ROZWIĄZANA (2026-07-01):** wybrano (a) — `install.ps1` przetransliterowany na **czyste ASCII**. Działa na każdej ścieżce (`irm|iex` + `.\install.ps1` + `-File`) i wersji PS (5.1/7). Diakrytyki zniknęły tylko z ~12 linii cienkiego bootstrapu; `setup.mjs` (główny UX) i `install.sh` (Mac) zachowują pełny polski. Zweryfikowane live: `PARSE OK` pod domyślnym kodowaniem + suite 4/4.
+
+**Znany drobiazg UX (nie blokuje):** okno wyboru folderu (FolderBrowserDialog) potrafi wyskoczyć ZA terminalem — wygląda jak zawieszenie, trzeba Alt+Tab. Kandydat na hardening (okno topmost).
 </content>
