@@ -22,8 +22,9 @@ set -euo pipefail
 NODE_VERSION="22.17.0"
 
 # Bootstrap: tarball brancha main (rozpakowuje się do claude-cron-main/).
-TARBALL_URL="https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/main.tar.gz"
-TARBALL_TOPDIR="claude-cron-main"
+# Override przez env (test z brancha przed mergem, forki, mirrory).
+TARBALL_URL="${CLAUDE_CRON_TARBALL_URL:-https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/main.tar.gz}"
+TARBALL_TOPDIR="${CLAUDE_CRON_TARBALL_TOPDIR:-claude-cron-main}"
 
 # Docelowy katalog instalacji w trybie bootstrap (override przez env w testach).
 INSTALL_DIR="${INSTALL_DIR:-$HOME/claude-cron}"

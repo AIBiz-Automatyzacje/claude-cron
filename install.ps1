@@ -21,8 +21,9 @@ $ErrorActionPreference = "Stop"
 $NodeVersion = "22.17.0"
 
 # Bootstrap: zip brancha main (rozpakowuje się do claude-cron-main\).
-$ZipUrl    = "https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/main.zip"
-$ZipTopDir = "claude-cron-main"
+# Override przez env (test z brancha przed mergem, forki, mirrory).
+$ZipUrl    = if ($env:CLAUDE_CRON_ZIP_URL) { $env:CLAUDE_CRON_ZIP_URL } else { "https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/main.zip" }
+$ZipTopDir = if ($env:CLAUDE_CRON_ZIP_TOPDIR) { $env:CLAUDE_CRON_ZIP_TOPDIR } else { "claude-cron-main" }
 
 # Docelowy katalog instalacji w trybie bootstrap (override przez env w testach).
 $InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $HOME "claude-cron" }
