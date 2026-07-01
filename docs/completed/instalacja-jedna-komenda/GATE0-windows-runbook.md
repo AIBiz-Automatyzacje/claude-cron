@@ -44,9 +44,32 @@ $node=(Get-Command node -EA SilentlyContinue).Source; if(-not $node){$node=(Get-
 
 ### Krok 2 — pełny, realny test one-linera (definitywny)
 
+> **PRZED MERGEM testujemy z brancha `feature/one-command-install`.** Nowy kod nie jest
+> jeszcze na `main`, więc ustawiamy env-override na źródło bootstrapu (zip brancha) i
+> pobieramy `install.ps1` z brancha. Po merge'u do `main` będzie to zwykłe
+> `irm .../main/install.ps1 | iex` bez żadnych env.
+
+Wklej **trzy pojedyncze linie** (każda osobno):
+
 ```powershell
-irm https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/install.ps1 | iex
+$env:CLAUDE_CRON_ZIP_URL='https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/feature/one-command-install.zip'
 ```
+```powershell
+$env:CLAUDE_CRON_ZIP_TOPDIR='claude-cron-feature-one-command-install'
+```
+```powershell
+irm https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/feature/one-command-install/install.ps1 | iex
+```
+
+> Po teście wyczyść env (albo po prostu zamknij okno PowerShell):
+> ```powershell
+> Remove-Item Env:\CLAUDE_CRON_ZIP_URL, Env:\CLAUDE_CRON_ZIP_TOPDIR -ErrorAction SilentlyContinue
+> ```
+>
+> **Docelowo (po merge'u do main):**
+> ```powershell
+> irm https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/install.ps1 | iex
+> ```
 
 Obserwuj:
 1. Pobranie repo (zip + Expand-Archive) do `$HOME\claude-cron`.
