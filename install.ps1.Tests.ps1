@@ -1,4 +1,4 @@
-# Skryptowe testy install.ps1 - symulują bootstrap/preserve-swap bez sieci.
+﻿# Skryptowe testy install.ps1 - symulują bootstrap/preserve-swap bez sieci.
 # Ładujemy install.ps1 w trybie lib-only (CLAUDE_CRON_LIB_ONLY=1), żeby
 # dostać same funkcje bez odpalania Invoke-Main (pobierania Node / setup.mjs).
 #
@@ -26,7 +26,10 @@ try {
     # INSTALL_DIR celuje w piaskownicę, NIE w $HOME\claude-cron.
     $env:INSTALL_DIR = Join-Path $Sandbox "claude-cron"
     $env:CLAUDE_CRON_LIB_ONLY = "1"
-    . (Join-Path $ScriptDir "install.ps1")
+    # install.ps1 jest UTF-8 bez BOM (BOM łamałby irm|iex). Dot-source plikowy na
+    # PowerShell 5.1 czytałby go jako ANSI (misread diakrytyków) -> ładujemy przez
+    # jawny odczyt UTF-8 (ReadAllText domyślnie UTF-8) i dot-source scriptbloku.
+    . ([ScriptBlock]::Create([System.IO.File]::ReadAllText((Join-Path $ScriptDir "install.ps1"))))
 
     # --- Test 1: Move-PreservedDirs przenosi data\ i .node\ ---
     function Test-PreserveMovesDataAndNode {
