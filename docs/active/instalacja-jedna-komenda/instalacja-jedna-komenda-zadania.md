@@ -26,20 +26,20 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 
 ## Unit 2 — `install.ps1` (Windows) tryb dualny + GATE 0 · L
 
-- [ ] **⛔ GATE 0 (PIERWSZY KROK):** na realnym Windows zweryfikuj, że pytania `setup.mjs` czytają wpisywany tekst pod `irm|iex` [OPERATOR/Windows — niewykonalne headless]
-- [ ] GATE 0: jeśli pisanie NIE działa (EOF/auto-defaulty) → dodaj łatkę „czytaj wprost z konsoli" PRZED budową bootstrapu [OPERATOR/Windows — łatka wyizolowana w `Invoke-Setup`, gotowa do dołączenia]
+- [x] **⛔ GATE 0 (PIERWSZY KROK):** na realnym Windows zweryfikuj, że pytania `setup.mjs` czytają wpisywany tekst pod `irm|iex` — ✅ ZWERYFIKOWANE 2026-07-01 (Win11 + PS 5.1): pytania czekają i czytają klawiaturę
+- [x] GATE 0: jeśli pisanie NIE działa → łatka „czytaj z konsoli" — N/A: stdin działa, łatka `CONIN$` NIEpotrzebna
 - [x] Modyfikuj `install.ps1`: detekcja trybu (`Test-Path $PSScriptRoot\setup.mjs` / puste `$PSScriptRoot` = bootstrap)
 - [x] Bootstrap: `Invoke-WebRequest <zip> -OutFile tmp.zip` → `Expand-Archive` do tmp → przenieś `claude-cron-main\*` do `$HOME\claude-cron`
 - [x] Fail-fast (`throw`): zweryfikuj że `setup.mjs` istnieje po rozpakowaniu
 - [x] Handoff `& $NodeExe setup.mjs`
 - [x] Kontrakt danych: przy istniejącym `$HOME\claude-cron` zachowaj `data\` + `.node\` (allowlist, atomowy swap)
-- [ ] Test: parse PowerShell — `powershell -NoProfile -Command "$null = [ScriptBlock]::Create((Get-Content -Raw install.ps1))"` bez błędów [OPERATOR/Windows — brak pwsh na macOS; balans nawiasów 40/40 zweryfikowany]
-- [ ] Test: `irm|iex` na czystym Windows → repo w `$HOME\claude-cron`, setup startuje, pytania czytają z klawiatury (happy path) [OPERATOR/Windows]
-- [ ] Test: uruchomienie z już sklonowanego repo → tryb lokalny, bez pobierania zip (skrypt na dysku) [OPERATOR/Windows — suite `install.ps1.Tests.ps1` parytet 1:1 z install.test.sh]
-- [ ] Test: [KONTRAKT DANYCH] re-run one-linera z plikiem `data\SENTINEL` → po update plik istnieje, baza nietknięta, `.node\` zachowany [OPERATOR/Windows — suite `install.ps1.Tests.ps1`]
-- [ ] Weryfikacja: parse PowerShell przechodzi bez błędów
+- [x] Test: parse PowerShell — ✅ 2026-07-01 `PARSE OK` (`Get-Content -Raw -Encoding UTF8` — plik jest UTF-8 bez BOM)
+- [x] Test: `irm|iex` na czystym Windows → repo w `$HOME\claude-cron`, setup startuje, pytania czytają z klawiatury (happy path) — ✅ 2026-07-01 (test z brancha przez env-override)
+- [x] Test: [SUITE] `install.ps1.Tests.ps1` (preserve/swap, parytet 1:1) — ✅ 2026-07-01 `4 PASS / 4`. ⚠ realny `.\install.ps1` w trybie lokalnym na PS 5.1 misreaduje UTF-8 bez BOM (otwarta decyzja: ASCII vs PS7-only)
+- [x] Test: [KONTRAKT DANYCH] re-run z `data\SENTINEL` → plik istnieje, baza nietknięta, `.node\` zachowany — ✅ 2026-07-01 (suite PASS + potwierdzone live: „Node już obecny - pomijam pobieranie")
+- [x] Weryfikacja: parse PowerShell przechodzi bez błędów — ✅ 2026-07-01 `PARSE OK`
 - [x] Weryfikacja: `grep -n "archive/refs/heads/main.zip\|Expand-Archive\|setup.mjs\|PSScriptRoot" install.ps1` pokazuje bootstrap + detekcję trybu
-- [ ] Operator: odpalenie one-linera na czystym Windows — potwierdzenie pełnego przebiegu (pytania + auto-start + auto-open)
+- [x] Operator: odpalenie one-linera na czystym Windows — ✅ 2026-07-01: pełny przebieg (pytania + auto-start + auto-open + link + okno zostaje otwarte)
 
 ---
 
@@ -56,7 +56,7 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 - [x] Test: `buildOpenBrowserCommand('linux', url)` → `null` (error case — caller nie crashuje, link wypisany)
 - [x] Weryfikacja: `node --test setup.test.mjs` przechodzi (nowe testy zielone)
 - [x] Weryfikacja: `node --check setup.mjs` ok; `grep -n "buildOpenBrowserCommand\|open\|Start-Process" setup.mjs` pokazuje auto-open Mac/Win + wypisanie linku
-- [ ] Operator: po one-linerze serwer działa i przeglądarka sama otwiera `localhost:7777` (Mac i Windows); link też widoczny w terminalu
+- [ ] Operator: po one-linerze serwer działa i przeglądarka sama otwiera `localhost:7777` (Mac i Windows); link też widoczny w terminalu — Windows ✅ 2026-07-01 (serwer + auto-open + link); Mac ⏳ do potwierdzenia
 
 ---
 
@@ -82,6 +82,20 @@ Legenda: zwykły checkbox = implementacja · `Test:` = scenariusz testowy · `We
 
 - [x] `bash -n install.sh`, `node --check setup.mjs`, `node --test` (cały suite + nowe testy — 161/161 PASS); parse `install.ps1` → OPERATOR/Windows (brak pwsh na macOS)
 - [x] Symulacja bootstrap Mac: tarball do temp, `INSTALL_DIR` na temp (nie `~/claude-cron`), weryfikacja rozpakowania + `setup.mjs`, sprzątanie (`install.test.sh` 4/4 PASS)
-- [ ] Symulacja bootstrap Windows: zip do temp, `Expand-Archive`, weryfikacja `setup.mjs`, sprzątanie [OPERATOR/Windows — suite `install.ps1.Tests.ps1` parytet 1:1]
-- [ ] Merge do `main` dopiero po teście na realnych maszynach (one-liner pobiera `main`)
+- [x] Symulacja bootstrap Windows: zip do temp, `Expand-Archive`, weryfikacja `setup.mjs`, sprzątanie — ✅ 2026-07-01 `install.ps1.Tests.ps1` 4/4 PASS na realnym Win11 + PS 5.1
+- [ ] Merge do `main` dopiero po teście na realnych maszynach (one-liner pobiera `main`) — Windows ✅; Mac ⏳ (opcjonalnie szybki test w temp)
+
+---
+
+## Dziennik testów Windows (2026-07-01) — dodatkowa praca poza pierwotnymi 4 Unitami
+
+Testy operatorskie na realnym Win11 + PowerShell 5.1 wykryły i naprawiły (wszystko na branchu, zweryfikowane live):
+
+1. **env-override źródła bootstrapu** (`CLAUDE_CRON_TARBALL_URL`/`ZIP_URL` + `TOPDIR`, default `main`) — umożliwia test z brancha PRZED mergem bez ruszania `main`. Zostaje jako feature (forki/mirrory).
+2. **Fix: `exit` w `Invoke-Setup` zamykał sesję PowerShell pod `irm|iex`** → guard `if ($PSScriptRoot) { exit }`; operator widzi link do dashboardu.
+3. **Fix kodowania `.ps1`**: PS 5.1 czyta plik bez BOM jako ANSI. `install.ps1` MUSI być bez BOM (BOM łamie `irm|iex` → `﻿#`), więc znaki strukturalne → ASCII (em-dash/strzałka/emoji), diakrytyki zostają. `install.ps1.Tests.ps1` → BOM + ładuje `install.ps1` przez jawny odczyt UTF-8.
+4. **Fix: persystencja env pisała do `.zshrc` na Windows** (nieczytany) → win32 do User Environment (`[Environment]::SetEnvironmentVariable(...,'User')`), Unix bez zmian. Zweryfikowane w rejestrze.
+5. **Kosmetyka**: komunikaty bez zahardkodowanego „main"/„Mac".
+
+**Otwarta decyzja (na finalizację):** `install.ps1` bez BOM w trybie lokalnym (`.\install.ps1` / `npm install:win`) na PS 5.1 misreaduje diakrytyki (nie da się tam wstrzyknąć `-Encoding UTF8` ani BOM bez psucia `irm|iex`). Ścieżka one-liner (główna) działa. Opcje: (a) `install.ps1` w pełni ASCII — kosztem diakrytyków; (b) „tryb lokalny na Windows wymaga PS7"; (c) zostawić — one-liner wystarcza.
 </content>
