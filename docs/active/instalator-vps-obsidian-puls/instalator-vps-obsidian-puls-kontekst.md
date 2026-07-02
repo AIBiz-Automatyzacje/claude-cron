@@ -1,7 +1,12 @@
 # Kontekst: Połączony instalator VPS (Obsidian + Puls)
 
 Branch: `feature/instalator-vps-obsidian-puls`
-Ostatnia aktualizacja: 2026-07-02
+Ostatnia aktualizacja: 2026-07-02 (Faza 1 ukończona)
+
+## Stan implementacji
+
+- **Faza 1 (IU1) — DONE**: `scripts/install-vps.sh` przebudowany na strukturę stałe → helpery → funkcje-komponenty → `main "$@"` za guardem `CLAUDE_CRON_LIB_ONLY`. Powstał harness `scripts/install-vps.test.sh` (14 asercji PASS). `bash -n` czysty, jedyny `read -r` w `ask_tty` (grep-strażnik zielony). Pełny suite projektu 163/163 PASS.
+- Fazy 2–7: do zrobienia.
 
 ## Powiązane pliki
 
@@ -33,6 +38,15 @@ Ostatnia aktualizacja: 2026-07-02
 10. **Cron auto-update o 02:00 — NIE zmieniać** (spójność z `MAINTENANCE_WINDOW` 02:00–02:15 i missed-job detection).
 11. **Komunikaty user-facing PO POLSKU** (kursant nietechniczny); fix P3 przy okazji: cytowanie `"$VAULT_GIT"` w CRON_CMD.
 12. **Flagi przez `bash -s --`** w one-linerze; `--reset` z potwierdzeniem `TAK` + guardy `${var:?}`.
+
+### Decyzje z Fazy 1 (implementacja IU1)
+
+13. **`--only-puls` i `--no-obsidian` → jedna zmienna `FLAG_ONLY_PULS`** — spec produktowy traktuje je jako równoważne (bez flagi = wszystko).
+14. **Minimalne podpięcie flag już w IU1**: `--port`/`--tz` zmieniają default pytania interaktywnego (pełne auto-wartości → Faza 2); `--no-auto-update` pomija sekcję crona. `FLAG_DEVICE`/`FLAG_ONLY_PULS`/`FLAG_RESET` tylko parsowane+walidowane — konsumpcja w Fazach 2/5/7.
+15. **`git clone --branch "$REF"`** jako nośnik env-override `CLAUDE_CRON_REF` (default `main` = zachowanie jak dziś).
+16. **Prompty `[Y/n]` → `[T/n]`** przy PL-unifikacji; logika akceptuje T/t/Y/y (negacja tylko `^[Nn]$`).
+17. **Handoff `su - claude -c claude` dostał `< $TTY_DEVICE`** gdy tty czytelne (mechanizm R7; pełny `run_login` dla bloku loginów → Faza 4, po spike-gate).
+18. **`set -e` → `set -Eeuo pipefail`** — `errtrace` (`-E`) wymagany, żeby `trap ERR` działał wewnątrz funkcji.
 
 ## Odroczone do implementacji
 

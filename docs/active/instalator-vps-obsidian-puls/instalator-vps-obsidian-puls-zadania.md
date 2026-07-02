@@ -7,19 +7,19 @@ Ostatnia aktualizacja: 2026-07-02
 
 ## Faza 1: Szkielet komponentowy (IU1)
 
-- [ ] Restrukturyzacja `scripts/install-vps.sh`: stałe → helpery → funkcje-komponenty → `main "$@"` za guardem `CLAUDE_CRON_LIB_ONLY` (istniejące sekcje przenoszone BEZ zmian zachowania)
-- [ ] Parsowanie flag pętlą `case`: `--only-puls`, `--no-obsidian`, `--reset`, `--port <n>`, `--tz <tz>`, `--device-name <s>`, `--no-auto-update`, `--help`; nieznana → fail; wykluczenia z `--reset`
-- [ ] Helper `ask_tty VAR "prompt" "default"` — jedyne miejsce z `read`, czyta z `/dev/tty`, fallback (default lub fail przy braku defaultu)
-- [ ] Helper `run_login "opis" login_cmd verify_cmd` — pętla max 3 prób + `halt_leave_partial` (exit ≠ 0, BEZ rollbacku, komunikat resume)
-- [ ] Rollback-stos: `push_rollback` + `trap on_err ERR` + `disable_rollback`/`enable_rollback`
-- [ ] Env-override: `CLAUDE_CRON_REPO` / `CLAUDE_CRON_REF` (fallback jak dziś)
-- [ ] Ujednolicenie komunikatów user-facing na PL przy przenoszeniu sekcji
-- [ ] Stwórz `scripts/install-vps.test.sh` (harness: lib-only source, sandbox mktemp + trap EXIT, pass/problem)
-- [ ] Test: parsowanie flag — `--port 8888` ustawia PORT; nieznana flaga → exit ≠ 0; `--reset` + `--only-puls` → exit ≠ 0
-- [ ] Test: `ask_tty` bez tty (wstrzyknięta ścieżka) — default → zwraca default; brak defaultu → fail z czytelnym komunikatem
-- [ ] Test: `run_login` — verify fail 2× + pass 3. → sukces; fail 3× → `halt_leave_partial`, rollback-stos NIE odwinięty
-- [ ] Test: `push_rollback` + symulowany błąd → cofnięcie w odwrotnej kolejności; `disable_rollback` → błąd nie odwija stosu
-- [ ] Test: `bash -n scripts/install-vps.sh` przechodzi
+- [x] Restrukturyzacja `scripts/install-vps.sh`: stałe → helpery → funkcje-komponenty → `main "$@"` za guardem `CLAUDE_CRON_LIB_ONLY` (istniejące sekcje przenoszone BEZ zmian zachowania)
+- [x] Parsowanie flag pętlą `case`: `--only-puls`, `--no-obsidian`, `--reset`, `--port <n>`, `--tz <tz>`, `--device-name <s>`, `--no-auto-update`, `--help`; nieznana → fail; wykluczenia z `--reset`
+- [x] Helper `ask_tty VAR "prompt" "default"` — jedyne miejsce z `read`, czyta z `/dev/tty`, fallback (default lub fail przy braku defaultu)
+- [x] Helper `run_login "opis" login_cmd verify_cmd` — pętla max 3 prób + `halt_leave_partial` (exit ≠ 0, BEZ rollbacku, komunikat resume)
+- [x] Rollback-stos: `push_rollback` + `trap on_err ERR` + `disable_rollback`/`enable_rollback`
+- [x] Env-override: `CLAUDE_CRON_REPO` / `CLAUDE_CRON_REF` (fallback jak dziś)
+- [x] Ujednolicenie komunikatów user-facing na PL przy przenoszeniu sekcji
+- [x] Stwórz `scripts/install-vps.test.sh` (harness: lib-only source, sandbox mktemp + trap EXIT, pass/problem)
+- [x] Test: parsowanie flag — `--port 8888` ustawia PORT; nieznana flaga → exit ≠ 0; `--reset` + `--only-puls` → exit ≠ 0
+- [x] Test: `ask_tty` bez tty (wstrzyknięta ścieżka) — default → zwraca default; brak defaultu → fail z czytelnym komunikatem
+- [x] Test: `run_login` — verify fail 2× + pass 3. → sukces; fail 3× → `halt_leave_partial`, rollback-stos NIE odwinięty
+- [x] Test: `push_rollback` + symulowany błąd → cofnięcie w odwrotnej kolejności; `disable_rollback` → błąd nie odwija stosu
+- [x] Test: `bash -n scripts/install-vps.sh` przechodzi
 - [ ] Weryfikacja: `bash -n scripts/install-vps.sh` — zero błędów składni
 - [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — wszystkie asercje PASS
 - [ ] Weryfikacja: `grep -n 'read -r' scripts/install-vps.sh` poza definicją `ask_tty` zwraca 0 linii

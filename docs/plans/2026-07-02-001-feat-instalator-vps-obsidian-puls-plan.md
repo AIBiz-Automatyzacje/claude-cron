@@ -102,7 +102,7 @@ Z dokumentu źródłowego (sekcje: Decyzja produktowa, Dostarczenie, Prerequisit
 
 Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1 daje szkielet, na którym reszta wisi.
 
-- [ ] **Unit 1: Szkielet komponentowy — funkcje, flagi, TTY, trap/rollback, harness testowy**
+- [x] **Unit 1: Szkielet komponentowy — funkcje, flagi, TTY, trap/rollback, harness testowy**
 
 **Cel:** Przekształcenie liniowego skryptu w strukturę: stałe → helpery (log/tty/retry/rollback) → funkcje-komponenty → `main "$@"` za guardem lib-only. Parsowanie flag. Fundament pod wszystkie kolejne IU.
 
@@ -134,16 +134,16 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 - `install.test.sh` (harness: sandbox, pass/problem, source lib-only)
 
 **Scenariusze testowe:**
-- [Unit] parsowanie flag: `--port 8888` ustawia PORT; nieznana flaga → exit ≠ 0; `--reset` + `--only-puls` → exit ≠ 0
-- [Unit] `ask_tty` bez `/dev/tty` (symulacja: funkcja z wstrzykniętą ścieżką tty): pytanie z defaultem → zwraca default; pytanie bez defaultu → fail z czytelnym komunikatem
-- [Unit] `run_login` z wstrzykniętym `verify_cmd` failującym 2× i przechodzącym za 3. → sukces; failującym 3× → wywołuje `halt_leave_partial` (exit ≠ 0), NIE odwija rollback-stosu
-- [Unit] `push_rollback` + symulowany błąd → akcje cofnięte w odwrotnej kolejności; `disable_rollback` → błąd w bloku NIE odwija stosu
-- [Unit] `bash -n scripts/install-vps.sh` przechodzi
+- [x] [Unit] parsowanie flag: `--port 8888` ustawia PORT; nieznana flaga → exit ≠ 0; `--reset` + `--only-puls` → exit ≠ 0
+- [x] [Unit] `ask_tty` bez `/dev/tty` (symulacja: funkcja z wstrzykniętą ścieżką tty): pytanie z defaultem → zwraca default; pytanie bez defaultu → fail z czytelnym komunikatem
+- [x] [Unit] `run_login` z wstrzykniętym `verify_cmd` failującym 2× i przechodzącym za 3. → sukces; failującym 3× → wywołuje `halt_leave_partial` (exit ≠ 0), NIE odwija rollback-stosu
+- [x] [Unit] `push_rollback` + symulowany błąd → akcje cofnięte w odwrotnej kolejności; `disable_rollback` → błąd w bloku NIE odwija stosu
+- [x] [Unit] `bash -n scripts/install-vps.sh` przechodzi
 
 **Weryfikacja:**
-- `bash -n scripts/install-vps.sh` — zero błędów składni
-- `bash scripts/install-vps.test.sh` — wszystkie asercje PASS
-- `grep -n 'read -r' scripts/install-vps.sh` poza definicją `ask_tty` zwraca 0 linii (żadnego gołego `read` w przebiegu)
+- [x] `bash -n scripts/install-vps.sh` — zero błędów składni
+- [x] `bash scripts/install-vps.test.sh` — wszystkie asercje PASS (14/14)
+- [x] `grep -n 'read -r' scripts/install-vps.sh` poza definicją `ask_tty` zwraca 0 linii (żadnego gołego `read` w przebiegu)
 
 ---
 

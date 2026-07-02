@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# -E (errtrace): trap ERR musi być dziedziczony do funkcji, inaczej rollback
+# nie odpali się dla błędu wewnątrz funkcji-komponentu.
+set -Eeuo pipefail
 
 # ============================================
-#  CLAUDE-CRON — VPS Installer
-#  Interactive setup for Linux VPS (Debian/Ubuntu)
-#  Run as root: sudo bash install-vps.sh
+#  PULS (claude-cron) — Instalator VPS
+#  Interaktywna instalacja na Linux VPS (Debian/Ubuntu)
+#  Uruchom jako root: sudo bash install-vps.sh
+#
+#  Struktura: stałe → helpery (log/tty/rollback/login) →
+#  funkcje-komponenty → main "$@" za guardem lib-only.
+#  Test harness ładuje same funkcje (CLAUDE_CRON_LIB_ONLY=1),
+#  bez odpalania main — wzorzec z install.sh / install.test.sh.
 # ============================================
 
-REPO="https://github.com/AIBiz-Automatyzacje/claude-cron.git"
+# ============ STAŁE ============
+
+# Env-override źródła kodu — pozwala przetestować instalator z forka/brancha
+# prawdziwym `curl|bash` PRZED mergem (wzorzec CLAUDE_CRON_TARBALL_URL z install.sh).
+REPO="${CLAUDE_CRON_REPO:-https://github.com/AIBiz-Automatyzacje/claude-cron.git}"
+REF="${CLAUDE_CRON_REF:-main}"
+
 SERVICE_NAME="claude-cron"
 CLAUDE_USER="claude"
+
+DEFAULT_PORT=7777
+DEFAULT_TZ="Europe/Warsaw"
 
 # Wspierany zakres Node — node:sqlite stabilne dopiero od 22.13, górna granica
 # wykluczająca <25 (spójne z package.json "engines >=22.13 <25" i lib/config.js
@@ -21,7 +37,16 @@ MIN_NODE_MAJOR=22
 MIN_NODE_MINOR=13
 MAX_NODE_MAJOR=25
 
-# Colors
+# Maksymalna liczba prób w bloku loginów (run_login), zanim instalator
+# czysto zatrzyma się w trybie leave-partial.
+LOGIN_MAX_ATTEMPTS=3
+
+# Urządzenie terminala do pytań interaktywnych. Pod `curl|bash` stdin to pipe
+# z treścią skryptu (gołe `read` dostaje EOF), więc odpowiedzi czytamy z /dev/tty.
+# Override przez env / testy (wstrzyknięcie pliku = symulacja odpowiedzi).
+TTY_DEVICE="${CLAUDE_CRON_TTY_DEVICE:-/dev/tty}"
+
+# Kolory
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -29,26 +54,201 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# ============ FLAGI (parse_flags) ============
+
+# Bez flag = pełna instalacja (Obsidian + Puls). Flagi sterują fazami
+# w kolejnych Implementation Units (preflight/pytania/Obsidian/reset).
+FLAG_ONLY_PULS=0       # --only-puls / --no-obsidian: pomiń kroki Obsidianowe
+FLAG_RESET=0           # --reset: deinstalacja (osobna ścieżka, IU7)
+FLAG_PORT=""           # --port <n>
+FLAG_TZ=""             # --tz <tz>
+# shellcheck disable=SC2034  # FLAG_DEVICE konsumowany w Fazie 5 (rejestracja urządzenia Sync)
+FLAG_DEVICE=""         # --device-name <s> (rejestracja urządzenia Sync, Faza 5)
+FLAG_NO_AUTO_UPDATE=0  # --no-auto-update: opt-out z crona 02:00
+
+# ============ HELPERY: LOG ============
+
 info()  { echo -e "${CYAN}[info]${NC} $1"; }
 ok()    { echo -e "${GREEN}  ✓${NC} $1"; }
 warn()  { echo -e "${YELLOW}[warn]${NC} $1"; }
 fail()  { echo -e "${RED}[error]${NC} $1"; exit 1; }
 ask()   { echo -en "${BOLD}$1${NC}"; }
 
-echo ""
-echo -e "${CYAN}🕹️  CLAUDE-CRON — VPS Setup${NC}"
-echo "========================================"
-echo ""
+usage() {
+  cat <<'USAGE'
+Użycie: sudo bash install-vps.sh [flagi]
 
-# ============ ROOT CHECK ============
+Flagi:
+  --only-puls         instaluj tylko Puls (pomiń Obsidian + LiveSync)
+  --no-obsidian       to samo co --only-puls
+  --reset             deinstalacja (usuwa serwisy, usera, vault) — nie łączy się
+                      z --only-puls / --no-obsidian
+  --port <n>          port serwera Puls (domyślnie 7777)
+  --tz <tz>           strefa czasowa (domyślnie autodetekcja / Europe/Warsaw)
+  --device-name <s>   nazwa urządzenia dla Obsidian Sync (domyślnie vps-<hostname>)
+  --no-auto-update    bez codziennego crona auto-update (02:00)
+  --help              ten ekran
+USAGE
+}
 
-if [ "$(id -u)" -ne 0 ]; then
-  fail "Run as root: sudo bash install-vps.sh"
-fi
+# ============ HELPERY: FLAGI ============
 
-# ============ 1. NODE.JS ============
+parse_flags() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --only-puls|--no-obsidian) FLAG_ONLY_PULS=1 ;;
+      --reset) FLAG_RESET=1 ;;
+      --port)
+        shift
+        [ "$#" -gt 0 ] || fail "Flaga --port wymaga wartości (np. --port 7777)."
+        FLAG_PORT="$1"
+        ;;
+      --tz)
+        shift
+        [ "$#" -gt 0 ] || fail "Flaga --tz wymaga wartości (np. --tz Europe/Warsaw)."
+        FLAG_TZ="$1"
+        ;;
+      --device-name)
+        shift
+        [ "$#" -gt 0 ] || fail "Flaga --device-name wymaga wartości (np. --device-name vps-1)."
+        # shellcheck disable=SC2034  # konsumowane w Fazie 5 (rejestracja urządzenia Sync)
+        FLAG_DEVICE="$1"
+        ;;
+      --no-auto-update) FLAG_NO_AUTO_UPDATE=1 ;;
+      --help|-h) usage; exit 0 ;;
+      *) fail "Nieznana flaga: $1 (zobacz: bash install-vps.sh --help)" ;;
+    esac
+    shift
+  done
 
-info "Checking Node.js..."
+  # --reset to osobna ścieżka (deinstalacja) — flagi zakresu instalacji nie mają sensu.
+  if [ "$FLAG_RESET" = 1 ] && [ "$FLAG_ONLY_PULS" = 1 ]; then
+    fail "Flaga --reset nie łączy się z --only-puls / --no-obsidian."
+  fi
+
+  if [ -n "$FLAG_PORT" ] && ! [[ "$FLAG_PORT" =~ ^[0-9]+$ ]]; then
+    fail "Flaga --port wymaga liczby, otrzymano: $FLAG_PORT"
+  fi
+
+  PORT="${FLAG_PORT:-$DEFAULT_PORT}"
+}
+
+# ============ HELPERY: TTY ============
+
+# ask_tty VAR "prompt" ["default"] — JEDYNE miejsce z `read` w instalatorze.
+# Pod curl|bash stdin to pipe, więc odpowiedź czytamy z TTY_DEVICE (/dev/tty).
+# Fallback bez terminala: przyjmij default; pytanie bez defaultu = twardy fail
+# (lepiej zatrzymać niż cicho zainstalować ze złą konfiguracją).
+ask_tty() {
+  local __var="$1" __prompt="$2" __default="${3-}" __has_default=0 __answer=""
+  [ "$#" -ge 3 ] && __has_default=1
+
+  if [ -r "$TTY_DEVICE" ]; then
+    ask "$__prompt"
+    # EOF na tty (Ctrl+D) traktujemy jak pustą odpowiedź, nie jak błąd.
+    read -r __answer < "$TTY_DEVICE" || __answer=""
+  elif [ "$__has_default" -eq 1 ]; then
+    warn "Brak terminala ($TTY_DEVICE) — przyjmuję wartość domyślną: ${__prompt}${__default}"
+  else
+    fail "Brak terminala ($TTY_DEVICE) — nie mogę zadać pytania bez wartości domyślnej: ${__prompt}"
+  fi
+
+  if [ -z "$__answer" ] && [ "$__has_default" -eq 1 ]; then
+    __answer="$__default"
+  fi
+  printf -v "$__var" '%s' "$__answer"
+}
+
+# ============ HELPERY: ROLLBACK ============
+
+# Stos akcji cofających. Komponenty rejestrują TYLKO to, co same zmieniły
+# w tym runie (guard-first, potem push_rollback) — nigdy cudzego stanu.
+ROLLBACK_STACK=()
+ROLLBACK_ENABLED=1
+
+push_rollback()    { ROLLBACK_STACK+=("$1"); }
+disable_rollback() { ROLLBACK_ENABLED=0; }
+enable_rollback()  { ROLLBACK_ENABLED=1; }
+
+# Trap ERR: odwija stos w ODWROTNEJ kolejności (LIFO) i wypisuje każdy
+# cofnięty krok. Przy wyłączonym rollbacku (blok loginów) tylko kończy
+# z oryginalnym kodem błędu.
+on_err() {
+  local status=$?
+  trap - ERR
+  if [ "$ROLLBACK_ENABLED" != "1" ] || [ "${#ROLLBACK_STACK[@]}" -eq 0 ]; then
+    exit "$status"
+  fi
+  echo ""
+  warn "Błąd instalacji — cofam kroki wykonane w tym uruchomieniu:"
+  local i
+  for (( i=${#ROLLBACK_STACK[@]}-1; i>=0; i-- )); do
+    warn "  ↩ ${ROLLBACK_STACK[i]}"
+    bash -c "${ROLLBACK_STACK[i]}" || warn "    (nie udało się cofnąć: ${ROLLBACK_STACK[i]})"
+  done
+  exit "$status"
+}
+
+# Czyste zatrzymanie w trybie leave-partial (blok loginów): dotychczasowe
+# kroki ZOSTAJĄ (bez rollbacku), user dostaje instrukcję wznowienia.
+halt_leave_partial() {
+  local desc="$1"
+  disable_rollback
+  echo ""
+  warn "Instalacja ZATRZYMANA na kroku: $desc"
+  warn "Wykonane dotąd kroki NIE zostały cofnięte."
+  warn "Dokończ ten krok ręcznie lub uruchom instalator ponownie:"
+  warn "  sudo bash install-vps.sh"
+  exit 1
+}
+
+# ============ HELPERY: LOGIN Z RETRY ============
+
+# run_login "opis" login_cmd verify_cmd — pojedyncza pauza interaktywna:
+# handoff logowania przez /dev/tty → natychmiastowa weryfikacja → przy failu
+# pytanie o ponowienie. Po LOGIN_MAX_ATTEMPTS nieudanych próbach (lub
+# rezygnacji usera) → halt_leave_partial (exit ≠ 0, BEZ rollbacku).
+run_login() {
+  local desc="$1" login_cmd="$2" verify_cmd="$3" attempt retry
+  for (( attempt=1; attempt<=LOGIN_MAX_ATTEMPTS; attempt++ )); do
+    info "Logowanie: $desc (próba $attempt/$LOGIN_MAX_ATTEMPTS)"
+    # Proces logowania dostaje klawiaturę przez /dev/tty (stdin pod curl|bash
+    # to pipe). Exit code loginu ignorujemy — prawdę mówi verify_cmd.
+    if [ -r "$TTY_DEVICE" ]; then
+      bash -c "$login_cmd" < "$TTY_DEVICE" || true
+    else
+      bash -c "$login_cmd" || true
+    fi
+    if bash -c "$verify_cmd"; then
+      ok "$desc — zweryfikowano"
+      return 0
+    fi
+    warn "$desc — weryfikacja nie powiodła się."
+    if [ "$attempt" -lt "$LOGIN_MAX_ATTEMPTS" ]; then
+      retry=""
+      ask_tty retry "Spróbować ponownie? [T/n]: " "T"
+      if [[ "$retry" =~ ^[Nn]$ ]]; then
+        halt_leave_partial "$desc"
+      fi
+    fi
+  done
+  halt_leave_partial "$desc"
+}
+
+# ============ KOMPONENTY ============
+
+print_banner() {
+  echo ""
+  echo -e "${CYAN}🕹️  PULS — instalacja na VPS${NC}"
+  echo "========================================"
+  echo ""
+}
+
+check_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    fail "Uruchom jako root: sudo bash install-vps.sh"
+  fi
+}
 
 # Zwraca 0 (true) gdy zainstalowany Node mieści się w [MIN.MIN_MINOR, MAX_MAJOR)
 # — czyli >= 22.13 ORAZ major < 25 (górna granica wykluczająca, spójna z "engines").
@@ -73,218 +273,217 @@ is_node_supported() {
   return 1
 }
 
-if command -v node &>/dev/null; then
-  if ! is_node_supported; then
-    warn "Node.js $(node -v) is unsupported (need >=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} <${MAX_NODE_MAJOR} for node:sqlite)"
-    ask "Install Node.js 22 LTS? [Y/n]: "
-    read -r INSTALL_NODE
-    INSTALL_NODE="${INSTALL_NODE:-Y}"
-    if [[ "$INSTALL_NODE" =~ ^[Yy]$ ]]; then
+ensure_node() {
+  info "Sprawdzam Node.js..."
+
+  if command -v node &>/dev/null; then
+    if ! is_node_supported; then
+      warn "Node.js $(node -v) jest niewspierany (wymagane >=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} <${MAX_NODE_MAJOR} dla node:sqlite)"
+      local install_node=""
+      ask_tty install_node "Zainstalować Node.js 22 LTS? [T/n]: " "T"
+      if [[ "$install_node" =~ ^[Nn]$ ]]; then
+        fail "Wymagany Node.js >=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} <${MAX_NODE_MAJOR}"
+      fi
       curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
       apt-get install -y nodejs
-    else
-      fail "Node.js >=${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} <${MAX_NODE_MAJOR} required"
+    fi
+    ok "Node.js $(node -v)"
+  else
+    info "Brak Node.js — instaluję Node.js 22 LTS..."
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    apt-get install -y nodejs
+    ok "Node.js $(node -v)"
+  fi
+}
+
+ensure_git() {
+  if ! command -v git &>/dev/null; then
+    info "Instaluję git..."
+    apt-get update -qq && apt-get install -y -qq git
+  fi
+  ok "git $(git --version | awk '{print $3}')"
+}
+
+ensure_cron() {
+  if ! command -v crontab &>/dev/null; then
+    info "Instaluję cron..."
+    apt-get update -qq && apt-get install -y -qq cron
+  fi
+  systemctl enable cron 2>/dev/null || true
+  systemctl start cron 2>/dev/null || true
+  ok "cron"
+}
+
+# Uwaga: build-essential/python3 celowo NIE są instalowane — były potrzebne
+# wyłącznie pod natywną kompilację better-sqlite3. Projekt używa wbudowanego
+# node:sqlite (lib/db.js), koffi ma prebuilt binaries, pg to czysty JS.
+
+ensure_claude_user() {
+  if id -u "$CLAUDE_USER" &>/dev/null; then
+    ok "Użytkownik '$CLAUDE_USER' istnieje"
+  else
+    info "Tworzę dedykowanego użytkownika '$CLAUDE_USER'..."
+    useradd -m -s /bin/bash "$CLAUDE_USER"
+    ok "Użytkownik '$CLAUDE_USER' utworzony"
+  fi
+
+  CLAUDE_HOME=$(eval echo "~$CLAUDE_USER")
+  INSTALL_DIR="$CLAUDE_HOME/claude-cron"
+}
+
+install_claude_cli() {
+  info "Instaluję Claude CLI globalnie..."
+  npm install -g @anthropic-ai/claude-code 2>&1 | tail -1
+  ok "Claude CLI zainstalowane"
+}
+
+login_claude_cli() {
+  echo ""
+  echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${YELLOW}  Claude CLI musi być zalogowane jako '$CLAUDE_USER'.${NC}"
+  echo -e "${YELLOW}  To krok interaktywny — dokończ logowanie w przeglądarce.${NC}"
+  echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  local do_login=""
+  ask_tty do_login "Zalogować się do Claude CLI teraz? [T/n]: " "T"
+
+  if [[ "$do_login" =~ ^[Nn]$ ]]; then
+    warn "Pomijam logowanie — joby nie ruszą, dopóki Claude CLI nie będzie zalogowane"
+    warn "Zaloguj później: su - $CLAUDE_USER -c 'claude'"
+    return 0
+  fi
+
+  echo ""
+  echo "Uruchamiam Claude CLI jako '$CLAUDE_USER' — dokończ logowanie w przeglądarce."
+  echo "Po zalogowaniu wyjdź z Claude (Ctrl+C lub /exit), by kontynuować instalację."
+  echo ""
+  # Handoff klawiatury przez /dev/tty — pod curl|bash stdin to pipe.
+  if [ -r "$TTY_DEVICE" ]; then
+    su - "$CLAUDE_USER" -c "claude" < "$TTY_DEVICE" || true
+  else
+    su - "$CLAUDE_USER" -c "claude" || true
+  fi
+  echo ""
+  ok "Krok logowania Claude CLI zakończony"
+}
+
+clone_repo() {
+  echo ""
+  info "Przygotowuję repozytorium..."
+
+  if [ -d "$INSTALL_DIR/.git" ]; then
+    info "Aktualizuję istniejącą instalację..."
+    su - "$CLAUDE_USER" -c "cd $INSTALL_DIR && git pull --ff-only"
+  else
+    if [ -d "$INSTALL_DIR" ]; then
+      warn "$INSTALL_DIR istnieje bez gita — tworzę kopię zapasową..."
+      mv "$INSTALL_DIR" "${INSTALL_DIR}.backup.$(date +%s)"
+    fi
+    info "Klonuję repozytorium (ref: $REF)..."
+    su - "$CLAUDE_USER" -c "git clone --branch $REF $REPO $INSTALL_DIR"
+  fi
+  ok "Repo: $INSTALL_DIR"
+}
+
+install_dependencies() {
+  info "Instaluję zależności..."
+  su - "$CLAUDE_USER" -c "cd $INSTALL_DIR && npm install --production" 2>&1 | tail -3
+  mkdir -p "$INSTALL_DIR/data"
+  chown "$CLAUDE_USER:$CLAUDE_USER" "$INSTALL_DIR/data"
+  ok "Zależności zainstalowane"
+}
+
+configure_settings() {
+  echo ""
+  echo -e "${CYAN}Konfiguracja${NC}"
+  echo "─────────────────────────────────────"
+  echo ""
+
+  # Workspace
+  echo -e "  Workspace = folder, w którym Claude CLI wykonuje joby."
+  echo -e "  To powinien być Twój vault Obsidian (lub inny projekt)."
+  echo ""
+
+  # Pokaż, co jest dostępne w home usera claude
+  if [ -d "$CLAUDE_HOME" ]; then
+    local dirs_found
+    dirs_found=$(su - "$CLAUDE_USER" -c "ls -d $CLAUDE_HOME/*/ 2>/dev/null" || true)
+    if [ -n "$dirs_found" ]; then
+      echo -e "  ${CYAN}Foldery w /home/$CLAUDE_USER/:${NC}"
+      echo "$dirs_found" | sed 's/^/    /'
+      echo ""
     fi
   fi
-  ok "Node.js $(node -v)"
-else
-  info "Node.js not found — installing Node.js 22 LTS..."
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt-get install -y nodejs
-  ok "Node.js $(node -v)"
-fi
 
-# ============ 2. GIT ============
+  local workspace_input=""
+  ask_tty workspace_input "Ścieżka do workspace [$CLAUDE_HOME/workspace]: " "$CLAUDE_HOME/workspace"
+  WORKSPACE="$workspace_input"
 
-if ! command -v git &>/dev/null; then
-  info "Installing git..."
-  apt-get update -qq && apt-get install -y -qq git
-fi
-ok "git $(git --version | awk '{print $3}')"
+  # Zdejmij cudzysłowy, backslash-escapy i spacje (drag & drop dodaje escapy)
+  WORKSPACE="${WORKSPACE//\'/}"
+  WORKSPACE="${WORKSPACE//\"/}"
+  WORKSPACE="${WORKSPACE//\\/}"
+  WORKSPACE="${WORKSPACE%% }"
+  WORKSPACE="${WORKSPACE## }"
+  WORKSPACE="${WORKSPACE/#\~/$CLAUDE_HOME}"
 
-# ============ 2b. CRON ============
-
-if ! command -v crontab &>/dev/null; then
-  info "Installing cron..."
-  apt-get update -qq && apt-get install -y -qq cron
-fi
-systemctl enable cron 2>/dev/null || true
-systemctl start cron 2>/dev/null || true
-ok "cron"
-
-# ============ 3. (build tools usunięte) ============
-# Build-essential/python3 były instalowane wyłącznie pod natywną kompilację
-# better-sqlite3. Projekt używa teraz wbudowanego node:sqlite (lib/db.js), a
-# pozostałe zależności nie wymagają kompilacji: koffi dostarcza prebuilt binaries,
-# pg jest czystym JS. Brak kroku build-tools = szybsza i lżejsza instalacja.
-
-# ============ 4. DEDICATED USER ============
-
-if id -u "$CLAUDE_USER" &>/dev/null; then
-  ok "User '$CLAUDE_USER' exists"
-else
-  info "Creating dedicated user '$CLAUDE_USER'..."
-  useradd -m -s /bin/bash "$CLAUDE_USER"
-  ok "User '$CLAUDE_USER' created"
-fi
-
-CLAUDE_HOME=$(eval echo "~$CLAUDE_USER")
-INSTALL_DIR="$CLAUDE_HOME/claude-cron"
-
-# ============ 5. CLAUDE CLI ============
-
-info "Installing Claude CLI globally..."
-npm install -g @anthropic-ai/claude-code 2>&1 | tail -1
-ok "Claude CLI installed"
-
-echo ""
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}  Claude CLI needs to be logged in as '$CLAUDE_USER'.${NC}"
-echo -e "${YELLOW}  This is interactive — you'll need to complete the${NC}"
-echo -e "${YELLOW}  login flow in your browser.${NC}"
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-ask "Log in to Claude CLI now? [Y/n]: "
-read -r DO_LOGIN
-DO_LOGIN="${DO_LOGIN:-Y}"
-
-if [[ "$DO_LOGIN" =~ ^[Yy]$ ]]; then
-  echo ""
-  echo "Launching Claude CLI as '$CLAUDE_USER' — complete login in your browser."
-  echo "After login, exit Claude (Ctrl+C or /exit) to continue installation."
-  echo ""
-  su - "$CLAUDE_USER" -c "claude" || true
-  echo ""
-  ok "Claude CLI login step completed"
-else
-  warn "Skipping login — jobs won't run until Claude CLI is logged in"
-  warn "Login later: su - $CLAUDE_USER -c 'claude'"
-fi
-
-# ============ 6. CLONE REPO ============
-
-echo ""
-info "Setting up repository..."
-
-if [ -d "$INSTALL_DIR/.git" ]; then
-  info "Updating existing installation..."
-  su - "$CLAUDE_USER" -c "cd $INSTALL_DIR && git pull --ff-only"
-else
-  if [ -d "$INSTALL_DIR" ]; then
-    warn "$INSTALL_DIR exists without git — creating backup..."
-    mv "$INSTALL_DIR" "${INSTALL_DIR}.backup.$(date +%s)"
-  fi
-  info "Cloning repository..."
-  su - "$CLAUDE_USER" -c "git clone $REPO $INSTALL_DIR"
-fi
-ok "Repo: $INSTALL_DIR"
-
-# ============ 7. NPM INSTALL ============
-
-info "Installing dependencies..."
-su - "$CLAUDE_USER" -c "cd $INSTALL_DIR && npm install --production" 2>&1 | tail -3
-mkdir -p "$INSTALL_DIR/data"
-chown "$CLAUDE_USER:$CLAUDE_USER" "$INSTALL_DIR/data"
-ok "Dependencies installed"
-
-# ============ 8. CONFIGURATION ============
-
-echo ""
-echo -e "${CYAN}Configuration${NC}"
-echo "─────────────────────────────────────"
-echo ""
-
-# Workspace
-echo -e "  Workspace = folder, w którym Claude CLI wykonuje joby."
-echo -e "  To powinien być Twój vault Obsidian (lub inny projekt)."
-echo ""
-
-# Show what's available in claude home
-if [ -d "$CLAUDE_HOME" ]; then
-  DIRS_FOUND=$(su - "$CLAUDE_USER" -c "ls -d $CLAUDE_HOME/*/ 2>/dev/null" || true)
-  if [ -n "$DIRS_FOUND" ]; then
-    echo -e "  ${CYAN}Foldery w /home/$CLAUDE_USER/:${NC}"
-    echo "$DIRS_FOUND" | while read -r d; do
-      echo -e "    ${BOLD}$d${NC}"
-    done
-    echo ""
-  fi
-fi
-
-ask "Ścieżka do workspace [$CLAUDE_HOME/workspace]: "
-read -r WORKSPACE_INPUT
-WORKSPACE="${WORKSPACE_INPUT:-$CLAUDE_HOME/workspace}"
-
-# Strip quotes, backslash-escapes and spaces (drag & drop dodaje escapy)
-WORKSPACE="${WORKSPACE//\'/}"
-WORKSPACE="${WORKSPACE//\"/}"
-WORKSPACE="${WORKSPACE//\\/}"
-WORKSPACE="${WORKSPACE%% }"
-WORKSPACE="${WORKSPACE## }"
-WORKSPACE="${WORKSPACE/#\~/$CLAUDE_HOME}"
-
-if [ ! -d "$WORKSPACE" ]; then
-  ask "Folder nie istnieje. Utworzyć $WORKSPACE? [Y/n]: "
-  read -r CREATE_WS
-  CREATE_WS="${CREATE_WS:-Y}"
-  if [[ "$CREATE_WS" =~ ^[Yy]$ ]]; then
+  if [ ! -d "$WORKSPACE" ]; then
+    local create_ws=""
+    ask_tty create_ws "Folder nie istnieje. Utworzyć $WORKSPACE? [T/n]: " "T"
+    if [[ "$create_ws" =~ ^[Nn]$ ]]; then
+      fail "Workspace nie istnieje: $WORKSPACE"
+    fi
     mkdir -p "$WORKSPACE"
     chown "$CLAUDE_USER:$CLAUDE_USER" "$WORKSPACE"
     ok "Utworzono: $WORKSPACE"
-  else
-    fail "Workspace nie istnieje: $WORKSPACE"
   fi
-fi
-ok "Workspace: $WORKSPACE"
+  ok "Workspace: $WORKSPACE"
 
-# Port
-ask "Port serwera [7777]: "
-read -r PORT_INPUT
-PORT="${PORT_INPUT:-7777}"
-ok "Port: $PORT"
+  # Port (default z flagi --port lub 7777 — ustawione w parse_flags)
+  local port_input=""
+  ask_tty port_input "Port serwera [$PORT]: " "$PORT"
+  PORT="$port_input"
+  ok "Port: $PORT"
 
-# Discord webhook (optional)
-echo ""
-ask "Discord webhook URL do powiadomień (puste = pomiń): "
-read -r DISCORD_URL
-DISCORD_URL="${DISCORD_URL:-}"
-if [ -n "$DISCORD_URL" ]; then
-  ok "Discord: configured"
-fi
+  # Discord webhook (opcjonalnie)
+  echo ""
+  ask_tty DISCORD_URL "Discord webhook URL do powiadomień (puste = pomiń): " ""
+  if [ -n "$DISCORD_URL" ]; then
+    ok "Discord: skonfigurowany"
+  fi
 
-# Timezone
-echo ""
-CURRENT_TZ=$(timedatectl show -p Timezone --value 2>/dev/null || echo "UTC")
-DEFAULT_TZ="Europe/Warsaw"
-ask "Timezone [$DEFAULT_TZ]: "
-read -r TZ_INPUT
-TZ_INPUT="${TZ_INPUT:-$DEFAULT_TZ}"
-if [ "$TZ_INPUT" != "$CURRENT_TZ" ]; then
-  timedatectl set-timezone "$TZ_INPUT"
-  ok "Timezone: $TZ_INPUT"
-else
-  ok "Timezone: $CURRENT_TZ (unchanged)"
-fi
+  # Strefa czasowa (default z flagi --tz lub Europe/Warsaw)
+  echo ""
+  local current_tz tz_default tz_input=""
+  current_tz=$(timedatectl show -p Timezone --value 2>/dev/null || echo "UTC")
+  tz_default="${FLAG_TZ:-$DEFAULT_TZ}"
+  ask_tty tz_input "Strefa czasowa [$tz_default]: " "$tz_default"
+  if [ "$tz_input" != "$current_tz" ]; then
+    timedatectl set-timezone "$tz_input"
+    ok "Strefa czasowa: $tz_input"
+  else
+    ok "Strefa czasowa: $current_tz (bez zmian)"
+  fi
+}
 
-# ============ 9. SYSTEMD SERVICE ============
+create_systemd_service() {
+  echo ""
+  info "Tworzę serwis systemd..."
 
-echo ""
-info "Creating systemd service..."
+  SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+  local node_path env_lines
+  node_path=$(which node)
 
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-NODE_PATH=$(which node)
-
-# Build Environment lines
-ENV_LINES="Environment=CLAUDE_CRON_PORT=$PORT
+  env_lines="Environment=CLAUDE_CRON_PORT=$PORT
 Environment=CLAUDE_CRON_WORKSPACE=$WORKSPACE
 Environment=PATH=$CLAUDE_HOME/.local/bin:$CLAUDE_HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
 
-if [ -n "$DISCORD_URL" ]; then
-  ENV_LINES="$ENV_LINES
+  if [ -n "$DISCORD_URL" ]; then
+    env_lines="$env_lines
 Environment=DISCORD_WEBHOOK_URL=$DISCORD_URL"
-fi
+  fi
 
-cat > "$SERVICE_FILE" <<EOF
+  cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Claude-Cron Skill Scheduler
 After=network.target
@@ -293,11 +492,11 @@ After=network.target
 Type=simple
 User=$CLAUDE_USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$NODE_PATH --disable-warning=ExperimentalWarning $INSTALL_DIR/server.js
+ExecStart=$node_path --disable-warning=ExperimentalWarning $INSTALL_DIR/server.js
 Restart=on-failure
 RestartSec=10
 
-$ENV_LINES
+$env_lines
 
 StandardOutput=journal
 StandardError=journal
@@ -307,160 +506,171 @@ SyslogIdentifier=$SERVICE_NAME
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable "$SERVICE_NAME"
-systemctl restart "$SERVICE_NAME"
+  systemctl daemon-reload
+  systemctl enable "$SERVICE_NAME"
+  systemctl restart "$SERVICE_NAME"
 
-sleep 2
-
-if systemctl is-active --quiet "$SERVICE_NAME"; then
-  ok "Service running"
-else
-  warn "Service failed to start. Check: journalctl -u $SERVICE_NAME -n 30"
-fi
-
-# ============ 10. FIREWALL ============
-
-echo ""
-info "Configuring firewall..."
-
-if ! command -v ufw &>/dev/null; then
-  info "Installing UFW..."
-  apt-get update -qq && apt-get install -y -qq ufw
-fi
-
-if command -v ufw &>/dev/null; then
-  # Always allow SSH first — never lock yourself out
-  ufw allow 22/tcp 2>/dev/null || true
-
-  if ! ufw status | grep -q "active"; then
-    info "Enabling UFW..."
-    ufw --force enable
-  fi
-
-  # DENY claude-cron port — access only via Tailscale
-  if ufw status | grep -q "$PORT.*ALLOW"; then
-    warn "Port $PORT is OPEN in UFW — closing it (Tailscale only)"
-    ufw delete allow "$PORT/tcp" 2>/dev/null || true
-    ufw delete allow "$PORT" 2>/dev/null || true
-  fi
-  ufw deny "$PORT/tcp" 2>/dev/null || true
-  ok "Port $PORT blocked in UFW (access via Tailscale only)"
-fi
-
-# ============ 11. TAILSCALE ============
-
-echo ""
-echo -e "${CYAN}Tailscale & Webhooks${NC}"
-echo "─────────────────────────────────────"
-echo ""
-
-if ! command -v tailscale &>/dev/null; then
-  info "Installing Tailscale..."
-  curl -fsSL https://tailscale.com/install.sh | sh
-
-  # Wait for tailscaled daemon to be fully ready
-  info "Waiting for Tailscale daemon..."
-  for i in $(seq 1 10); do
-    if systemctl is-active --quiet tailscaled 2>/dev/null; then
-      break
-    fi
-    sleep 1
-  done
   sleep 2
-fi
 
-if command -v tailscale &>/dev/null; then
-  ok "Tailscale installed"
-  TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
-  if [ -z "$TS_IP" ]; then
-    echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  Tailscale needs to be connected.${NC}"
-    echo -e "${YELLOW}  Run the command below and follow the login link.${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    ask "Connect Tailscale now? [Y/n]: "
-    read -r DO_TS
-    DO_TS="${DO_TS:-Y}"
-    if [[ "$DO_TS" =~ ^[Yy]$ ]]; then
-      tailscale up
-    fi
-    TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
-  fi
-  if [ -n "$TS_IP" ]; then
-    ok "Tailscale IP: $TS_IP"
+  if systemctl is-active --quiet "$SERVICE_NAME"; then
+    ok "Serwis działa"
   else
-    warn "Tailscale not connected — run 'tailscale up' later"
+    warn "Serwis nie wystartował. Sprawdź: journalctl -u $SERVICE_NAME -n 30"
   fi
-else
-  warn "Tailscale installation failed"
-  TS_IP=""
-fi
+}
 
-# Tailscale Funnel for webhooks
-echo ""
-ask "Włączyć Tailscale Funnel dla webhooków? (wystawia /webhook/* na internet) [y/N]: "
-read -r SETUP_FUNNEL
-SETUP_FUNNEL="${SETUP_FUNNEL:-N}"
+configure_firewall() {
+  echo ""
+  info "Konfiguruję firewall..."
 
-WEBHOOK_BASE_URL=""
-if [[ "$SETUP_FUNNEL" =~ ^[Yy]$ ]]; then
-  if command -v tailscale &>/dev/null; then
-    info "Starting Tailscale Funnel on port $PORT..."
-    tailscale funnel --bg "$PORT" 2>/dev/null || warn "Funnel failed — you may need to enable it in Tailscale admin"
+  if ! command -v ufw &>/dev/null; then
+    info "Instaluję UFW..."
+    apt-get update -qq && apt-get install -y -qq ufw
+  fi
 
-    # Try to get funnel URL
-    FUNNEL_STATUS=$(tailscale funnel status 2>/dev/null || echo "")
-    if echo "$FUNNEL_STATUS" | grep -q "https://"; then
-      WEBHOOK_BASE_URL=$(echo "$FUNNEL_STATUS" | grep -oP 'https://[^ ]+' | head -1 | sed 's/\/$//')
-      ok "Funnel active: $WEBHOOK_BASE_URL"
-    else
-      ask "Enter your Tailscale Funnel URL (e.g., https://srv123.tail456.ts.net): "
-      read -r WEBHOOK_BASE_URL
+  if command -v ufw &>/dev/null; then
+    # Najpierw ZAWSZE przepuść SSH — nigdy nie odcinaj sobie dostępu
+    ufw allow 22/tcp 2>/dev/null || true
+
+    if ! ufw status | grep -q "active"; then
+      info "Włączam UFW..."
+      ufw --force enable
     fi
 
-    # Add WEBHOOK_BASE_URL to systemd
-    if [ -n "$WEBHOOK_BASE_URL" ]; then
-      # Update service file with webhook URL
-      sed -i "/SyslogIdentifier/i Environment=WEBHOOK_BASE_URL=$WEBHOOK_BASE_URL" "$SERVICE_FILE"
-      systemctl daemon-reload
-      systemctl restart "$SERVICE_NAME"
+    # Port Pulsa ZABLOKOWANY — dostęp tylko przez Tailscale
+    if ufw status | grep -q "$PORT.*ALLOW"; then
+      warn "Port $PORT jest OTWARTY w UFW — zamykam (dostęp tylko przez Tailscale)"
+      ufw delete allow "$PORT/tcp" 2>/dev/null || true
+      ufw delete allow "$PORT" 2>/dev/null || true
+    fi
+    ufw deny "$PORT/tcp" 2>/dev/null || true
+    ok "Port $PORT zablokowany w UFW (dostęp tylko przez Tailscale)"
+  fi
+}
+
+setup_tailscale() {
+  echo ""
+  echo -e "${CYAN}Tailscale i webhooki${NC}"
+  echo "─────────────────────────────────────"
+  echo ""
+
+  if ! command -v tailscale &>/dev/null; then
+    info "Instaluję Tailscale..."
+    curl -fsSL https://tailscale.com/install.sh | sh
+
+    # Poczekaj, aż daemon tailscaled będzie w pełni gotowy
+    info "Czekam na daemon Tailscale..."
+    local i
+    for i in $(seq 1 10); do
+      if systemctl is-active --quiet tailscaled 2>/dev/null; then
+        break
+      fi
       sleep 1
-      ok "WEBHOOK_BASE_URL set in systemd service"
+    done
+    sleep 2
+  fi
+
+  if command -v tailscale &>/dev/null; then
+    ok "Tailscale zainstalowany"
+    TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
+    if [ -z "$TS_IP" ]; then
+      echo ""
+      echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+      echo -e "${YELLOW}  Tailscale musi zostać połączony.${NC}"
+      echo -e "${YELLOW}  Uruchom poniższą komendę i wejdź w link logowania.${NC}"
+      echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+      echo ""
+      local do_ts=""
+      ask_tty do_ts "Połączyć Tailscale teraz? [T/n]: " "T"
+      if [[ ! "$do_ts" =~ ^[Nn]$ ]]; then
+        tailscale up
+      fi
+      TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
+    fi
+    if [ -n "$TS_IP" ]; then
+      ok "Tailscale IP: $TS_IP"
+    else
+      warn "Tailscale niepołączony — uruchom 'tailscale up' później"
     fi
   else
-    warn "Tailscale not installed — skipping Funnel"
+    warn "Instalacja Tailscale nie powiodła się"
+    TS_IP=""
   fi
-fi
+}
 
-# ============ 12. AUTO-UPDATE CRON ============
+setup_funnel() {
+  # Tailscale Funnel dla webhooków
+  echo ""
+  local setup_funnel_answer=""
+  ask_tty setup_funnel_answer "Włączyć Tailscale Funnel dla webhooków? (wystawia /webhook/* na internet) [t/N]: " "N"
 
-echo ""
-echo -e "${CYAN}Auto-update${NC}"
-echo "─────────────────────────────────────"
-echo ""
-echo -e "  Codzienny cron (2:00) — automatycznie pulluje"
-echo -e "  vault-git i claude-cron, potem restartuje service."
-echo ""
+  WEBHOOK_BASE_URL=""
+  if [[ ! "$setup_funnel_answer" =~ ^[TtYy]$ ]]; then
+    return 0
+  fi
 
-ask "Ustawić automatyczną aktualizację? [Y/n]: "
-read -r SETUP_AUTOUPDATE
-SETUP_AUTOUPDATE="${SETUP_AUTOUPDATE:-Y}"
+  if ! command -v tailscale &>/dev/null; then
+    warn "Tailscale niezainstalowany — pomijam Funnel"
+    return 0
+  fi
 
-if [[ "$SETUP_AUTOUPDATE" =~ ^[Yy]$ ]]; then
-  # Passwordless sudo for service restart
+  info "Uruchamiam Tailscale Funnel na porcie $PORT..."
+  tailscale funnel --bg "$PORT" 2>/dev/null || warn "Funnel nie wystartował — może wymagać włączenia w panelu Tailscale"
+
+  # Spróbuj odczytać URL funnela
+  local funnel_status
+  funnel_status=$(tailscale funnel status 2>/dev/null || echo "")
+  if echo "$funnel_status" | grep -q "https://"; then
+    WEBHOOK_BASE_URL=$(echo "$funnel_status" | grep -oP 'https://[^ ]+' | head -1 | sed 's/\/$//')
+    ok "Funnel aktywny: $WEBHOOK_BASE_URL"
+  else
+    ask_tty WEBHOOK_BASE_URL "Podaj URL Tailscale Funnel (np. https://srv123.tail456.ts.net): " ""
+  fi
+
+  # Dopisz WEBHOOK_BASE_URL do systemd
+  if [ -n "$WEBHOOK_BASE_URL" ]; then
+    sed -i "/SyslogIdentifier/i Environment=WEBHOOK_BASE_URL=$WEBHOOK_BASE_URL" "$SERVICE_FILE"
+    systemctl daemon-reload
+    systemctl restart "$SERVICE_NAME"
+    sleep 1
+    ok "WEBHOOK_BASE_URL ustawiony w serwisie systemd"
+  fi
+}
+
+setup_auto_update() {
+  if [ "$FLAG_NO_AUTO_UPDATE" = 1 ]; then
+    info "Auto-update pominięty (--no-auto-update)"
+    return 0
+  fi
+
+  echo ""
+  echo -e "${CYAN}Auto-update${NC}"
+  echo "─────────────────────────────────────"
+  echo ""
+  echo -e "  Codzienny cron (2:00) — automatycznie pulluje"
+  echo -e "  vault-git i claude-cron, potem restartuje serwis."
+  echo ""
+
+  local setup_autoupdate=""
+  ask_tty setup_autoupdate "Ustawić automatyczną aktualizację? [T/n]: " "T"
+
+  if [[ "$setup_autoupdate" =~ ^[Nn]$ ]]; then
+    info "Pominięto — możesz dodać ręcznie później"
+    return 0
+  fi
+
+  # Passwordless sudo dla restartu serwisu
   echo "$CLAUDE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart $SERVICE_NAME" > "/etc/sudoers.d/$SERVICE_NAME"
   chmod 440 "/etc/sudoers.d/$SERVICE_NAME"
-  ok "Passwordless sudo for service restart"
+  ok "Passwordless sudo dla restartu serwisu"
 
-  # Check if vault-git exists
-  VAULT_GIT="$CLAUDE_HOME/vault-git"
-  if [ ! -d "$VAULT_GIT/.git" ]; then
-    ask "Ścieżka do vault-git repo [$VAULT_GIT]: "
-    read -r VAULT_GIT_INPUT
-    VAULT_GIT="${VAULT_GIT_INPUT:-$VAULT_GIT}"
-    VAULT_GIT="${VAULT_GIT/#\~/$CLAUDE_HOME}"
+  # Sprawdź, czy vault-git istnieje
+  local vault_git="$CLAUDE_HOME/vault-git"
+  if [ ! -d "$vault_git/.git" ]; then
+    local vault_git_input=""
+    ask_tty vault_git_input "Ścieżka do repo vault-git [$vault_git]: " "$vault_git"
+    vault_git="$vault_git_input"
+    vault_git="${vault_git/#\~/$CLAUDE_HOME}"
   fi
 
   # Pre-check wersji Node dla crona — wstrzymuje restart, gdy Node serwisu jest
@@ -468,10 +678,10 @@ if [[ "$SETUP_AUTOUPDATE" =~ ^[Yy]$ ]]; then
   # się wykona (kod się zaktualizuje), ale restart na złym Node tylko ubiłby wszystkie
   # joby (node:sqlite rzuca przy starcie — zob. lib/runtime-guard.js). Skrypt zapisany
   # obok instalacji, uruchamiany jako user $CLAUDE_USER (ten sam Node co serwis).
-  GUARD_SCRIPT="$INSTALL_DIR/scripts/cron-node-guard.sh"
-  CRON_LOG="$CLAUDE_HOME/claude-cron-update.log"
+  local guard_script="$INSTALL_DIR/scripts/cron-node-guard.sh"
+  local cron_log="$CLAUDE_HOME/claude-cron-update.log"
 
-  cat > "$GUARD_SCRIPT" <<GUARD
+  cat > "$guard_script" <<GUARD
 #!/usr/bin/env bash
 # Auto-generowany przez install-vps.sh — pre-check Node przed restartem serwisu.
 # Exit 0 = Node kompatybilny (restart OK). Exit 1 = niekompatybilny (wstrzymaj restart).
@@ -481,7 +691,7 @@ MIN_NODE_MAJOR=$MIN_NODE_MAJOR
 MIN_NODE_MINOR=$MIN_NODE_MINOR
 MAX_NODE_MAJOR=$MAX_NODE_MAJOR
 SERVICE_NAME="$SERVICE_NAME"
-CRON_LOG="$CRON_LOG"
+CRON_LOG="$cron_log"
 
 log_warn() {
   local msg="\$1"
@@ -511,68 +721,98 @@ fi
 log_warn "Restart serwisu WSTRZYMANY: Node v\$RAW jest niekompatybilny (wymagane >=\${MIN_NODE_MAJOR}.\${MIN_NODE_MINOR} <\${MAX_NODE_MAJOR} dla node:sqlite). Kod zaktualizowany przez git pull, ale serwis NIE został zrestartowany, by uniknąć padu wszystkich jobów. Zaktualizuj Node i zrestartuj ręcznie: systemctl restart \$SERVICE_NAME"
 exit 1
 GUARD
-  chmod +x "$GUARD_SCRIPT"
-  chown "$CLAUDE_USER:$CLAUDE_USER" "$GUARD_SCRIPT" 2>/dev/null || true
-  ok "Cron Node guard: $GUARD_SCRIPT"
+  chmod +x "$guard_script"
+  chown "$CLAUDE_USER:$CLAUDE_USER" "$guard_script" 2>/dev/null || true
+  ok "Cron Node guard: $guard_script"
 
-  # Build cron command
+  # Komenda crona
   # 02:00 — okno maintenance ciche, by restart nie kolidował z porannymi jobami (zob. lib/config.js MAINTENANCE_WINDOW).
   # git pull ZAWSZE; restart tylko gdy guard (uruchomiony jako $CLAUDE_USER) potwierdzi kompatybilny Node.
-  CRON_CMD="0 2 * * * su - $CLAUDE_USER -c \"cd $VAULT_GIT && git pull && cd $INSTALL_DIR && git pull && bash $GUARD_SCRIPT\" && systemctl restart $SERVICE_NAME"
+  local cron_cmd existing_cron
+  cron_cmd="0 2 * * * su - $CLAUDE_USER -c \"cd $vault_git && git pull && cd $INSTALL_DIR && git pull && bash $guard_script\" && systemctl restart $SERVICE_NAME"
 
-  # Add to root crontab (avoid duplicates)
-  EXISTING_CRON=$(crontab -l 2>/dev/null | grep -v "$SERVICE_NAME" || true)
-  if [ -n "$EXISTING_CRON" ]; then
-    printf '%s\n%s\n' "$EXISTING_CRON" "$CRON_CMD" | crontab -
+  # Dodaj do crontaba roota (bez duplikatów)
+  existing_cron=$(crontab -l 2>/dev/null | grep -v "$SERVICE_NAME" || true)
+  if [ -n "$existing_cron" ]; then
+    printf '%s\n%s\n' "$existing_cron" "$cron_cmd" | crontab -
   else
-    echo "$CRON_CMD" | crontab -
+    echo "$cron_cmd" | crontab -
   fi
   ok "Cron: codziennie o 2:00 — auto-update + restart"
-else
-  info "Pominięto — możesz dodać ręcznie później"
-fi
+}
 
-# ============ SUMMARY ============
-
-echo ""
-echo "========================================"
-echo -e "${GREEN}🕹️  CLAUDE-CRON — VPS Setup Complete!${NC}"
-echo "========================================"
-echo ""
-echo -e "  ${BOLD}Service:${NC}    $SERVICE_NAME (systemd)"
-echo -e "  ${BOLD}User:${NC}       $CLAUDE_USER"
-echo -e "  ${BOLD}Repo:${NC}       $INSTALL_DIR"
-echo -e "  ${BOLD}Workspace:${NC}  $WORKSPACE"
-echo -e "  ${BOLD}Port:${NC}       $PORT"
-
-if [ -n "$TS_IP" ]; then
-  echo -e "  ${BOLD}Dashboard:${NC}  ${CYAN}http://$TS_IP:$PORT${NC} (via Tailscale)"
-fi
-if [ -n "$WEBHOOK_BASE_URL" ]; then
-  echo -e "  ${BOLD}Webhooks:${NC}   ${CYAN}$WEBHOOK_BASE_URL/webhook/<token>${NC}"
-fi
-if [ -n "$DISCORD_URL" ]; then
-  echo -e "  ${BOLD}Discord:${NC}    enabled"
-fi
-
-echo ""
-echo -e "  ${BOLD}Useful commands:${NC}"
-echo "    systemctl status $SERVICE_NAME        # check status"
-echo "    journalctl -u $SERVICE_NAME -f        # live logs"
-echo "    systemctl restart $SERVICE_NAME       # restart"
-echo "    su - $CLAUDE_USER -c 'cd ~/claude-cron && git pull'  # update code"
-echo ""
-
-if [ -n "$TS_IP" ]; then
-  echo -e "  ${BOLD}Connect from your Mac:${NC}"
-  echo "    Add to ~/.zshrc:"
-  echo "      export CLAUDE_CRON_VPS_URL=http://$TS_IP:$PORT"
+print_summary() {
   echo ""
-fi
+  echo "========================================"
+  echo -e "${GREEN}🕹️  PULS — instalacja na VPS zakończona!${NC}"
+  echo "========================================"
+  echo ""
+  echo -e "  ${BOLD}Serwis:${NC}     $SERVICE_NAME (systemd)"
+  echo -e "  ${BOLD}Użytkownik:${NC} $CLAUDE_USER"
+  echo -e "  ${BOLD}Repo:${NC}       $INSTALL_DIR"
+  echo -e "  ${BOLD}Workspace:${NC}  $WORKSPACE"
+  echo -e "  ${BOLD}Port:${NC}       $PORT"
 
-echo -e "  ${BOLD}Security:${NC}"
-echo "    - Port $PORT is BLOCKED in firewall (Tailscale access only)"
-echo "    - Dashboard is not accessible from the public internet"
-echo "    - Only /webhook/* endpoints are exposed via Tailscale Funnel"
-echo "    - Claude CLI runs as dedicated '$CLAUDE_USER' user (not root)"
-echo ""
+  if [ -n "$TS_IP" ]; then
+    echo -e "  ${BOLD}Dashboard:${NC}  ${CYAN}http://$TS_IP:$PORT${NC} (przez Tailscale)"
+  fi
+  if [ -n "$WEBHOOK_BASE_URL" ]; then
+    echo -e "  ${BOLD}Webhooki:${NC}   ${CYAN}$WEBHOOK_BASE_URL/webhook/<token>${NC}"
+  fi
+  if [ -n "$DISCORD_URL" ]; then
+    echo -e "  ${BOLD}Discord:${NC}    włączony"
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Przydatne komendy:${NC}"
+  echo "    systemctl status $SERVICE_NAME        # status serwisu"
+  echo "    journalctl -u $SERVICE_NAME -f        # logi na żywo"
+  echo "    systemctl restart $SERVICE_NAME       # restart"
+  echo "    su - $CLAUDE_USER -c 'cd ~/claude-cron && git pull'  # aktualizacja kodu"
+  echo ""
+
+  if [ -n "$TS_IP" ]; then
+    echo -e "  ${BOLD}Połączenie z Twojego Maca:${NC}"
+    echo "    Dodaj do ~/.zshrc:"
+    echo "      export CLAUDE_CRON_VPS_URL=http://$TS_IP:$PORT"
+    echo ""
+  fi
+
+  echo -e "  ${BOLD}Bezpieczeństwo:${NC}"
+  echo "    - Port $PORT jest ZABLOKOWANY w firewallu (dostęp tylko przez Tailscale)"
+  echo "    - Dashboard nie jest dostępny z publicznego internetu"
+  echo "    - Publicznie wystawione są tylko endpointy /webhook/* (Tailscale Funnel)"
+  echo "    - Claude CLI działa jako dedykowany użytkownik '$CLAUDE_USER' (nie root)"
+  echo ""
+}
+
+# ============ MAIN ============
+
+main() {
+  trap on_err ERR
+  parse_flags "$@"
+
+  print_banner
+  check_root
+  ensure_node
+  ensure_git
+  ensure_cron
+  ensure_claude_user
+  install_claude_cli
+  login_claude_cli
+  clone_repo
+  install_dependencies
+  configure_settings
+  create_systemd_service
+  configure_firewall
+  setup_tailscale
+  setup_funnel
+  setup_auto_update
+  print_summary
+}
+
+# Test harness może wczytać tylko funkcje (CLAUDE_CRON_LIB_ONLY=1),
+# bez odpalania main (instalacji pakietów / pytań interaktywnych).
+if [ "${CLAUDE_CRON_LIB_ONLY:-0}" != "1" ]; then
+  main "$@"
+fi
