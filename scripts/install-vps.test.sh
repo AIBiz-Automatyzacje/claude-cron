@@ -1047,6 +1047,109 @@ EOF
   fi
 }
 
+# --- Test 42: login_cmd_as_claude — roundtrip dwóch poziomów parsowania (%q) ---
+test_login_cmd_as_claude_quoting_roundtrip() {
+  # Injection-krytyczna granica user-input→shell (review fazy 4, P2-1):
+  # bash -c "$login_cmd" parsuje słowa komendy su (poziom 1), potem shell
+  # usera claude parsuje argument -c (poziom 2). Wartość ze spacją,
+  # apostrofem, średnikiem i $() musi po OBU poziomach oddać oryginał —
+  # usunięcie któregokolwiek %q = brak L1_OK/L2_OK.
+  local snippet="$SANDBOX/t-quoting.sh" log="$SANDBOX/quoting.log" out
+  cat > "$snippet" <<EOF
+LOG='$log'
+EOF
+  cat >> "$snippet" <<'EOF'
+nasty="O'Brien Vault; \$(echo INJ)"
+inner="ob login --email $(printf '%q' "$nasty")"
+cmd="$(login_cmd_as_claude "$inner")"
+# Poziom 1: jak bash -c "$login_cmd" w run_login — słowa komendy su.
+eval "set -- $cmd"
+if [ "$1" = "su" ] && [ "$4" = "-c" ] && [ "$5" = "$inner" ]; then
+  echo "L1_OK" >> "$LOG"
+fi
+# Poziom 2: shell usera claude parsuje argument -c.
+ob() { if [ "$3" = "$nasty" ]; then echo "L2_OK" >> "$LOG"; fi; }
+eval "$5"
+EOF
+  out="$(run_snippet "$snippet")"
+  if grep -q "L1_OK" "$log" 2>/dev/null && grep -q "L2_OK" "$log" 2>/dev/null \
+    && ! grep -q "^INJ$" "$log" 2>/dev/null; then
+    pass "login_cmd_as_claude: wartość ze spacją/'/;/\$() przeżywa dwa poziomy parsowania"
+  else
+    problem "login_cmd_as_claude: escapowanie %q NIE oddaje oryginału (log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+}
+
+# --- Test 43: login_ob / login_ob_sync — inner %q chroni OB_EMAIL/VAULT_NAME/DEVICE_NAME ---
+test_login_ob_commands_survive_double_parsing() {
+  # Przechwytujemy KOMENDY budowane przez login_ob/login_ob_sync (nie fakt
+  # wywołania) i parsujemy je jak produkcja: poziom 1 bash -c, poziom 2 shell
+  # usera claude. Wartości z $() / średnikiem / apostrofem muszą trafić do ob
+  # jako JEDEN argument równy oryginałowi — regresja %q = brak *_OK w logu.
+  local snippet="$SANDBOX/t-ob-quoting.sh" log="$SANDBOX/ob-quoting.log" out
+  cat > "$snippet" <<EOF
+LOG='$log'
+EOF
+  cat >> "$snippet" <<'EOF'
+has_ob_auth() { return 1; }
+has_ob_sync() { return 1; }
+print_pause_header() { :; }
+OB_EMAIL='obrien$(echo INJ)@example.pl'
+VAULT_NAME="Moj Vault; echo INJ"
+DEVICE_NAME="vps'owy dev"
+declare -a CMDS=()
+run_login() { CMDS+=("$2"); }
+login_ob
+login_ob_sync
+ob() {
+  case "$1" in
+    login) if [ "$3" = "$OB_EMAIL" ]; then echo "OB_LOGIN_OK" >> "$LOG"; fi ;;
+    sync-setup) if [ "$3" = "$VAULT_NAME" ] && [ "$7" = "$DEVICE_NAME" ]; then echo "OB_SYNC_OK" >> "$LOG"; fi ;;
+  esac
+}
+for cmd in "${CMDS[@]}"; do
+  eval "set -- $cmd"
+  eval "$5"
+done
+EOF
+  out="$(run_snippet "$snippet")"
+  if grep -q "OB_LOGIN_OK" "$log" 2>/dev/null && grep -q "OB_SYNC_OK" "$log" 2>/dev/null; then
+    pass "login_ob/login_ob_sync: OB_EMAIL/VAULT_NAME/DEVICE_NAME oddane 1:1 po dwóch poziomach parsowania"
+  else
+    problem "login_ob/login_ob_sync: inner %q NIE chroni wartości usera (log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+}
+
+# --- Test 44: validate_repo_access — repo z metaznakami przechodzi %q do gh jako jeden argument ---
+test_validate_repo_access_repo_quoted() {
+  # run_as_claude robi su -c "$1" → JEDEN poziom parsowania w shellu usera.
+  # Repo ze spacją/średnikiem/$() musi dojść do gh jako pojedynczy argument
+  # równy VAULT_GIT_REPO bez sufiksu .git.
+  local snippet="$SANDBOX/t-repo-quoting.sh" log="$SANDBOX/repo-quoting.log" out
+  cat > "$snippet" <<EOF
+LOG='$log'
+EOF
+  cat >> "$snippet" <<'EOF'
+VAULT_GIT_REPO='user/re po;$(echo INJ).git'
+expected="${VAULT_GIT_REPO%.git}"
+captured=""
+run_as_claude() { captured="$1"; return 0; }
+validate_repo_access
+gh() {
+  if [ "$1" = "repo" ] && [ "$2" = "view" ] && [ "$3" = "$expected" ]; then
+    echo "REPO_OK" >> "$LOG"
+  fi
+}
+eval "$captured"
+EOF
+  out="$(run_snippet "$snippet")"
+  if grep -q "REPO_OK" "$log" 2>/dev/null; then
+    pass "validate_repo_access: repo z metaznakami dociera do gh jako jeden argument (bez .git)"
+  else
+    problem "validate_repo_access: %q NIE chroni VAULT_GIT_REPO (log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+}
+
 echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje) i fazy 4 (blok 5 loginów) =="
 test_syntax
 test_flags_port
@@ -1089,6 +1192,9 @@ test_login_block_resumes_into_gh
 test_validate_repo_access_retry
 test_login_block_halt_keeps_stack
 test_login_block_only_puls_skips_ob_pauses
+test_login_cmd_as_claude_quoting_roundtrip
+test_login_ob_commands_survive_double_parsing
+test_validate_repo_access_repo_quoted
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

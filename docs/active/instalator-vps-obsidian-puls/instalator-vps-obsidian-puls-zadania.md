@@ -102,9 +102,19 @@ Ostatnia aktualizacja: 2026-07-02
 - [x] Test: guard gh=brak, reszta=zrobione → wywołana tylko PAUZA 2 (+ setup-git + walidacja repo; test 38)
 - [x] Test: walidacja repo — `gh repo view` fail → ponowne pytanie → drugie podejście z nowym repo (atrapy; test 39)
 - [x] Test: rollback-stos nietknięty przy `halt_leave_partial` w środku bloku (test 40; bonus test 41: pauzy ob pomijane przy `--only-puls`)
-- [ ] Test: [Manual] pełny blok 5 loginów na czystym VPS przez prawdziwy pipe: pauzy czytają z klawiatury; literówka → retry; 3× fail → komunikat resume; re-run wskakuje w brakujący login
-- [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje sekwencji/guardów/retry PASS
-- [ ] Weryfikacja: `grep -n 'su - .*-c' scripts/install-vps.sh` — każda linia z interaktywnym CLI zawiera `/dev/tty`
+- [ ] Test: [Manual] pełny blok 5 loginów na czystym VPS przez prawdziwy pipe: pauzy czytają z klawiatury; literówka → retry; 3× fail → komunikat resume; re-run wskakuje w brakujący login — wymaga operatora (checklist)
+- [x] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje sekwencji/guardów/retry PASS (46/46 PASS, review fazy 4)
+- [x] Weryfikacja: `grep -n 'su - .*-c' scripts/install-vps.sh` — każda linia z interaktywnym CLI zawiera `/dev/tty` (PASS z adnotacją: handoff tty scentralizowany w `run_login` L377–378, wszystkie pauzy przez `login_cmd_as_claude`; pozostałe trafienia grepa to ścieżki nieinteraktywne — review fazy 4)
+
+## Do poprawy po review fazy 4
+
+- [x] 🟠 [P2] **scripts/install-vps.test.sh:994** (kod: `scripts/install-vps.sh:403–405`) — dwuwarstwowe escapowanie `%q` (wewnętrzny `printf %q` dla OB_EMAIL/VAULT_NAME/DEVICE_NAME/repo + zewnętrzny `%q` w `login_cmd_as_claude`; dwa poziomy parsowania `bash -c` → `su -c`) — jedyna injection-krytyczna konstrukcja fazy — nie ma ŻADNEGO testu jednostkowego: testy 37–41 stubują `run_login`/`run_as_claude`/`login_cmd_as_claude` i asertują tylko fakt wywołań. Regresja typu usunięcie jednego `%q` przechodzi 46/46 PASS, a `VAULT_NAME='Moj Vault; rm -rf ~'` albo email z `$(...)` wykona się w shellu usera claude. Fix: test jednostkowy `login_cmd_as_claude` — wartości ze spacją, apostrofem (np. `O'Brien Vault`), średnikiem i `$()` po dwukrotnym sparsowaniu shellem oddają oryginał; analogicznie asercja treści komend budowanych przez `login_ob`/`login_ob_sync`/`validate_repo_access` (inner `%q`)
+- [ ] 🟡 [P3] 18 pozycji P3 (KOD 14 / TEST 4, po scaleniu duplikatów) — pełna lista z fixami w `docs/active/instalator-vps-obsidian-puls/review-faza-4.md` (m.in.: fallback `run_login` bez tty dziedziczy stdin-pipe; `validate_repo_access` vs host spoza GitHuba → mylący komunikat; false-positive `has_claude_auth` niekomunikowany kursantowi; kontrakt dispatchu `run_verify` + rc 127 nieodróżnialny od negatywnej weryfikacji; magic string `userdel -r` w dwóch miejscach; CQS `validate_repo_access` mutuje VAULT_GIT_REPO; połknięty stderr `gh auth setup-git`; `RESUME_ONE_LINER` bez flag; numeracja KROK n/5 vs `--only-puls`; nazwa `setup_tailscale` po redukcji; braki testów: wyczerpanie 3 prób `validate_repo_access`, fail setup-git → halt, gałąź rezygnacji `n` w `run_login`, bezpośrednie testy `run_verify`)
+
+## Operator checklist faza 4
+
+- [ ] Operator: spike-GATE su+/dev/tty (mechanizm krytyczny fazy 4, decyzja 17; zamyka też GATE z nagłówka fazy) — czy `bash -c "su - claude -c <cli>" < /dev/tty` przekazuje klawiaturę interaktywnemu CLI pod prawdziwym pipe — Operator action: w Docker/multipass Ubuntu uruchom skrypt przez prawdziwy `curl … | sudo bash` (env-override `CLAUDE_CRON_REPO`/`CLAUDE_CRON_REF` z feature-brancha) i potwierdź, że CLI za `su` czyta z klawiatury; jeśli su/PAM nie przekazuje tty → zmiana jednopunktowa na `runuser`/`sudo -u` w `login_cmd_as_claude` (L403–405) i/lub redirect w `run_login` (L377–378); wynik MUSI zapaść przed uznaniem R2/R6 za zweryfikowane (przed merge)
+- [ ] Operator: [Manual] pełny blok 5 loginów na czystym VPS (domyka otwarty checkbox [Manual] fazy 4) — Operator action: czysty Ubuntu VPS, prawdziwy `curl … | sudo bash` z env-override brancha; przejdź 5 pauz z przeglądarką (OAuth Claude, gh device flow, `ob login` z 2FA i hasłem E2E, `ob sync-setup`, `tailscale up`); potwierdź: literówka hasła ob → retry-in-place, 3× fail → komunikat resume (leave-partial, rollback-stos nietknięty), re-run wskakuje w brakujący login (guardy pomijają zrobione); przy okazji oceń realną latencję probe'ów sieciowych guardów (`ob login </dev/null`, `gh auth status`, `gh repo view`)
 
 ## Faza 5: Obsidian + Puls (IU5)
 
