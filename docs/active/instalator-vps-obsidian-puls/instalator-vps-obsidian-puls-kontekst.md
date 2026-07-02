@@ -1,12 +1,13 @@
 # Kontekst: Połączony instalator VPS (Obsidian + Puls)
 
 Branch: `feature/instalator-vps-obsidian-puls`
-Ostatnia aktualizacja: 2026-07-02 (Faza 1 ukończona)
+Ostatnia aktualizacja: 2026-07-02 (Faza 2 ukończona)
 
 ## Stan implementacji
 
 - **Faza 1 (IU1) — DONE**: `scripts/install-vps.sh` przebudowany na strukturę stałe → helpery → funkcje-komponenty → `main "$@"` za guardem `CLAUDE_CRON_LIB_ONLY`. Powstał harness `scripts/install-vps.test.sh` (14 asercji PASS). `bash -n` czysty, jedyny `read -r` w `ask_tty` (grep-strażnik zielony). Pełny suite projektu 163/163 PASS.
-- Fazy 2–7: do zrobienia.
+- **Faza 2 (IU2) — DONE**: preflight (`run_preflight`: EUID=0, `is_supported_os` po `/etc/os-release`, `check_internet` na api.github.com), checklist 6 prerequisites z `ask_tty` „[Enter]", komplet guardów `has_*` (w tym rozdzielone `has_ob_auth`/`has_ob_sync`), blok 4 pytań (email/vault/repo/Discord) z walidacją + podsumowanie „Kontynuujemy? [T/n]", auto-wartości (`DEVICE_NAME=vps-$(hostname)`, PORT=7777/`--port`, `detect_timezone` z fallbackiem Europe/Warsaw), tryb `--only-puls` z pytaniem o workspace (`normalize_path`). Harness 25/25 PASS, `read -r` nadal tylko w `ask_tty`, `ask_tty` użyte 17×.
+- Fazy 3–7: do zrobienia.
 
 ## Powiązane pliki
 
@@ -48,6 +49,12 @@ Ostatnia aktualizacja: 2026-07-02 (Faza 1 ukończona)
 17. **Handoff `su - claude -c claude` dostał `< $TTY_DEVICE`** gdy tty czytelne (mechanizm R7; pełny `run_login` dla bloku loginów → Faza 4, po spike-gate).
 18. **`set -e` → `set -Eeuo pipefail`** — `errtrace` (`-E`) wymagany, żeby `trap ERR` działał wewnątrz funkcji.
 
+### Decyzje z Fazy 2 (implementacja IU2)
+
+19. **Usunięte interaktywne pytania o port/TZ/workspace w pełnym trybie** (razem z `ask_port` i jego testem — usunięcie testu razem z usuwaną funkcjonalnością): spec R4/FAZA 1 robi z nich auto-wartości (`PORT=7777`/`--port`, TZ autodetekcja `timedatectl` → `Europe/Warsaw`, `WORKSPACE=$CLAUDE_HOME/vault`). `WORKSPACE` w pełnym trybie ustawiany już teraz (formalnie IU5) — po usunięciu pytania `create_systemd_service` nie miałby wartości.
+20. **`ask_workspace` (`--only-puls`) nie pyta o utworzenie folderu** — tworzenie przeniesione do automatu `ensure_workspace` PO `useradd` (w momencie pytań FAZY 1 `/home/claude` może nie istnieć); zgodę usera pokrywa podsumowanie + „Kontynuujemy? [T/n]".
+21. **`resolve_install_paths` przez `getent passwd` z fallbackiem `/home/claude`** zamiast `eval echo ~user` — konieczność strukturalna (pytania lecą przed `useradd`); efekt uboczny: znika anty-wzorzec `eval` (P3-16 z review), choć sekcja „Do poprawy po review" celowo nie była częścią tej fazy.
+
 ## Odroczone do implementacji
 
 - Forma przekazania `/dev/tty` przez granicę `su` (spike-gate przed Fazą 4; alternatywy `runuser`/`sudo -u`).
@@ -76,3 +83,14 @@ Ostatnia aktualizacja: 2026-07-02 (Faza 1 ukończona)
 - Plan techniczny: `docs/plans/2026-07-02-001-feat-instalator-vps-obsidian-puls-plan.md`
 - Spec przebiegu (źródło produktowe): `docs/plans/2026-07-01-001-feat-polaczony-instalator-vps-flow.md`
 - Kontekst kursu: `docs/MIGRACJA-PULS.md` SEKCJA 10
+
+## Review fazy 1 (2026-07-02)
+
+Raport: `docs/active/instalator-vps-obsidian-puls/review-faza-1.md`. Gate: ⚠️ ZASTRZEŻENIA — 0 × P1, 4 × P2, 19 × P3, 3 × OPERATOR. Wszystkie 3 checkboxy `Weryfikacja:` fazy 1 przeszły automatycznie (bash -n, harness 14/14, grep `read -r` tylko w `ask_tty`).
+
+Kluczowe wnioski:
+- **`ask_tty` fallback ma dziurę semantyczną**: `[ -r /dev/tty ]` przechodzi bez kontrolującego terminala (ssh bez `-t`), a `read` pada z ENXIO połkniętym przez `|| __answer=""` — kontrakt „brak defaultu = twardy fail" wymaga probe otwarcia, a testy muszą odwzorowywać semantykę `/dev/tty`, nie nieistniejący plik.
+- **Walidacja inputu musi być symetryczna flaga↔prompt**: walidację `--port` dodano w `parse_flags`, ale prompt w `configure_settings` ją omija — przy IU2 walidować WSZYSTKIE pola z `ask_tty` (email/repo/discord/port), nie tylko flagi.
+- **Deklaracja planu „egzekwowane testem grep" musi mieć test w harnessie** — ręczne odhaczenie nie chroni faz 2–7 przed regresją gołego `read`.
+- **Komunikat resume musi działać w trybie R2** (`curl|bash` — brak lokalnego pliku): instruować ponowne wklejenie one-linera, nie `bash install-vps.sh`.
+- Konwencja na kolejne IU: wartości z inputu w komendach cron/rollback/`su -c` zawsze przez `printf %q` lub walidację białych znaków.

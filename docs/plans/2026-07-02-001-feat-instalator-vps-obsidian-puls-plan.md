@@ -147,7 +147,7 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 
 ---
 
-- [ ] **Unit 2: FAZA 0 + FAZA 1 — preflight, checklist, detekcja stanu, blok 4 pytań**
+- [x] **Unit 2: FAZA 0 + FAZA 1 — preflight, checklist, detekcja stanu, blok 4 pytań**
 
 **Cel:** Wejście instalatora: sanity-checki, checklist prerequisites, guardy detekcji stanu (baza idempotencji/resume), zebranie całego typowanego configu w jednym bloku.
 
@@ -175,15 +175,15 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 - `setup.test.mjs` (DI-probe dla funkcji detekcyjnych)
 
 **Scenariusze testowe:**
-- [Unit] `normalize_repo`: `user/repo` → `https://github.com/user/repo.git`; pełny URL https → bez zmian; URL ssh / śmieci → exit ≠ 0
-- [Unit] walidacja emaila: brak `@` → ponowne pytanie; walidacja Discord URL: zły prefix → ponowne pytanie
-- [Unit] autodetekcja TZ: pusty wynik `timedatectl` (wstrzyknięty) → `Europe/Warsaw`
-- [Unit] `has_ob_auth` vs `has_ob_sync`: wstrzyknięte wyjścia — zalogowany-bez-synca daje (0,1) — dwa checki NIE sklejone
-- [Manual] checklist prerequisites wyświetla 6 pozycji i czeka na Enter (ogląd na prawdziwym pipe)
+- [x] [Unit] `normalize_repo`: `user/repo` → `https://github.com/user/repo.git`; pełny URL https → bez zmian; URL ssh / śmieci → exit ≠ 0
+- [x] [Unit] walidacja emaila: brak `@` → ponowne pytanie; walidacja Discord URL: zły prefix → ponowne pytanie
+- [x] [Unit] autodetekcja TZ: pusty wynik `timedatectl` (wstrzyknięty) → `Europe/Warsaw`
+- [x] [Unit] `has_ob_auth` vs `has_ob_sync`: wstrzyknięte wyjścia — zalogowany-bez-synca daje (0,1) — dwa checki NIE sklejone
+- [ ] [Manual] checklist prerequisites wyświetla 6 pozycji i czeka na Enter (ogląd na prawdziwym pipe)
 
 **Weryfikacja:**
-- `bash scripts/install-vps.test.sh` — nowe asercje PASS
-- `grep -c 'ask_tty' scripts/install-vps.sh` ≥ 6 (4 pytania + checklist + podsumowanie) i `grep 'read -r' …` nadal tylko w `ask_tty`
+- [x] `bash scripts/install-vps.test.sh` — nowe asercje PASS (25/25)
+- [x] `grep -c 'ask_tty' scripts/install-vps.sh` ≥ 6 (4 pytania + checklist + podsumowanie) i `grep 'read -r' …` nadal tylko w `ask_tty` (17 użyć; jedyny `read -r` w `ask_tty`)
 
 ---
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Skryptowe testy szkieletu install-vps.sh — flagi, ask_tty, run_login, rollback.
+# Skryptowe testy install-vps.sh — flagi, ask_tty, run_login, rollback (faza 1)
+# oraz preflight, guardy has_*, walidacja bloku pytań (faza 2).
 # Wzorzec z install.test.sh: lib-only source + sandbox mktemp + pass/problem.
 #
 # Każdy scenariusz działa w ŚWIEŻYM subshellu (bash -c + source lib-only):
@@ -284,30 +285,25 @@ test_flags_port_invalid() {
   fi
 }
 
-# --- Test 17: ask_port — odpowiedź z tty przez tę samą walidację co --port ---
-test_ask_port_validation() {
-  local snippet="$SANDBOX/t-ask-port.sh" out rc out2
-  echo "abc" > "$SANDBOX/tty-port-bad"
-  cat > "$snippet" <<EOF
-TTY_DEVICE="$SANDBOX/tty-port-bad"
-PORT=7777
-ask_port
-echo "NIEOSIAGALNE"
+# --- Test 17: normalize_repo — user/repo → URL; https → bez zmian; ssh/śmieci → fail ---
+test_normalize_repo() {
+  local snippet="$SANDBOX/t-repo.sh" out
+  cat > "$snippet" <<'EOF'
+n1="$(normalize_repo 'user/repo')"
+echo "N1=$n1"
+n2="$(normalize_repo 'https://github.com/user/repo.git')"
+echo "N2=$n2"
+rc_ssh=0; normalize_repo 'git@github.com:user/repo.git' >/dev/null || rc_ssh=$?
+rc_junk=0; normalize_repo 'to nie jest repo' >/dev/null || rc_junk=$?
+echo "SSH=$rc_ssh JUNK=$rc_junk"
 EOF
   out="$(run_snippet "$snippet")"
-  rc=$?
-  echo "8080" > "$SANDBOX/tty-port-ok"
-  cat > "$snippet" <<EOF
-TTY_DEVICE="$SANDBOX/tty-port-ok"
-PORT=7777
-ask_port
-echo "PORT=\$PORT"
-EOF
-  out2="$(run_snippet "$snippet")"
-  if [ "$rc" -ne 0 ] && [[ "$out" != *"NIEOSIAGALNE"* ]] && [[ "$out2" == *"PORT=8080"* ]]; then
-    pass "ask_port: śmieciowy port z tty → exit ≠ 0; poprawny → PORT ustawiony"
+  if [[ "$out" == *"N1=https://github.com/user/repo.git"* ]] \
+    && [[ "$out" == *"N2=https://github.com/user/repo.git"* ]] \
+    && [[ "$out" == *"SSH=1 JUNK=1"* ]]; then
+    pass "normalize_repo: user/repo → pełny URL; https bez zmian; ssh/śmieci → exit ≠ 0"
   else
-    problem "ask_port: walidacja portu z tty zawiodła (rc=$rc, out: $out, out2: $out2)"
+    problem "normalize_repo: zła normalizacja/walidacja (output: $out)"
   fi
 }
 
@@ -358,7 +354,156 @@ test_halt_resume_message() {
   fi
 }
 
-echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback) =="
+# --- Test 20: walidacja emaila — brak @ → ponowne pytanie, potem fail; poprawny → OK ---
+test_ask_valid_email() {
+  local snippet="$SANDBOX/t-email.sh" out rc out2 warn_count
+  echo "brak-malpy" > "$SANDBOX/tty-email-bad"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/tty-email-bad"
+ask_valid OUT "Email konta Obsidian: " is_valid_email "Niepoprawny email"
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  # Wstrzyknięty tty oddaje w kółko tę samą złą odpowiedź → ponowne pytanie
+  # widać jako ≥2 komunikaty błędu, a po wyczerpaniu prób exit ≠ 0.
+  warn_count=$(grep -c "Niepoprawny email" <<<"$out" || true)
+  echo "kursant@example.com" > "$SANDBOX/tty-email-ok"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/tty-email-ok"
+ask_valid OUT "Email konta Obsidian: " is_valid_email "Niepoprawny email"
+echo "GOT=\$OUT"
+EOF
+  out2="$(run_snippet "$snippet")"
+  if [ "$rc" -ne 0 ] && [ "$warn_count" -ge 2 ] && [[ "$out" != *"NIEOSIAGALNE"* ]] \
+    && [[ "$out2" == *"GOT=kursant@example.com"* ]]; then
+    pass "walidacja emaila: brak @ → ponowne pytanie → fail; poprawny → przyjęty"
+  else
+    problem "walidacja emaila zawiodła (rc=$rc, warny=$warn_count, out: $out, out2: $out2)"
+  fi
+}
+
+# --- Test 21: walidacja Discord URL — zły prefix → ponowne pytanie; puste = pomiń ---
+test_ask_valid_discord() {
+  local snippet="$SANDBOX/t-discord.sh" out rc out2 out3 warn_count
+  echo "https://zly.example.com/webhooks/1" > "$SANDBOX/tty-dc-bad"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/tty-dc-bad"
+ask_valid OUT "Discord webhook (puste = pomiń): " is_valid_discord_webhook "Niepoprawny webhook" ""
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  warn_count=$(grep -c "Niepoprawny webhook" <<<"$out" || true)
+  echo "https://discord.com/api/webhooks/123/abc" > "$SANDBOX/tty-dc-ok"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/tty-dc-ok"
+ask_valid OUT "Discord webhook (puste = pomiń): " is_valid_discord_webhook "Niepoprawny webhook" ""
+echo "GOT=[\$OUT]"
+EOF
+  out2="$(run_snippet "$snippet")"
+  : > "$SANDBOX/tty-dc-empty"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/tty-dc-empty"
+ask_valid OUT "Discord webhook (puste = pomiń): " is_valid_discord_webhook "Niepoprawny webhook" ""
+echo "GOT=[\$OUT]"
+EOF
+  out3="$(run_snippet "$snippet")"
+  if [ "$rc" -ne 0 ] && [ "$warn_count" -ge 2 ] && [[ "$out" != *"NIEOSIAGALNE"* ]] \
+    && [[ "$out2" == *"GOT=[https://discord.com/api/webhooks/123/abc]"* ]] \
+    && [[ "$out3" == *"GOT=[]"* ]]; then
+    pass "walidacja Discord: zły prefix → ponowne pytanie → fail; poprawny → OK; puste = pomiń"
+  else
+    problem "walidacja Discord zawiodła (rc=$rc, warny=$warn_count, out2: $out2, out3: $out3)"
+  fi
+}
+
+# --- Test 22: detect_timezone — pusty wynik timedatectl → Europe/Warsaw ---
+test_detect_timezone() {
+  local snippet="$SANDBOX/t-tz.sh" out
+  cat > "$snippet" <<'EOF'
+t1="$(detect_timezone '')"
+t2="$(detect_timezone 'Europe/Berlin')"
+echo "T1=$t1 T2=$t2"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"T1=Europe/Warsaw T2=Europe/Berlin"* ]]; then
+    pass "detect_timezone: pusta autodetekcja → Europe/Warsaw; niepusta → bez zmian"
+  else
+    problem "detect_timezone: zły fallback (output: $out)"
+  fi
+}
+
+# --- Test 23: has_ob_auth vs has_ob_sync — DWA OSOBNE checki (zalogowany-bez-synca = 0,1) ---
+test_ob_guards_separate() {
+  # DI: run_as_claude podmienione na lokalny bash, atrapa `ob` przez PATH —
+  # login przechodzi (exit 0), sync-status pada (exit 1). Sklejenie checków
+  # w jeden dałoby (0,0) albo (1,1).
+  local snippet="$SANDBOX/t-ob-guards.sh" out
+  mkdir -p "$SANDBOX/stub-bin"
+  cat > "$SANDBOX/stub-bin/ob" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  login) exit 0 ;;
+  sync-status) exit 1 ;;
+esac
+exit 1
+STUB
+  chmod +x "$SANDBOX/stub-bin/ob"
+  cat > "$snippet" <<EOF
+export PATH="$SANDBOX/stub-bin:\$PATH"
+has_user_claude() { return 0; }
+run_as_claude() { bash -c "\$1"; }
+if has_ob_auth; then echo "AUTH=0"; else echo "AUTH=1"; fi
+if has_ob_sync; then echo "SYNC=0"; else echo "SYNC=1"; fi
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"AUTH=0"* ]] && [[ "$out" == *"SYNC=1"* ]]; then
+    pass "has_ob_auth vs has_ob_sync: zalogowany-bez-synca daje (0,1) — checki osobne"
+  else
+    problem "guardy ob sklejone lub błędne (output: $out)"
+  fi
+}
+
+# --- Test 24: is_supported_os — ubuntu/ID_LIKE → 0; fedora/brak pliku → 1 ---
+test_is_supported_os() {
+  local snippet="$SANDBOX/t-os.sh" out
+  printf 'NAME="Ubuntu"\nID=ubuntu\n' > "$SANDBOX/os-ubuntu"
+  printf 'NAME="Linux Mint"\nID=linuxmint\nID_LIKE="ubuntu debian"\n' > "$SANDBOX/os-mint"
+  printf 'NAME="Fedora"\nID=fedora\n' > "$SANDBOX/os-fedora"
+  cat > "$snippet" <<EOF
+rc_u=0; is_supported_os "$SANDBOX/os-ubuntu" || rc_u=\$?
+rc_m=0; is_supported_os "$SANDBOX/os-mint" || rc_m=\$?
+rc_f=0; is_supported_os "$SANDBOX/os-fedora" || rc_f=\$?
+rc_x=0; is_supported_os "$SANDBOX/os-nie-istnieje" || rc_x=\$?
+echo "U=\$rc_u M=\$rc_m F=\$rc_f X=\$rc_x"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"U=0 M=0 F=1 X=1"* ]]; then
+    pass "is_supported_os: ubuntu/ID_LIKE → wspierany; fedora/brak pliku → odrzucony"
+  else
+    problem "is_supported_os: zła detekcja OS (output: $out)"
+  fi
+}
+
+# --- Test 25: normalize_path — cudzysłowy/spacje/~ jak w dotychczasowej normalizacji ---
+test_normalize_path() {
+  local snippet="$SANDBOX/t-path.sh" out
+  cat > "$snippet" <<'EOF'
+CLAUDE_HOME="/home/claude"
+p1="$(normalize_path "'/tmp/moj vault' ")"
+p2="$(normalize_path "~/vault")"
+echo "P1=[$p1] P2=[$p2]"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"P1=[/tmp/moj vault] P2=[/home/claude/vault]"* ]]; then
+    pass "normalize_path: zdejmuje cudzysłowy/brzegowe spacje, rozwija ~ na home claude"
+  else
+    problem "normalize_path: zła normalizacja (output: $out)"
+  fi
+}
+
+echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback) i fazy 2 (preflight/guardy/pytania) =="
 test_syntax
 test_flags_port
 test_flags_unknown
@@ -375,9 +520,15 @@ test_rollback_disabled
 test_rollback_reenabled
 test_no_read_outside_ask_tty
 test_flags_port_invalid
-test_ask_port_validation
+test_normalize_repo
 test_ask_tty_unopenable_device
 test_halt_resume_message
+test_ask_valid_email
+test_ask_valid_discord
+test_detect_timezone
+test_ob_guards_separate
+test_is_supported_os
+test_normalize_path
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

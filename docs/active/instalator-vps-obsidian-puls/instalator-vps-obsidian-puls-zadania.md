@@ -40,16 +40,16 @@ Ostatnia aktualizacja: 2026-07-02
 
 ## Faza 2: Preflight + detekcja stanu + blok 4 pytań (IU2)
 
-- [ ] Preflight: EUID=0, `/etc/os-release` (Debian/Ubuntu), internet (`curl -fsI api.github.com`)
-- [ ] Checklist prerequisites (6 pozycji ze spec-u, w tym hasło e2e i konto Tailscale) → `ask_tty` „[Enter = mam wszystko]"
-- [ ] Guardy `has_*`: `has_user_claude`, `has_supported_node`, `has_claude_auth`, `has_gh_auth`, `has_ob_auth` + `has_ob_sync` (DWA OSOBNE), `has_service`, `has_tailscale_ip` — exit code first, czyste-testowalne (DI)
-- [ ] Blok 4 pytań przez `ask_tty`: email (walidacja `@`), vault (niepuste), repo (`normalize_repo`: format + normalizacja `user/repo`→URL), Discord webhook (puste = pomiń; walidacja prefixu) → podsumowanie → „Kontynuujemy? [T/n]"
-- [ ] Auto-wartości: `DEVICE_NAME=vps-$(hostname)`, `PORT=7777`, TZ autodetekcja `timedatectl` → fallback `Europe/Warsaw` (+ override flagami)
-- [ ] Tryb `--only-puls`: pomiń pytania Obsidianowe, przywróć pytanie o workspace (z normalizacją ścieżki jak dziś L219–224)
-- [ ] Test: `normalize_repo` — `user/repo` → pełny URL; https URL → bez zmian; ssh/śmieci → exit ≠ 0
-- [ ] Test: walidacja emaila (brak `@` → ponowne pytanie) i Discord URL (zły prefix → ponowne pytanie)
-- [ ] Test: autodetekcja TZ — pusty wynik `timedatectl` (wstrzyknięty) → `Europe/Warsaw`
-- [ ] Test: `has_ob_auth` vs `has_ob_sync` — zalogowany-bez-synca daje (0,1); checki NIE sklejone
+- [x] Preflight: EUID=0, `/etc/os-release` (Debian/Ubuntu), internet (`curl -fsI api.github.com`)
+- [x] Checklist prerequisites (6 pozycji ze spec-u, w tym hasło e2e i konto Tailscale) → `ask_tty` „[Enter = mam wszystko]"
+- [x] Guardy `has_*`: `has_user_claude`, `has_supported_node`, `has_claude_auth`, `has_gh_auth`, `has_ob_auth` + `has_ob_sync` (DWA OSOBNE), `has_service`, `has_tailscale_ip` — exit code first, czyste-testowalne (DI)
+- [x] Blok 4 pytań przez `ask_tty`: email (walidacja `@`), vault (niepuste), repo (`normalize_repo`: format + normalizacja `user/repo`→URL), Discord webhook (puste = pomiń; walidacja prefixu) → podsumowanie → „Kontynuujemy? [T/n]"
+- [x] Auto-wartości: `DEVICE_NAME=vps-$(hostname)`, `PORT=7777`, TZ autodetekcja `timedatectl` → fallback `Europe/Warsaw` (+ override flagami)
+- [x] Tryb `--only-puls`: pomiń pytania Obsidianowe, przywróć pytanie o workspace (z normalizacją ścieżki jak dziś L219–224) — uwaga: tworzenie folderu przeniesione do `ensure_workspace` PO `useradd` (pytania lecą przed powstaniem `/home/claude`)
+- [x] Test: `normalize_repo` — `user/repo` → pełny URL; https URL → bez zmian; ssh/śmieci → exit ≠ 0
+- [x] Test: walidacja emaila (brak `@` → ponowne pytanie) i Discord URL (zły prefix → ponowne pytanie)
+- [x] Test: autodetekcja TZ — pusty wynik `timedatectl` (wstrzyknięty) → `Europe/Warsaw`
+- [x] Test: `has_ob_auth` vs `has_ob_sync` — zalogowany-bez-synca daje (0,1); checki NIE sklejone
 - [ ] Test: [Manual] checklist prerequisites wyświetla 6 pozycji i czeka na Enter (na prawdziwym pipe)
 - [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — nowe asercje PASS
 - [ ] Weryfikacja: `grep -c 'ask_tty' scripts/install-vps.sh` ≥ 6 oraz `read -r` nadal tylko w `ask_tty`
