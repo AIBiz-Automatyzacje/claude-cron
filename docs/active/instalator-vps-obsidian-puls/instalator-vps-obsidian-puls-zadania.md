@@ -50,9 +50,18 @@ Ostatnia aktualizacja: 2026-07-02
 - [x] Test: walidacja emaila (brak `@` → ponowne pytanie) i Discord URL (zły prefix → ponowne pytanie)
 - [x] Test: autodetekcja TZ — pusty wynik `timedatectl` (wstrzyknięty) → `Europe/Warsaw`
 - [x] Test: `has_ob_auth` vs `has_ob_sync` — zalogowany-bez-synca daje (0,1); checki NIE sklejone
-- [ ] Test: [Manual] checklist prerequisites wyświetla 6 pozycji i czeka na Enter (na prawdziwym pipe)
-- [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — nowe asercje PASS
-- [ ] Weryfikacja: `grep -c 'ask_tty' scripts/install-vps.sh` ≥ 6 oraz `read -r` nadal tylko w `ask_tty`
+- [ ] Test: [Manual] checklist prerequisites wyświetla 6 pozycji i czeka na Enter (na prawdziwym pipe) — wymaga operatora (checklist)
+- [x] Weryfikacja: `bash scripts/install-vps.test.sh` — nowe asercje PASS (25/25 PASS, review fazy 2)
+- [x] Weryfikacja: `grep -c 'ask_tty' scripts/install-vps.sh` ≥ 6 oraz `read -r` nadal tylko w `ask_tty` (17 wystąpień; jedyne `read -r` w L172 wewnątrz `ask_tty`)
+
+## Do poprawy po review fazy 2
+
+- [x] 🟠 [P2] **scripts/install-vps.sh:769** — `ensure_workspace` wykonuje `chown claude:claude "$WORKSPACE"` BEZWARUNKOWO (regresja: w fazie 1 chown tylko przy tworzeniu katalogu), a w `--only-puls` WORKSPACE pochodzi z `ask_workspace` bez ŻADNEGO walidatora (goły `ask_tty` zamiast `ask_valid`) — user może podać `/`, `/etc` albo katalog innego serwisu i root po cichu zmieni jego ownership. Fix: chown tylko dla świeżo utworzonego katalogu (lub po jawnym potwierdzeniu przejęcia istniejącego) + walidator ścieżki (absolutna, poza katalogami systemowymi) w `ask_workspace`
+- [ ] 🟡 [P3] 23 pozycje P3 (KOD 18 / TEST 4 / E2E 1) — pełna lista z fixami w `docs/active/instalator-vps-obsidian-puls/review-faza-2.md` (m.in.: stale WORKSPACE po `resolve_install_paths`; brak walidacji `--tz`/`--device-name`; `normalize_repo` akceptuje dowolny host; niecytowany `Environment=` w unicie vs spacje w ścieżce; `echo -e` na userowym inpucie w podsumowaniu; `confirm_config` bez tty i z `^[Nn]$`-only; martwy fallback `detect_timezone` vs `apply_timezone` bez guardu; brak testów `resolve_install_paths`/`resolve_auto_values` i retry-then-success `ask_valid`)
+
+## Operator checklist faza 2
+
+- [ ] Operator: pełny przebieg FAZY 0+1 na realnym VPS — checklist prerequisites (6 pozycji, Enter przez `/dev/tty`), detekcja stanu z prawdziwymi `su`/`gh`/`ob`/`tailscale`/`getent`/`timedatectl`, blok 4 pytań + podsumowanie + „Kontynuujemy?" (domyka otwarty checkbox [Manual] fazy 2) — Operator action: czysty Debian/Ubuntu VPS (lub kontener z rootem), prawdziwy `curl … | sudo bash` z env-override `CLAUDE_CRON_REPO`/`CLAUDE_CRON_REF` z feature-brancha; potwierdź: checklist czeka na Enter, pytania czytają z klawiatury, walidacja odrzuca zły email/webhook z retry, re-run pokazuje wykryty stan; przy okazji rozstrzygnij przekazanie `/dev/tty` przez granicę `su` (pokrywa się ze spike'iem z Operator checklist fazy 1, GATE Fazy 4)
 
 ## Faza 3: Narzędzia (IU3)
 

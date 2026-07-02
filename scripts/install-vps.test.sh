@@ -21,7 +21,11 @@ problem() { echo "  [FAIL] $1"; FAIL=$((FAIL + 1)); }
 
 # === Arrange: izolowana piaskownica ===
 SANDBOX="$(mktemp -d)"
-trap 'rm -rf "$SANDBOX"' EXIT
+# Osobna piaskownica pod /tmp dla testów workspace: domyślny mktemp na macOS
+# daje ścieżkę pod /var/folders/..., którą is_valid_workspace_path słusznie
+# odrzuca (/var jest na liście katalogów systemowych).
+WS_SANDBOX="$(mktemp -d /tmp/install-vps-ws.XXXXXX)"
+trap 'rm -rf "$SANDBOX" "$WS_SANDBOX"' EXIT
 
 # Uruchamia snippet (plik) z załadowanymi funkcjami instalatora.
 # TTY_DEVICE domyślnie wskazuje nieistniejący plik = środowisko BEZ terminala
@@ -503,6 +507,87 @@ EOF
   fi
 }
 
+# --- Test 26: is_valid_workspace_path — absolutna poza systemowymi OK; /, /etc, względna → fail ---
+test_is_valid_workspace_path() {
+  local snippet="$SANDBOX/t-ws-valid.sh" out
+  cat > "$snippet" <<'EOF'
+ok_home=0; is_valid_workspace_path "/home/claude/vault" || ok_home=$?
+ok_srv=0;  is_valid_workspace_path "/srv/moj-projekt" || ok_srv=$?
+r_rel=0;   is_valid_workspace_path "vault" || r_rel=$?
+r_root=0;  is_valid_workspace_path "/" || r_root=$?
+r_etc=0;   is_valid_workspace_path "/etc" || r_etc=$?
+r_etcs=0;  is_valid_workspace_path "/etc/nginx" || r_etcs=$?
+r_var=0;   is_valid_workspace_path "/var/lib/postgresql" || r_var=$?
+echo "OKH=$ok_home OKS=$ok_srv REL=$r_rel ROOT=$r_root ETC=$r_etc ETCS=$r_etcs VAR=$r_var"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"OKH=0 OKS=0 REL=1 ROOT=1 ETC=1 ETCS=1 VAR=1"* ]]; then
+    pass "is_valid_workspace_path: /home,/srv OK; względna, /, /etc(+pod), /var → odrzucone"
+  else
+    problem "is_valid_workspace_path: zła walidacja (output: $out)"
+  fi
+}
+
+# --- Test 27: ask_workspace — systemowa ścieżka → retry → fail; literówka bez zgody → retry; istniejący → OK ---
+test_ask_workspace_flow() {
+  # Część A: wstrzyknięty tty w kółko oddaje "/etc" → warn ≥2 + exit ≠ 0
+  # (symetria z ask_valid: zła ścieżka NIGDY nie ląduje w WORKSPACE).
+  local snippet="$SANDBOX/t-ws-ask.sh" out rc out2 warn_count
+  echo "/etc" > "$SANDBOX/tty-ws-bad"
+  cat > "$snippet" <<EOF
+CLAUDE_HOME="$SANDBOX/home-claude"
+TTY_DEVICE="$SANDBOX/tty-ws-bad"
+ask_workspace
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  warn_count=$(grep -c "katalogami systemowymi" <<<"$out" || true)
+  # Część B: sekwencja odpowiedzi przez stub granicy tty (DI jak run_as_claude
+  # w teście 23): systemowa → odrzucona; nieistniejąca + odmowa utworzenia →
+  # ponowione pytanie; istniejący katalog → przyjęty bez pytania o utworzenie.
+  mkdir -p "$WS_SANDBOX/ws-istnieje"
+  cat > "$snippet" <<EOF
+CLAUDE_HOME="$SANDBOX/home-claude"
+ASK_QUEUE=("/etc" "$WS_SANDBOX/ws-literowka" "n" "$WS_SANDBOX/ws-istnieje")
+ASK_I=0
+ask_tty() { printf -v "\$1" '%s' "\${ASK_QUEUE[\$ASK_I]}"; ASK_I=\$((ASK_I + 1)); }
+ask_workspace
+echo "WS=\$WORKSPACE"
+EOF
+  out2="$(run_snippet "$snippet")"
+  if [ "$rc" -ne 0 ] && [ "$warn_count" -ge 2 ] && [[ "$out" != *"NIEOSIAGALNE"* ]] \
+    && [[ "$out2" == *"WS=$WS_SANDBOX/ws-istnieje"* ]] \
+    && [ ! -d "$WS_SANDBOX/ws-literowka" ]; then
+    pass "ask_workspace: systemowa → retry → fail; odmowa utworzenia → retry; istniejący → OK"
+  else
+    problem "ask_workspace: zły przepływ (rc=$rc, warny=$warn_count, out: $out, out2: $out2)"
+  fi
+}
+
+# --- Test 28: ensure_workspace — chown TYLKO dla świeżo utworzonego katalogu ---
+test_ensure_workspace_chown_only_on_create() {
+  # Bezwarunkowy chown = root po cichu przejmuje istniejący katalog innego
+  # serwisu (P2-1 review fazy 2). Stub chown przez funkcję (DI granicy systemu).
+  local snippet="$SANDBOX/t-ws-chown.sh" log="$SANDBOX/chown.log" out
+  mkdir -p "$SANDBOX/ws-stary"
+  cat > "$snippet" <<EOF
+chown() { echo "CHOWN \$*" >> "$log"; }
+WORKSPACE="$SANDBOX/ws-nowy"
+ensure_workspace
+WORKSPACE="$SANDBOX/ws-stary"
+ensure_workspace
+EOF
+  out="$(run_snippet "$snippet")"
+  if [ "$?" -eq 0 ] && [ -d "$SANDBOX/ws-nowy" ] \
+    && [ "$(grep -c '^CHOWN' "$log" 2>/dev/null)" = "1" ] \
+    && grep -q "ws-nowy" "$log" && ! grep -q "ws-stary" "$log"; then
+    pass "ensure_workspace: chown tylko przy utworzeniu; istniejący katalog nietknięty"
+  else
+    problem "ensure_workspace: zły chown (log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+}
+
 echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback) i fazy 2 (preflight/guardy/pytania) =="
 test_syntax
 test_flags_port
@@ -529,6 +614,9 @@ test_detect_timezone
 test_ob_guards_separate
 test_is_supported_os
 test_normalize_path
+test_is_valid_workspace_path
+test_ask_workspace_flow
+test_ensure_workspace_chown_only_on_create
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

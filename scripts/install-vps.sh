@@ -261,6 +261,25 @@ normalize_path() {
   printf '%s\n' "$p"
 }
 
+# Katalogi, których instalator NIE może przejąć jako workspace — root robi
+# na tej ścieżce mkdir -p i chown, więc "/", "/etc" czy katalog innego
+# serwisu oznaczałyby ciche przejęcie ownership przez usera claude.
+WORKSPACE_FORBIDDEN_DIRS=(/bin /boot /dev /etc /lib /lib64 /proc /root /run /sbin /sys /usr /var)
+
+# is_valid_workspace_path <ścieżka> — absolutna i poza katalogami systemowymi
+# (sam katalog LUB cokolwiek pod nim). Oczekuje ścieżki już po normalize_path.
+is_valid_workspace_path() {
+  [[ "$1" == /* ]] || return 1
+  local p="${1%/}" d
+  [ -n "$p" ] || return 1  # "/" po zdjęciu końcowego slasha = pusty string
+  for d in "${WORKSPACE_FORBIDDEN_DIRS[@]}"; do
+    if [ "$p" = "$d" ] || [[ "$p" == "$d"/* ]]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
 # detect_timezone <wynik timedatectl> — pusta autodetekcja (kontener/minimalny
 # obraz bez timedatectl) → fallback Europe/Warsaw.
 detect_timezone() {
@@ -653,6 +672,10 @@ resolve_auto_values() {
 }
 
 # Pytanie o workspace — wraca TYLKO w --only-puls (pełny tryb: zawsze ~/vault).
+# Walidacja SYMETRYCZNA z resztą bloku pytań (jak ask_valid): ścieżka absolutna,
+# poza katalogami systemowymi — root robi na niej mkdir/chown. Nieistniejący
+# folder wymaga potwierdzenia, żeby literówka nie była cicho zmaterializowana
+# przez mkdir -p w ensure_workspace.
 ask_workspace() {
   echo -e "  Workspace = folder, w którym Claude CLI wykonuje joby."
   echo -e "  To powinien być Twój vault Obsidian (lub inny projekt)."
@@ -669,9 +692,22 @@ ask_workspace() {
     fi
   fi
 
-  local workspace_input=""
-  ask_tty workspace_input "Ścieżka do workspace [$CLAUDE_HOME/workspace]: " "$CLAUDE_HOME/workspace"
-  WORKSPACE="$(normalize_path "$workspace_input")"
+  local workspace_input="" candidate="" confirm="" attempt
+  for (( attempt=1; attempt<=ASK_MAX_ATTEMPTS; attempt++ )); do
+    ask_tty workspace_input "Ścieżka do workspace [$CLAUDE_HOME/workspace]: " "$CLAUDE_HOME/workspace"
+    candidate="$(normalize_path "$workspace_input")"
+    if ! is_valid_workspace_path "$candidate"; then
+      warn "Niepoprawna ścieżka — wymagana absolutna, poza katalogami systemowymi (np. $CLAUDE_HOME/vault)."
+      continue
+    fi
+    if [ ! -d "$candidate" ]; then
+      ask_tty confirm "Folder $candidate nie istnieje. Utworzyć? [T/n]: " "T"
+      [[ "$confirm" =~ ^[Nn]$ ]] && continue
+    fi
+    WORKSPACE="$candidate"
+    return 0
+  done
+  fail "Zbyt wiele niepoprawnych odpowiedzi na pytanie o workspace."
 }
 
 print_config_summary() {
@@ -761,12 +797,14 @@ apply_timezone() {
 
 # Utworzenie workspace PO utworzeniu usera claude — FAZA 1 tylko pyta
 # (na świeżym VPS w momencie pytań /home/claude jeszcze nie istnieje).
+# chown TYLKO dla świeżo utworzonego katalogu — istniejący mógł należeć do
+# innego serwisu i root nie może po cichu przejąć jego ownership.
 ensure_workspace() {
   if [ ! -d "$WORKSPACE" ]; then
     mkdir -p "$WORKSPACE"
+    chown "$CLAUDE_USER:$CLAUDE_USER" "$WORKSPACE"
     ok "Utworzono workspace: $WORKSPACE"
   fi
-  chown "$CLAUDE_USER:$CLAUDE_USER" "$WORKSPACE"
   ok "Workspace: $WORKSPACE"
 }
 
