@@ -249,6 +249,115 @@ EOF
   fi
 }
 
+# --- Test 15: grep-strażnik — goły `read` poza definicją ask_tty = 0 trafień ---
+test_no_read_outside_ask_tty() {
+  # Pod curl|bash stdin to pipe: goły `read` dostaje EOF i cicho psuje
+  # instalator. ask_tty (czytający z TTY_DEVICE) to JEDYNE dozwolone miejsce
+  # (plan IU1: zakaz egzekwowany testem grep, nie jednorazową ręczną weryfikacją).
+  # Wycinamy definicję ask_tty i komentarze, potem szukamy wywołań read.
+  # `grep -w` (word-match), nie alternacja `(^|...)` — tę ostatnią różnie
+  # interpretują implementacje grep (GNU/BSD/ugrep), a -w działa wszędzie.
+  local hits
+  hits=$(sed -e '/^ask_tty()/,/^}/d' -e 's/#.*//' "$INSTALLER" \
+    | grep -nw 'read' || true)
+  if [ -z "$hits" ]; then
+    pass "grep-strażnik: brak gołego \`read\` poza ask_tty"
+  else
+    problem "grep-strażnik: goły \`read\` poza ask_tty: $hits"
+  fi
+}
+
+# --- Test 16: --port nienumeryczny / poza zakresem 1-65535 → exit ≠ 0 ---
+test_flags_port_invalid() {
+  local snippet="$SANDBOX/t-port-bad.sh" val rc all_ok=1
+  for val in abc 7777x 0 70000; do
+    echo "parse_flags --port $val" > "$snippet"
+    run_snippet "$snippet" > /dev/null
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      problem "parse_flags: --port $val NIE został odrzucony"
+      all_ok=0
+    fi
+  done
+  if [ "$all_ok" -eq 1 ]; then
+    pass "parse_flags: --port abc/7777x/0/70000 → exit ≠ 0"
+  fi
+}
+
+# --- Test 17: ask_port — odpowiedź z tty przez tę samą walidację co --port ---
+test_ask_port_validation() {
+  local snippet="$SANDBOX/t-ask-port.sh" out rc out2
+  echo "abc" > "$SANDBOX/tty-port-bad"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/tty-port-bad"
+PORT=7777
+ask_port
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  echo "8080" > "$SANDBOX/tty-port-ok"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/tty-port-ok"
+PORT=7777
+ask_port
+echo "PORT=\$PORT"
+EOF
+  out2="$(run_snippet "$snippet")"
+  if [ "$rc" -ne 0 ] && [[ "$out" != *"NIEOSIAGALNE"* ]] && [[ "$out2" == *"PORT=8080"* ]]; then
+    pass "ask_port: śmieciowy port z tty → exit ≠ 0; poprawny → PORT ustawiony"
+  else
+    problem "ask_port: walidacja portu z tty zawiodła (rc=$rc, out: $out, out2: $out2)"
+  fi
+}
+
+# --- Test 18: ask_tty z urządzeniem przechodzącym [ -r ], ale niepodłączonym ---
+test_ask_tty_unopenable_device() {
+  # Realna semantyka /dev/tty BEZ kontrolującego terminala (ssh bez -t, cron):
+  # [ -r ] przechodzi (prawa rw-rw-rw-), ale open() pada (ENXIO). Symulacja
+  # plikiem socketa — open() na sockecie pada tak samo, a [ -r ] zwraca true.
+  local sock="$SANDBOX/fake-socket" snippet="$SANDBOX/t-ask-sock.sh" out rc out2
+  perl -MSocket -e 'socket(S,AF_UNIX,SOCK_STREAM,0); bind(S, sockaddr_un($ARGV[0])) or die' "$sock" 2>/dev/null
+  if [ ! -S "$sock" ]; then
+    problem "ask_tty: nie udało się utworzyć socketa do symulacji braku tty"
+    return
+  fi
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$sock"
+ask_tty ANSWER "Pytanie bez defaultu: "
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$sock"
+ask_tty ANSWER "Pytanie: " "domyslna"
+echo "GOT=\$ANSWER"
+EOF
+  out2="$(run_snippet "$snippet")"
+  if [ "$rc" -ne 0 ] && [[ "$out" == *"terminala"* ]] && [[ "$out" != *"NIEOSIAGALNE"* ]] \
+    && [[ "$out2" == *"GOT=domyslna"* ]]; then
+    pass "ask_tty: [ -r ] true + open() pada → fail bez defaultu / default z defaultem"
+  else
+    problem "ask_tty: nieotwieralne tty źle obsłużone (rc=$rc, out: $out, out2: $out2)"
+  fi
+}
+
+# --- Test 19: halt_leave_partial — resume to one-liner curl, nie lokalny plik ---
+test_halt_resume_message() {
+  # R6 spec-u: pod curl|sudo bash plik install-vps.sh nie istnieje lokalnie,
+  # więc instrukcja "sudo bash install-vps.sh" prowadziłaby donikąd.
+  local snippet="$SANDBOX/t-halt-msg.sh" out rc
+  echo 'halt_leave_partial "krok-testowy"' > "$snippet"
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -ne 0 ] && [[ "$out" == *"curl -fsSL"* ]] && [[ "$out" != *"sudo bash install-vps.sh"* ]]; then
+    pass "halt_leave_partial: komunikat resume pokazuje one-liner curl | sudo bash"
+  else
+    problem "halt_leave_partial: komunikat resume zły (rc=$rc, output: $out)"
+  fi
+}
+
 echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback) =="
 test_syntax
 test_flags_port
@@ -264,6 +373,11 @@ test_run_login_halts_leave_partial
 test_rollback_reverse_order
 test_rollback_disabled
 test_rollback_reenabled
+test_no_read_outside_ask_tty
+test_flags_port_invalid
+test_ask_port_validation
+test_ask_tty_unopenable_device
+test_halt_resume_message
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

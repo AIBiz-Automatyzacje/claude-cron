@@ -20,9 +20,23 @@ Ostatnia aktualizacja: 2026-07-02
 - [x] Test: `run_login` — verify fail 2× + pass 3. → sukces; fail 3× → `halt_leave_partial`, rollback-stos NIE odwinięty
 - [x] Test: `push_rollback` + symulowany błąd → cofnięcie w odwrotnej kolejności; `disable_rollback` → błąd nie odwija stosu
 - [x] Test: `bash -n scripts/install-vps.sh` przechodzi
-- [ ] Weryfikacja: `bash -n scripts/install-vps.sh` — zero błędów składni
-- [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — wszystkie asercje PASS
-- [ ] Weryfikacja: `grep -n 'read -r' scripts/install-vps.sh` poza definicją `ask_tty` zwraca 0 linii
+- [x] Weryfikacja: `bash -n scripts/install-vps.sh` — zero błędów składni
+- [x] Weryfikacja: `bash scripts/install-vps.test.sh` — wszystkie asercje PASS
+- [x] Weryfikacja: `grep -n 'read -r' scripts/install-vps.sh` poza definicją `ask_tty` zwraca 0 linii
+
+## Do poprawy po review fazy 1
+
+- [x] 🟠 [P2] **scripts/install-vps.sh:445** — interaktywne pytanie o port (`configure_settings`) omija walidację numeryczną dodaną dla `--port`; śmieciowa wartość (np. `abc`) trafia do `ufw deny` (błąd zamaskowany `|| true` → reguła DENY nie powstaje, a summary kłamie „Port zablokowany"), do unitu systemd i do `tailscale funnel`. Fix: odpowiedź z `ask_tty` przez tę samą walidację co `FLAG_PORT` (regex `^[0-9]+$` + zakres 1–65535), fail-fast
+- [x] 🟠 [P2] **scripts/install-vps.sh:146** — kontrakt `ask_tty` „brak tty + brak defaultu = twardy fail" nie działa bez kontrolującego terminala (ssh bez `-t`, cron, CI): `[ -r /dev/tty ]` zwraca true, ale `read < /dev/tty` pada z ENXIO, a `|| __answer=""` połyka błąd otwarcia jak EOF → pytanie bez defaultu cicho zwraca pusty string z rc=0. Fix: probe otwarcia przed gałęzią tty (np. `if { : < "$TTY_DEVICE"; } 2>/dev/null`) + rozróżnienie EOF od błędu redirekcji; test z realną semantyką, nie nieistniejącym plikiem
+- [x] 🟠 [P2] **scripts/install-vps.sh:201** — `halt_leave_partial` łamie R6 spec-u: komunikat resume instruuje `sudo bash install-vps.sh`, ale w podstawowym trybie R2 (`curl … | sudo bash`) plik nie istnieje lokalnie → „No such file or directory". Fix: komunikat „wklej ponownie tę samą komendę" (one-liner)
+- [x] 🟠 [P2] **scripts/install-vps.test.sh:252** — brak grep-strażnika na goły `read` poza `ask_tty` w harnessie, mimo że plan deklaruje „egzekwowany testem grep (IU1)"; fazy 2–7 dopiszą wiele interakcji i regresja przejdzie 14/14. Fix: test w harnessie — grep po definicjach poza `ask_tty` zwraca 0 linii
+- [ ] 🟡 [P3] 19 pozycji P3 (KOD/TEST) — pełna lista z fixami w `docs/active/instalator-vps-obsidian-puls/review-faza-1.md` (m.in.: `fail()` nie odwija rollback-stosu; range-check portu 1–65535 w `parse_flags`; niecytowany `$vault_git` w cronie roota; sed-insert `WEBHOOK_BASE_URL` bez walidacji; webhook Discord plaintext w unit 0644; `--reset` nieskonsumowany = pełna instalacja; braki pokrycia `--port abc` / flag / gałęzi `n` w `run_login`)
+
+## Operator checklist faza 1
+
+- [ ] Operator: weryfikacja realnych granic bezpieczeństwa (ufw DENY blokuje port z internetu, dashboard tylko przez Tailscale, Funnel wystawia tylko `/webhook/*`, unit działa jako user `claude`) — Operator action: pełny przebieg `curl … | sudo bash` na czystym VPS Debian/Ubuntu z kontem Tailscale (env-override `CLAUDE_CRON_REPO`/`CLAUDE_CRON_REF` z feature-brancha); z zewnątrz `curl http://<publiczne-ip>:7777` → timeout/refused, przez Tailscale → 200, `curl https://<funnel-url>/` → 403, `/webhook/test` → odpowiada, `systemctl show claude-cron -p User` → `claude`
+- [ ] Operator: spike handoffu `su - claude -c "claude" < /dev/tty` pod prawdziwym pipe (mechanizm R2/R7, decyzja #17) — Operator action: w Docker/multipass Ubuntu uruchom skrypt testowy przez `curl | sudo bash` i sprawdź, czy interaktywny CLI za `su` czyta z klawiatury; rozstrzygnij formę redirectu (alternatywy `runuser`/`sudo -u`) PRZED implementacją Fazy 4 (to jest GATE z planu IU4)
+- [ ] Operator: zachowanie `ask_tty`/`run_login` pod prawdziwym `curl | sudo bash` (stdin=pipe, realny `/dev/tty`, granica su/PAM na Ubuntu) — Operator action: na czystym VPS odpal one-liner z env-override brancha; potwierdź: pytania czytają z klawiatury, literówka w loginie → retry, 3× fail → komunikat resume, re-run wznawia od brakującego kroku; wykonać przed merge
 
 ## Faza 2: Preflight + detekcja stanu + blok 4 pytań (IU2)
 

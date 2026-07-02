@@ -21,6 +21,12 @@ set -Eeuo pipefail
 REPO="${CLAUDE_CRON_REPO:-https://github.com/AIBiz-Automatyzacje/claude-cron.git}"
 REF="${CLAUDE_CRON_REF:-main}"
 
+# One-liner instalacji do komunikatu resume (R6 spec-u: „wklej tę samą komendę").
+# W podstawowym trybie dostarczenia (R2: curl | sudo bash) plik install-vps.sh
+# NIE istnieje lokalnie, więc instrukcja „sudo bash install-vps.sh" kończyłaby
+# się „No such file or directory" — pokazujemy pełną komendę do wklejenia.
+RESUME_ONE_LINER="curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/scripts/install-vps.sh | sudo bash"
+
 SERVICE_NAME="claude-cron"
 CLAUDE_USER="claude"
 
@@ -93,6 +99,16 @@ USAGE
 
 # ============ HELPERY: FLAGI ============
 
+# Walidacja portu WSPÓLNA dla flagi --port i pytania interaktywnego
+# (configure_settings). Sama cyfra nie wystarczy: 0 i >65535 są nieadresowalne,
+# a śmieć typu "7777x" szedłby dalej do ufw/systemd/tailscale funnel — błąd ufw
+# maskuje `|| true`, więc reguła DENY cicho by nie powstała, a summary kłamało.
+is_valid_port() {
+  local port="$1"
+  [[ "$port" =~ ^[0-9]+$ ]] || return 1
+  [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+}
+
 parse_flags() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -126,8 +142,8 @@ parse_flags() {
     fail "Flaga --reset nie łączy się z --only-puls / --no-obsidian."
   fi
 
-  if [ -n "$FLAG_PORT" ] && ! [[ "$FLAG_PORT" =~ ^[0-9]+$ ]]; then
-    fail "Flaga --port wymaga liczby, otrzymano: $FLAG_PORT"
+  if [ -n "$FLAG_PORT" ] && ! is_valid_port "$FLAG_PORT"; then
+    fail "Flaga --port wymaga liczby z zakresu 1-65535, otrzymano: $FLAG_PORT"
   fi
 
   PORT="${FLAG_PORT:-$DEFAULT_PORT}"
@@ -140,17 +156,31 @@ parse_flags() {
 # Fallback bez terminala: przyjmij default; pytanie bez defaultu = twardy fail
 # (lepiej zatrzymać niż cicho zainstalować ze złą konfiguracją).
 ask_tty() {
-  local __var="$1" __prompt="$2" __default="${3-}" __has_default=0 __answer=""
+  local __var="$1" __prompt="$2" __default="${3-}" __has_default=0 __answer="" __tty_ok=0
   [ "$#" -ge 3 ] && __has_default=1
 
-  if [ -r "$TTY_DEVICE" ]; then
+  # Probe otwarcia zamiast [ -r ]: /dev/tty ma prawa rw-rw-rw-, więc -r zwraca
+  # true nawet bez kontrolującego terminala (ssh bez -t, cron, CI) — dopiero
+  # open() pada z ENXIO, a `read || __answer=""` połykałby ten błąd jak EOF
+  # i pytanie bez defaultu cicho zwracałoby pusty string zamiast twardego faila.
+  if { : < "$TTY_DEVICE"; } 2>/dev/null; then
+    __tty_ok=1
     ask "$__prompt"
-    # EOF na tty (Ctrl+D) traktujemy jak pustą odpowiedź, nie jak błąd.
-    read -r __answer < "$TTY_DEVICE" || __answer=""
-  elif [ "$__has_default" -eq 1 ]; then
-    warn "Brak terminala ($TTY_DEVICE) — przyjmuję wartość domyślną: ${__prompt}${__default}"
-  else
-    fail "Brak terminala ($TTY_DEVICE) — nie mogę zadać pytania bez wartości domyślnej: ${__prompt}"
+    if ! read -r __answer < "$TTY_DEVICE" 2>/dev/null; then
+      # rc!=0 to EOF (Ctrl+D = pusta odpowiedź) ALBO błąd redirekcji (tty
+      # zniknął między probe a read). Ponowny probe je rozróżnia: po EOF tty
+      # wciąż daje się otworzyć, po błędzie redirekcji nie → gałąź bez tty.
+      __answer=""
+      { : < "$TTY_DEVICE"; } 2>/dev/null || __tty_ok=0
+    fi
+  fi
+
+  if [ "$__tty_ok" -eq 0 ]; then
+    if [ "$__has_default" -eq 1 ]; then
+      warn "Brak terminala ($TTY_DEVICE) — przyjmuję wartość domyślną: ${__prompt}${__default}"
+    else
+      fail "Brak terminala ($TTY_DEVICE) — nie mogę zadać pytania bez wartości domyślnej: ${__prompt}"
+    fi
   fi
 
   if [ -z "$__answer" ] && [ "$__has_default" -eq 1 ]; then
@@ -197,8 +227,8 @@ halt_leave_partial() {
   echo ""
   warn "Instalacja ZATRZYMANA na kroku: $desc"
   warn "Wykonane dotąd kroki NIE zostały cofnięte."
-  warn "Dokończ ten krok ręcznie lub uruchom instalator ponownie:"
-  warn "  sudo bash install-vps.sh"
+  warn "Dokończ ten krok ręcznie lub wklej ponownie tę samą komendę instalacji:"
+  warn "  $RESUME_ONE_LINER"
   exit 1
 }
 
@@ -214,7 +244,8 @@ run_login() {
     info "Logowanie: $desc (próba $attempt/$LOGIN_MAX_ATTEMPTS)"
     # Proces logowania dostaje klawiaturę przez /dev/tty (stdin pod curl|bash
     # to pipe). Exit code loginu ignorujemy — prawdę mówi verify_cmd.
-    if [ -r "$TTY_DEVICE" ]; then
+    # Probe otwarcia, nie [ -r ] — zob. komentarz w ask_tty (ENXIO bez ctty).
+    if { : < "$TTY_DEVICE"; } 2>/dev/null; then
       bash -c "$login_cmd" < "$TTY_DEVICE" || true
     else
       bash -c "$login_cmd" || true
@@ -358,7 +389,8 @@ login_claude_cli() {
   echo "Po zalogowaniu wyjdź z Claude (Ctrl+C lub /exit), by kontynuować instalację."
   echo ""
   # Handoff klawiatury przez /dev/tty — pod curl|bash stdin to pipe.
-  if [ -r "$TTY_DEVICE" ]; then
+  # Probe otwarcia, nie [ -r ] — zob. komentarz w ask_tty (ENXIO bez ctty).
+  if { : < "$TTY_DEVICE"; } 2>/dev/null; then
     su - "$CLAUDE_USER" -c "claude" < "$TTY_DEVICE" || true
   else
     su - "$CLAUDE_USER" -c "claude" || true
@@ -391,6 +423,20 @@ install_dependencies() {
   mkdir -p "$INSTALL_DIR/data"
   chown "$CLAUDE_USER:$CLAUDE_USER" "$INSTALL_DIR/data"
   ok "Zależności zainstalowane"
+}
+
+# Pytanie o port — wydzielone z configure_settings, by dało się przetestować
+# headless (wstrzyknięty TTY_DEVICE) bez reszty konfiguracji (timedatectl/mkdir).
+# Odpowiedź z tty przechodzi przez TĘ SAMĄ walidację co flaga --port; fail-fast
+# zamiast cichego przepuszczenia śmiecia do ufw/systemd/funnel.
+ask_port() {
+  local port_input=""
+  ask_tty port_input "Port serwera [$PORT]: " "$PORT"
+  if ! is_valid_port "$port_input"; then
+    fail "Niepoprawny port: $port_input (wymagana liczba z zakresu 1-65535)"
+  fi
+  PORT="$port_input"
+  ok "Port: $PORT"
 }
 
 configure_settings() {
@@ -440,10 +486,7 @@ configure_settings() {
   ok "Workspace: $WORKSPACE"
 
   # Port (default z flagi --port lub 7777 — ustawione w parse_flags)
-  local port_input=""
-  ask_tty port_input "Port serwera [$PORT]: " "$PORT"
-  PORT="$port_input"
-  ok "Port: $PORT"
+  ask_port
 
   # Discord webhook (opcjonalnie)
   echo ""
