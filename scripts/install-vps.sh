@@ -28,7 +28,18 @@ REF="${CLAUDE_CRON_REF:-main}"
 RESUME_ONE_LINER="curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/scripts/install-vps.sh | sudo bash"
 
 SERVICE_NAME="claude-cron"
+OB_SYNC_SERVICE="obsidian-sync"
 CLAUDE_USER="claude"
+
+# Katalog unit-plików systemd — zmienna (nie literał w funkcjach), żeby testy
+# mogły ją nadpisać na sandbox (DI jak TTY_DEVICE) bez pisania po /etc.
+SYSTEMD_DIR="/etc/systemd/system"
+
+# Typy plików Obsidian Sync — 'unsupported' = przełącznik "All other file types"
+# z GUI Obsidiana. Bez niego pliki nie-media (raporty HTML/JSON/CSV ze skilli)
+# zostają na VPS i nigdy nie docierają na komputer/telefon — selektywny sync
+# jest per-device (przewodnik headless sekcja 3). Stała bez pytania (decyzja 8).
+OB_FILE_TYPES="image,audio,video,pdf,unsupported"
 
 DEFAULT_PORT=7777
 DEFAULT_TZ="Europe/Warsaw"
@@ -529,7 +540,7 @@ print_detected_state() {
   if [ "$FLAG_ONLY_PULS" != 1 ]; then
     print_state_line "Obsidian: zalogowany (ob)" has_ob_auth
     print_state_line "Obsidian: sync skonfigurowany" has_ob_sync
-    print_state_line "serwis obsidian-sync" has_service obsidian-sync
+    print_state_line "serwis $OB_SYNC_SERVICE" has_service "$OB_SYNC_SERVICE"
   fi
   print_state_line "serwis $SERVICE_NAME" has_service "$SERVICE_NAME"
   print_state_line "Tailscale połączony" has_tailscale_ip
@@ -858,6 +869,112 @@ login_tailscale() {
   run_login "Tailscale (tailscale up)" "tailscale up" "has_tailscale_ip"
 }
 
+# ============ FAZA 4: OBSIDIAN (sync-config, vault-git, symlink, systemd) ============
+
+# Automaty pod trapem ERR (R7/R8) — pomijane w main() przy --only-puls
+# (decyzja jak przy install_ob: rejestrator wywołań w testach widzi realny
+# brak wywołania, nie early-return).
+
+# verify_ob_file_types <wyjście ob sync-status> — czysta funkcja: linia
+# "File types:" musi zawierać 'unsupported'. Wyjątkowo parsujemy tekst
+# (guardy są exit-code-first), bo sam exit code sync-status nie mówi,
+# KTÓRE typy plików są włączone — a brak 'unsupported' to cichy ubytek
+# danych (raporty zostają na VPS), nie błąd.
+verify_ob_file_types() {
+  grep -q 'File types:.*unsupported' <<<"$1"
+}
+
+# Konfiguracja typów plików + natychmiastowa weryfikacja. TWARDA kolejność
+# (spec FAZA 4): sync-config PRZED `systemctl enable --now obsidian-sync`,
+# bo config czytany jest przy starcie procesu sync — odwrotna kolejność
+# wymagałaby restartu serwisu i zostawiała okno bez plików nie-media.
+configure_obsidian_file_types() {
+  echo ""
+  info "Ustawiam typy plików Obsidian Sync ($OB_FILE_TYPES)..."
+  run_as_claude "ob sync-config --path ~/vault --file-types $OB_FILE_TYPES"
+  local status_out
+  status_out="$(run_as_claude "ob sync-status --path ~/vault" 2>/dev/null || true)"
+  if ! verify_ob_file_types "$status_out"; then
+    fail "Konfiguracja typów plików nie przyjęła się — w wyjściu 'ob sync-status --path ~/vault' linia 'File types:' nie zawiera 'unsupported'. Uruchom ręcznie: su - $CLAUDE_USER -c \"ob sync-config --path ~/vault --file-types $OB_FILE_TYPES\", sprawdź sync-status i wklej ponownie komendę instalacji."
+  fi
+  ok "Typy plików Obsidian Sync zawierają 'unsupported'"
+}
+
+# Sparse checkout katalogu .claude z repo vaulta → ~/vault-git. Obsidian Sync
+# celowo ignoruje dotfoldery (poza .obsidian), więc .claude jedzie gitem,
+# a vault widzi go przez symlink (link_vault_claude). Auth: credential helper
+# gh z login_gh — czysty URL bez tokenu (R5). `--sparse` + `sparse-checkout set`
+# zamiast `--no-checkout` + jawnego `git checkout <branch>`: checkout dzieje
+# się sam na domyślnym branchu repo usera (main/master — nie zgadujemy nazwy).
+# Guard .git → git pull (kontrakt re-run: nigdy re-clone istniejącego repo).
+setup_vault_git() {
+  local vault_git="$CLAUDE_HOME/vault-git"
+  echo ""
+  if [ -d "$vault_git/.git" ]; then
+    info "Aktualizuję repo .claude (git pull)..."
+    run_as_claude "cd $(printf '%q' "$vault_git") && git pull --ff-only"
+  else
+    if [ -d "$vault_git" ]; then
+      warn "$vault_git istnieje bez gita — tworzę kopię zapasową..."
+      mv "$vault_git" "${vault_git}.backup.$(date +%s)"
+    fi
+    info "Pobieram katalog .claude (sparse checkout z $VAULT_GIT_REPO)..."
+    run_as_claude "git clone --filter=blob:none --sparse $(printf '%q' "$VAULT_GIT_REPO") $(printf '%q' "$vault_git") && cd $(printf '%q' "$vault_git") && git sparse-checkout set .claude"
+  fi
+  ok "Repo .claude: $vault_git"
+}
+
+# Symlink ~/vault/.claude → ~/vault-git/.claude. -n (no-dereference) konieczne:
+# cel to symlink NA KATALOG — bez -n drugi run tworzyłby link WEWNĄTRZ
+# katalogu docelowego zamiast podmienić sam symlink (idempotencja re-run).
+link_vault_claude() {
+  run_as_claude "ln -sfn $(printf '%q' "$CLAUDE_HOME/vault-git/.claude") $(printf '%q' "$CLAUDE_HOME/vault/.claude")"
+  ok "Symlink .claude podpięty: $CLAUDE_HOME/vault/.claude"
+}
+
+# build_obsidian_sync_unit <ścieżka ob> <ścieżka vaulta> — czysta funkcja
+# zwracająca treść unitu (testowalna bez systemd). ExecStartPre czyści lock
+# sync po crashu (bez tego serwis wpada w pętlę restartów — przewodnik
+# sekcja 4); Restart=always, bo proces sync ma żyć non-stop.
+build_obsidian_sync_unit() {
+  local ob_path="$1" vault_path="$2"
+  cat <<EOF
+[Unit]
+Description=Obsidian Headless Sync (Puls)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$CLAUDE_USER
+ExecStartPre=/bin/rm -rf $vault_path/.obsidian/.sync.lock
+ExecStart=$ob_path sync --path $vault_path --continuous
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+create_obsidian_sync_service() {
+  echo ""
+  info "Tworzę serwis systemd $OB_SYNC_SERVICE..."
+  local unit_file="$SYSTEMD_DIR/${OB_SYNC_SERVICE}.service" ob_path unit_existed=0
+  ob_path="$(command -v ob)" \
+    || fail "Brak binarki 'ob' w PATH — nie mogę utworzyć serwisu $OB_SYNC_SERVICE."
+  # Rollback TYLKO dla unit-pliku utworzonego w TYM runie — istniejący unit
+  # to cudzy/wcześniejszy stan (kontrakt jak userdel/npm rm z Fazy 3).
+  [ -f "$unit_file" ] && unit_existed=1
+  build_obsidian_sync_unit "$ob_path" "$CLAUDE_HOME/vault" > "$unit_file"
+  if [ "$unit_existed" -eq 0 ]; then
+    push_rollback "systemctl disable --now $OB_SYNC_SERVICE 2>/dev/null || true; rm -f '$unit_file'; systemctl daemon-reload"
+  fi
+  systemctl daemon-reload
+  systemctl enable --now "$OB_SYNC_SERVICE"
+  ok "Serwis $OB_SYNC_SERVICE uruchomiony"
+}
+
 clone_repo() {
   echo ""
   info "Przygotowuję repozytorium..."
@@ -1033,22 +1150,31 @@ ensure_workspace() {
   ok "Workspace: $WORKSPACE"
 }
 
+# build_puls_env_lines <workspace> <port> <home> <discord_url> — czysta funkcja
+# budująca blok Environment= unitu Pulsa. Nazwy zmiennych = kontrakt z
+# lib/config.js (CLAUDE_CRON_PORT / CLAUDE_CRON_WORKSPACE / DISCORD_WEBHOOK_URL).
+# WEBHOOK_BASE_URL celowo NIE tutaj — dopisuje go dopiero opcjonalny Funnel
+# (Faza 6). PATH z ~/.local/bin, bo tam żyje natywnie zainstalowany Claude CLI.
+build_puls_env_lines() {
+  local workspace="$1" port="$2" home="$3" discord_url="$4"
+  printf 'Environment=CLAUDE_CRON_PORT=%s\n' "$port"
+  printf 'Environment=CLAUDE_CRON_WORKSPACE=%s\n' "$workspace"
+  printf 'Environment=PATH=%s/.local/bin:%s/.npm-global/bin:/usr/local/bin:/usr/bin:/bin\n' "$home" "$home"
+  if [ -n "$discord_url" ]; then
+    printf 'Environment=DISCORD_WEBHOOK_URL=%s\n' "$discord_url"
+  fi
+}
+
 create_systemd_service() {
   echo ""
   info "Tworzę serwis systemd..."
 
-  SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-  local node_path env_lines
+  SERVICE_FILE="$SYSTEMD_DIR/${SERVICE_NAME}.service"
+  local node_path env_lines unit_existed=0
   node_path=$(which node)
-
-  env_lines="Environment=CLAUDE_CRON_PORT=$PORT
-Environment=CLAUDE_CRON_WORKSPACE=$WORKSPACE
-Environment=PATH=$CLAUDE_HOME/.local/bin:$CLAUDE_HOME/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"
-
-  if [ -n "$DISCORD_URL" ]; then
-    env_lines="$env_lines
-Environment=DISCORD_WEBHOOK_URL=$DISCORD_URL"
-  fi
+  env_lines="$(build_puls_env_lines "$WORKSPACE" "$PORT" "$CLAUDE_HOME" "$DISCORD_URL")"
+  # Rollback TYLKO dla unit-pliku utworzonego w TYM runie (jak obsidian-sync).
+  [ -f "$SERVICE_FILE" ] && unit_existed=1
 
   cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -1072,6 +1198,10 @@ SyslogIdentifier=$SERVICE_NAME
 [Install]
 WantedBy=multi-user.target
 EOF
+
+  if [ "$unit_existed" -eq 0 ]; then
+    push_rollback "systemctl disable --now $SERVICE_NAME 2>/dev/null || true; rm -f '$SERVICE_FILE'; systemctl daemon-reload"
+  fi
 
   systemctl daemon-reload
   systemctl enable "$SERVICE_NAME"
@@ -1340,6 +1470,18 @@ main() {
   install_tailscale
 
   login_block            # FAZA 3: blok 5 loginów — jedyna strefa interaktywna
+
+  # FAZA 4 spec-u (Obsidian) — automaty pod trapem ERR. KOLEJNOŚĆ TWARDA:
+  # sync-config + weryfikacja PRZED `systemctl enable --now obsidian-sync`
+  # (config czytany przy starcie procesu sync). Pominięcie przy --only-puls
+  # zapada TUTAJ (jak install_ob) — rejestrator wywołań w testach widzi
+  # realny brak wywołania.
+  if [ "$FLAG_ONLY_PULS" != 1 ]; then
+    configure_obsidian_file_types
+    setup_vault_git
+    link_vault_claude
+    create_obsidian_sync_service
+  fi
 
   clone_repo
   setup_puls_dependencies

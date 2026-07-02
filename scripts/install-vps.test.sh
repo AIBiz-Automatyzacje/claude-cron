@@ -5,7 +5,10 @@
 # neutralizacja userdel na granicy loginów i testy jednostkowe funkcji
 # install_* — guard-skip + fail-fast (faza 3) oraz blok 5 loginów: pełny
 # resume, wskok w brakującą pauzę, retry walidacji repo, leave-partial
-# bez rollbacku i pomijanie pauz ob przy --only-puls (faza 4).
+# bez rollbacku i pomijanie pauz ob przy --only-puls (faza 4) oraz Obsidian +
+# unity systemd: ENV_LINES, unit obsidian-sync, weryfikacja file-types,
+# sparse checkout/symlink .claude, kolejność sync-config → enable, rollback
+# unit-plików utworzonych w tym runie (faza 5).
 # Wzorzec z install.test.sh: lib-only source + sandbox mktemp + pass/problem.
 #
 # Każdy scenariusz działa w ŚWIEŻYM subshellu (bash -c + source lib-only):
@@ -598,7 +601,9 @@ EOF
 # side-effectów, a harness bada KOLEJNOŚĆ i OBECNOŚĆ wywołań (DI jak w t.23).
 MAIN_COMPONENT_FNS="print_banner run_preflight resolve_install_paths collect_config \
 apply_timezone install_base_packages install_node ensure_claude_user ensure_workspace \
-install_claude_cli install_ob install_tailscale login_block clone_repo \
+install_claude_cli install_ob install_tailscale login_block \
+configure_obsidian_file_types setup_vault_git link_vault_claude \
+create_obsidian_sync_service clone_repo \
 setup_puls_dependencies create_systemd_service configure_firewall setup_tailscale \
 setup_funnel setup_auto_update print_summary"
 
@@ -1150,7 +1155,264 @@ EOF
   fi
 }
 
-echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje) i fazy 4 (blok 5 loginów) =="
+# --- Test 45: build_puls_env_lines — WORKSPACE/PORT/PATH; linia Discord warunkowo ---
+test_build_puls_env_lines() {
+  # Kontrakt z lib/config.js: CLAUDE_CRON_PORT / CLAUDE_CRON_WORKSPACE /
+  # DISCORD_WEBHOOK_URL; PATH musi zawierać ~/.local/bin (natywny Claude CLI).
+  # WEBHOOK_BASE_URL nie ma prawa się tu pojawić (Funnel = Faza 6).
+  local snippet="$SANDBOX/t-env-lines.sh" out without
+  cat > "$snippet" <<'EOF'
+with="$(build_puls_env_lines "/home/claude/vault" "7777" "/home/claude" "https://discord.com/api/webhooks/1/a")"
+without="$(build_puls_env_lines "/home/claude/vault" "7777" "/home/claude" "")"
+echo "WITH<<<$with>>>"
+echo "WITHOUT<<<$without>>>"
+EOF
+  out="$(run_snippet "$snippet")"
+  without="${out#*WITHOUT<<<}"
+  if [[ "$out" == *"Environment=CLAUDE_CRON_PORT=7777"* ]] \
+    && [[ "$out" == *"Environment=CLAUDE_CRON_WORKSPACE=/home/claude/vault"* ]] \
+    && [[ "$out" == *"Environment=PATH=/home/claude/.local/bin:/home/claude/.npm-global/bin:"* ]] \
+    && [[ "$out" == *"Environment=DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1/a"* ]] \
+    && [[ "$without" != *"DISCORD_WEBHOOK_URL"* ]] \
+    && [[ "$out" != *"WEBHOOK_BASE_URL"* ]]; then
+    pass "build_puls_env_lines: WORKSPACE/PORT/PATH zawsze; DISCORD tylko z webhookiem; bez WEBHOOK_BASE_URL"
+  else
+    problem "build_puls_env_lines: złe linie Environment (output: $out)"
+  fi
+}
+
+# --- Test 46: build_obsidian_sync_unit — Restart=always, User=claude, vault, lock cleanup ---
+test_build_obsidian_sync_unit() {
+  local snippet="$SANDBOX/t-ob-unit.sh" out
+  cat > "$snippet" <<'EOF'
+build_obsidian_sync_unit "/usr/local/bin/ob" "/home/claude/vault"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"Restart=always"* ]] \
+    && [[ "$out" == *"User=claude"* ]] \
+    && [[ "$out" == *"ExecStart=/usr/local/bin/ob sync --path /home/claude/vault --continuous"* ]] \
+    && [[ "$out" == *"ExecStartPre=/bin/rm -rf /home/claude/vault/.obsidian/.sync.lock"* ]]; then
+    pass "build_obsidian_sync_unit: Restart=always, User=claude, ścieżka vaulta, lock cleanup"
+  else
+    problem "build_obsidian_sync_unit: brakuje wymaganych linii unitu (output: $out)"
+  fi
+}
+
+# --- Test 47: weryfikacja file-types — bez 'unsupported' → fail; z → pass; sync-config PRZED sync-status ---
+test_configure_obsidian_file_types() {
+  # Czysta funkcja: parsowanie wyjścia sync-status (atrapy formatu z przewodnika).
+  local snippet="$SANDBOX/t-ft.sh" log="$SANDBOX/ft.log" out rc out2 rc2
+  cat > "$snippet" <<'EOF'
+rc_no=0; verify_ob_file_types "File types: image, audio, video, pdf" || rc_no=$?
+rc_yes=0; verify_ob_file_types "$(printf 'Vault: moj\nFile types: image, audio, video, pdf, unsupported\n')" || rc_yes=$?
+echo "NO=$rc_no YES=$rc_yes"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"NO=1 YES=0"* ]]; then
+    pass "verify_ob_file_types: wyjście bez 'unsupported' → fail; z → pass"
+  else
+    problem "verify_ob_file_types: złe rozpoznanie (output: $out)"
+  fi
+  # Fail-fast całej funkcji: sync-status (stub run_as_claude) nie potwierdza
+  # 'unsupported' → fail; sync-config MUSI polecieć PRZED sync-status.
+  cat > "$snippet" <<EOF
+run_as_claude() {
+  echo "RAC \$1" >> "$log"
+  case "\$1" in *sync-status*) echo "File types: image, audio, video, pdf" ;; esac
+  return 0
+}
+configure_obsidian_file_types
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -ne 0 ] && [[ "$out" == *"unsupported"* ]] && [[ "$out" != *"NIEOSIAGALNE"* ]] \
+    && [[ "$(sed -n 1p "$log")" == *"sync-config"* ]] \
+    && [[ "$(sed -n 2p "$log")" == *"sync-status"* ]]; then
+    pass "configure_obsidian_file_types: brak 'unsupported' w sync-status → fail; sync-config przed sync-status"
+  else
+    problem "configure_obsidian_file_types: fail-fast/kolejność zawiodły (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+  # Happy path: sync-status potwierdza → exit 0.
+  cat > "$snippet" <<EOF
+run_as_claude() {
+  case "\$1" in *sync-status*) echo "File types: image, audio, video, pdf, unsupported" ;; esac
+  return 0
+}
+configure_obsidian_file_types
+echo "PO_KONFIGU"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  if [ "$rc2" -eq 0 ] && [[ "$out2" == *"PO_KONFIGU"* ]]; then
+    pass "configure_obsidian_file_types: sync-status z 'unsupported' → sukces"
+  else
+    problem "configure_obsidian_file_types: happy path zawiódł (rc=$rc2, output: $out2)"
+  fi
+}
+
+# --- Test 48: symlink .claude idempotentny — drugi run nie failuje, cel bez zmian ---
+test_link_vault_claude_idempotent() {
+  # run_as_claude wykonuje lokalnie (DI jak w t.23) — komenda ln używa
+  # absolutnych ścieżek po %q, więc nie potrzebuje home usera claude.
+  local snippet="$SANDBOX/t-symlink.sh" home="$SANDBOX/home-sym" out rc
+  mkdir -p "$home/vault-git/.claude" "$home/vault"
+  cat > "$snippet" <<EOF
+CLAUDE_HOME="$home"
+run_as_claude() { bash -c "\$1"; }
+link_vault_claude
+t1="\$(readlink "$home/vault/.claude")"
+link_vault_claude
+t2="\$(readlink "$home/vault/.claude")"
+echo "T1=[\$t1] T2=[\$t2]"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -L "$home/vault/.claude" ] \
+    && [[ "$out" == *"T1=[$home/vault-git/.claude] T2=[$home/vault-git/.claude]"* ]]; then
+    pass "link_vault_claude: idempotentny — drugi run bez błędu, cel symlinku bez zmian"
+  else
+    problem "link_vault_claude: symlink nie-idempotentny (rc=$rc, output: $out)"
+  fi
+}
+
+# --- Test 49: setup_vault_git — clone sparse przy braku; .git → git pull; non-git → backup ---
+test_setup_vault_git_guard() {
+  local snippet="$SANDBOX/t-vg.sh" log="$SANDBOX/vg.log" home="$SANDBOX/home-vg" out rc
+  mkdir -p "$home"
+  cat > "$snippet" <<EOF
+CLAUDE_HOME="$home"
+VAULT_GIT_REPO="https://github.com/user/repo.git"
+run_as_claude() { echo "RAC \$1" >> "$log"; return 0; }
+setup_vault_git
+mkdir -p "$home/vault-git/.git"
+setup_vault_git
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+    && [[ "$(sed -n 1p "$log")" == *"git clone --filter=blob:none --sparse"* ]] \
+    && [[ "$(sed -n 1p "$log")" == *"https://github.com/user/repo.git"* ]] \
+    && [[ "$(sed -n 1p "$log")" == *"git sparse-checkout set .claude"* ]] \
+    && [[ "$(sed -n 2p "$log")" == *"git pull"* ]] \
+    && [[ "$(sed -n 2p "$log")" != *"git clone"* ]]; then
+    pass "setup_vault_git: brak repo → clone sparse .claude; istniejący .git → git pull"
+  else
+    problem "setup_vault_git: zły guard clone/pull (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+  # Katalog bez .git = cudzy stan → kopia zapasowa, potem clone (wzorzec clone_repo).
+  local log2="$SANDBOX/vg2.log" out2 rc2
+  rm -rf "$home/vault-git"
+  mkdir -p "$home/vault-git/costam"
+  cat > "$snippet" <<EOF
+CLAUDE_HOME="$home"
+VAULT_GIT_REPO="https://github.com/user/repo.git"
+run_as_claude() { echo "RAC \$1" >> "$log2"; return 0; }
+setup_vault_git
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  if [ "$rc2" -eq 0 ] && [ ! -d "$home/vault-git" ] \
+    && ls -d "$home"/vault-git.backup.* >/dev/null 2>&1 \
+    && grep -q "git clone" "$log2" 2>/dev/null; then
+    pass "setup_vault_git: katalog bez .git → kopia zapasowa + clone"
+  else
+    problem "setup_vault_git: backup non-git zawiódł (rc=$rc2, log: $(cat "$log2" 2>/dev/null), output: $out2)"
+  fi
+}
+
+# --- Test 50: main() — sync-config PRZED enable obsidian-sync; --only-puls pomija blok Obsidian ---
+test_main_obsidian_order_and_skip() {
+  # Kolejność twarda (spec FAZA 4): config czytany przy starcie procesu sync,
+  # więc configure_obsidian_file_types MUSI poprzedzać create_obsidian_sync_service
+  # (w którym siedzi `systemctl enable --now obsidian-sync`).
+  local snippet="$SANDBOX/t-ob-order.sh" out calls pos_cfg pos_svc out2
+  write_recorder_snippet "$snippet" ""
+  out="$(run_snippet "$snippet")"
+  calls="$(grep '^CALL ' <<<"$out" || true)"
+  pos_cfg="$(grep -n '^CALL configure_obsidian_file_types$' <<<"$calls" | cut -d: -f1)"
+  pos_svc="$(grep -n '^CALL create_obsidian_sync_service$' <<<"$calls" | cut -d: -f1)"
+  if [ -n "$pos_cfg" ] && [ -n "$pos_svc" ] && [ "$pos_cfg" -lt "$pos_svc" ] \
+    && grep -q '^CALL setup_vault_git$' <<<"$calls" \
+    && grep -q '^CALL link_vault_claude$' <<<"$calls"; then
+    pass "main(): configure_obsidian_file_types PRZED create_obsidian_sync_service (+ vault-git/symlink obecne)"
+  else
+    problem "main(): zła kolejność bloku Obsidian (cfg=$pos_cfg svc=$pos_svc, calls: $calls)"
+  fi
+  write_recorder_snippet "$snippet" "--only-puls"
+  out2="$(run_snippet "$snippet")"
+  if [[ "$out2" != *"CALL configure_obsidian_file_types"* ]] \
+    && [[ "$out2" != *"CALL setup_vault_git"* ]] \
+    && [[ "$out2" != *"CALL link_vault_claude"* ]] \
+    && [[ "$out2" != *"CALL create_obsidian_sync_service"* ]] \
+    && [[ "$out2" == *"CALL create_systemd_service"* ]]; then
+    pass "main --only-puls: cały blok Obsidian pominięty, unit Pulsa tworzony"
+  else
+    problem "main --only-puls: blok Obsidian NIE został pominięty (output: $out2)"
+  fi
+}
+
+# --- Test 51: rollback unit-plików TYLKO gdy utworzone w tym runie ---
+test_unit_rollback_only_when_created() {
+  # Kontrakt jak userdel/npm rm (t.31/35): istniejący unit sprzed runa to
+  # cudzy stan — ERR w późniejszym kroku nie może go skasować.
+  local snippet="$SANDBOX/t-unit-rb.sh" sysd="$SANDBOX/systemd" bin="$SANDBOX/stub-bin-unit" out rc
+  mkdir -p "$sysd" "$bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/ob"
+  chmod +x "$bin/ob"
+  cat > "$snippet" <<EOF
+export PATH="$bin:\$PATH"
+SYSTEMD_DIR="$sysd"
+CLAUDE_HOME="/home/claude"
+systemctl() { :; }
+create_obsidian_sync_service
+echo "STACK_A=[\${ROLLBACK_STACK[*]-}]"
+ROLLBACK_STACK=()
+create_obsidian_sync_service
+echo "STACK_B=[\${ROLLBACK_STACK[*]-}]"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -f "$sysd/obsidian-sync.service" ] \
+    && [[ "$out" == *"STACK_A=[systemctl disable --now obsidian-sync"* ]] \
+    && [[ "$out" == *"rm -f '$sysd/obsidian-sync.service'"* ]] \
+    && [[ "$out" == *"STACK_B=[]"* ]]; then
+    pass "create_obsidian_sync_service: rollback unitu tylko przy utworzeniu w tym runie"
+  else
+    problem "create_obsidian_sync_service: zła rejestracja rollbacku (rc=$rc, output: $out)"
+  fi
+  # To samo dla unitu Pulsa (claude-cron).
+  local sysd2="$SANDBOX/systemd-puls" out2 rc2
+  mkdir -p "$sysd2"
+  cat > "$snippet" <<EOF
+SYSTEMD_DIR="$sysd2"
+CLAUDE_HOME="/home/claude"
+WORKSPACE="/home/claude/vault"
+PORT=7777
+DISCORD_URL=""
+INSTALL_DIR="/home/claude/claude-cron"
+systemctl() { :; }
+sleep() { :; }
+create_systemd_service
+echo "STACK_A=[\${ROLLBACK_STACK[*]-}]"
+ROLLBACK_STACK=()
+create_systemd_service
+echo "STACK_B=[\${ROLLBACK_STACK[*]-}]"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  if [ "$rc2" -eq 0 ] && [ -f "$sysd2/claude-cron.service" ] \
+    && [[ "$out2" == *"STACK_A=[systemctl disable --now claude-cron"* ]] \
+    && [[ "$out2" == *"STACK_B=[]"* ]] \
+    && grep -q "Environment=CLAUDE_CRON_WORKSPACE=/home/claude/vault" "$sysd2/claude-cron.service" \
+    && ! grep -q "WEBHOOK_BASE_URL" "$sysd2/claude-cron.service"; then
+    pass "create_systemd_service: rollback unitu Pulsa tylko przy utworzeniu; unit bez WEBHOOK_BASE_URL"
+  else
+    problem "create_systemd_service: zła rejestracja rollbacku/treść unitu (rc=$rc2, output: $out2)"
+  fi
+}
+
+echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje), fazy 4 (blok 5 loginów) i fazy 5 (Obsidian + unity systemd) =="
 test_syntax
 test_flags_port
 test_flags_unknown
@@ -1195,6 +1457,13 @@ test_login_block_only_puls_skips_ob_pauses
 test_login_cmd_as_claude_quoting_roundtrip
 test_login_ob_commands_survive_double_parsing
 test_validate_repo_access_repo_quoted
+test_build_puls_env_lines
+test_build_obsidian_sync_unit
+test_configure_obsidian_file_types
+test_link_vault_claude_idempotent
+test_setup_vault_git_guard
+test_main_obsidian_order_and_skip
+test_unit_rollback_only_when_created
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

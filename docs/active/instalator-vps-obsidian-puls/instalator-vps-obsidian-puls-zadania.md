@@ -118,17 +118,17 @@ Ostatnia aktualizacja: 2026-07-02
 
 ## Faza 5: Obsidian + Puls (IU5)
 
-- [ ] `ob sync-config --path ~/vault --file-types image,audio,video,pdf,unsupported` → weryfikacja `sync-status` zawiera `unsupported` (fail → `fail`, pod trapem)
-- [ ] Sparse checkout `.claude` z `<REPO>` → `~/vault-git` (gh credential helper, czysty URL); guard: istniejący `.git` → `git pull`
-- [ ] Symlink `ln -sfn ~/vault-git/.claude ~/vault/.claude` (idempotentny)
-- [ ] Systemd `obsidian-sync`: `ob sync --continuous`, `Restart=always`, `User=claude`, `ExecStartPre` lock cleanup
-- [ ] Puls: sekcje clone/pull + `npm install --production` + `mkdir data/` + systemd `claude-cron` przeniesione do funkcji; `WORKSPACE=~/vault` na sztywno (pytanie tylko w `--only-puls`); TZ z autodetekcji; bez `WEBHOOK_BASE_URL` (Funnel w Fazie 6)
-- [ ] Kolejność twarda w `main()`: sync-config → weryfikacja → `enable --now obsidian-sync`
-- [ ] Rollback automatów: `systemctl disable --now` + usunięcie unit-plików utworzonych w tym runie
-- [ ] Test: budowa ENV_LINES (czysta funkcja) — pełny tryb → WORKSPACE/PORT/PATH; z Discordem → linia DISCORD; bez → brak
-- [ ] Test: generacja unitu obsidian-sync (czysta funkcja) — zawiera `Restart=always`, `User=claude`, ścieżkę vault
-- [ ] Test: weryfikacja file-types — wyjście bez `unsupported` → fail; z → pass (atrapy)
-- [ ] Test: symlink idempotentny — drugi run nie failuje, cel bez zmian
+- [x] `ob sync-config --path ~/vault --file-types image,audio,video,pdf,unsupported` → weryfikacja `sync-status` zawiera `unsupported` (fail → `fail`, pod trapem)
+- [x] Sparse checkout `.claude` z `<REPO>` → `~/vault-git` (gh credential helper, czysty URL); guard: istniejący `.git` → `git pull` (rozstrzygnięcie: `git clone --filter=blob:none --sparse` + `git sparse-checkout set .claude` — checkout na domyślnym branchu repo usera; wymaga git >= 2.25)
+- [x] Symlink `ln -sfn ~/vault-git/.claude ~/vault/.claude` (idempotentny)
+- [x] Systemd `obsidian-sync`: `ob sync --continuous`, `Restart=always`, `User=claude`, `ExecStartPre` lock cleanup
+- [x] Puls: sekcje clone/pull + `npm install --production` + `mkdir data/` + systemd `claude-cron` przeniesione do funkcji; `WORKSPACE=~/vault` na sztywno (pytanie tylko w `--only-puls`); TZ z autodetekcji; bez `WEBHOOK_BASE_URL` (Funnel w Fazie 6) — zrealizowane w fazach 1–2; w IU5 dołożono `build_puls_env_lines` (czysta funkcja) + asercję braku `WEBHOOK_BASE_URL` w treści unitu
+- [x] Kolejność twarda w `main()`: sync-config → weryfikacja → `enable --now obsidian-sync`
+- [x] Rollback automatów: `systemctl disable --now` + usunięcie unit-plików utworzonych w tym runie
+- [x] Test: budowa ENV_LINES (czysta funkcja) — pełny tryb → WORKSPACE/PORT/PATH; z Discordem → linia DISCORD; bez → brak (test 50)
+- [x] Test: generacja unitu obsidian-sync (czysta funkcja) — zawiera `Restart=always`, `User=claude`, ścieżkę vault (test 51)
+- [x] Test: weryfikacja file-types — wyjście bez `unsupported` → fail; z → pass (atrapy) (testy 52–54)
+- [x] Test: symlink idempotentny — drugi run nie failuje, cel bez zmian (test 55)
 - [ ] Test: [Manual] na VPS: `~/vault/.claude/skills` widoczne przez symlink; oba unity `active`
 - [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje ENV_LINES/unitów/file-types PASS
 - [ ] Weryfikacja: test kolejności w harnessie — `sync-config` w `main()` PRZED `enable --now obsidian-sync`

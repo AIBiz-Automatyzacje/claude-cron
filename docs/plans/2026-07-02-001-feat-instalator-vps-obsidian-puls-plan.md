@@ -276,7 +276,7 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 
 ---
 
-- [ ] **Unit 5: FAZA 4 — Obsidian (sync-config, sparse checkout, symlink, systemd) + Puls (repo, systemd)**
+- [x] **Unit 5: FAZA 4 — Obsidian (sync-config, sparse checkout, symlink, systemd) + Puls (repo, systemd)**
 
 **Cel:** Cała bezobsługowa część: konfiguracja file-types PRZED startem serwisu, `.claude` przez git + symlink, dwie usługi systemd.
 
@@ -307,15 +307,15 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 - `docs/MIGRACJA-PULS.md` SEKCJA 10 (symlink `.claude`, dwukierunkowość)
 
 **Scenariusze testowe:**
-- [Unit] budowa ENV_LINES (funkcja czysta): pełny tryb → `CLAUDE_CRON_WORKSPACE=…/vault`, PORT, PATH z `~/.local/bin`; z Discordem → linia `DISCORD_WEBHOOK_URL`; bez → brak linii
-- [Unit] generacja unitu obsidian-sync (funkcja czysta zwracająca treść): zawiera `Restart=always`, `User=claude`, ścieżkę vault
-- [Unit] weryfikacja file-types: wstrzyknięte wyjście `sync-status` bez `unsupported` → fail; z → pass
-- [Unit] symlink idempotentny: drugi run nie failuje, cel bez zmian
-- [Manual] na VPS: `~/vault/.claude/skills` widoczne przez symlink; oba unity `active`
+- [x] [Unit] budowa ENV_LINES (funkcja czysta): pełny tryb → `CLAUDE_CRON_WORKSPACE=…/vault`, PORT, PATH z `~/.local/bin`; z Discordem → linia `DISCORD_WEBHOOK_URL`; bez → brak linii (test 50: `build_puls_env_lines`)
+- [x] [Unit] generacja unitu obsidian-sync (funkcja czysta zwracająca treść): zawiera `Restart=always`, `User=claude`, ścieżkę vault (test 51: `build_obsidian_sync_unit`, w tym lock cleanup)
+- [x] [Unit] weryfikacja file-types: wstrzyknięte wyjście `sync-status` bez `unsupported` → fail; z → pass (testy 52–54: `verify_ob_file_types` + `configure_obsidian_file_types` z kolejnością sync-config przed sync-status)
+- [x] [Unit] symlink idempotentny: drugi run nie failuje, cel bez zmian (test 55: `link_vault_claude`)
+- [ ] [Manual] na VPS: `~/vault/.claude/skills` widoczne przez symlink; oba unity `active`
 
 **Weryfikacja:**
-- `bash scripts/install-vps.test.sh` — asercje ENV_LINES/unitów/file-types PASS
-- `grep -n 'sync-config' scripts/install-vps.sh` występuje w `main()` PRZED `enable --now obsidian-sync` (test kolejności w harnessie)
+- [x] `bash scripts/install-vps.test.sh` — asercje ENV_LINES/unitów/file-types PASS (61/61)
+- [x] `grep -n 'sync-config' scripts/install-vps.sh` występuje w `main()` PRZED `enable --now obsidian-sync` (test 58 kolejności w harnessie: `configure_obsidian_file_types` PRZED `create_obsidian_sync_service`)
 
 ---
 
