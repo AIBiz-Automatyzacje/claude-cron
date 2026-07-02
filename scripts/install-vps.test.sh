@@ -1276,14 +1276,49 @@ EOF
   fi
 }
 
-# --- Test 49: setup_vault_git — clone sparse przy braku; .git → git pull; non-git → backup ---
+# --- Test 48b: link_vault_claude — REALNY katalog .claude (cudzy stan) → backup, nie ERR/rollback ---
+test_link_vault_claude_foreign_dir_backup() {
+  # Pozostałość po starym instalatorze: ~/vault/.claude jako katalog.
+  # Bez guardu `ln -sfn` failuje ("cannot overwrite directory") → trap ERR
+  # → rollback całego runu. Oczekiwane: backup-mv (wzorzec setup_vault_git).
+  local snippet="$SANDBOX/t-symlink-dir.sh" home="$SANDBOX/home-sym-dir" out rc
+  mkdir -p "$home/vault-git/.claude" "$home/vault/.claude"
+  echo "stare-skille" > "$home/vault/.claude/relikt.md"
+  cat > "$snippet" <<EOF
+CLAUDE_HOME="$home"
+run_as_claude() { bash -c "\$1"; }
+link_vault_claude
+echo "TARGET=[\$(readlink "$home/vault/.claude")]"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ -L "$home/vault/.claude" ] \
+    && [[ "$out" == *"TARGET=[$home/vault-git/.claude]"* ]] \
+    && ls "$home"/vault/.claude.backup.*/relikt.md >/dev/null 2>&1; then
+    pass "link_vault_claude: realny katalog .claude → kopia zapasowa + symlink (bez ERR)"
+  else
+    problem "link_vault_claude: cudzy katalog .claude nieobsłużony (rc=$rc, output: $out)"
+  fi
+}
+
+# --- Test 49: setup_vault_git — clone sparse przy braku; .git + zgodny origin → git pull; non-git → backup ---
 test_setup_vault_git_guard() {
+  # Atrapa run_as_claude symuluje realny kontrakt gita: clone materializuje
+  # vault-git/.claude (post-condition), a `remote get-url origin` odpowiada
+  # skonfigurowanym repo (zgodny origin → gałąź pull).
   local snippet="$SANDBOX/t-vg.sh" log="$SANDBOX/vg.log" home="$SANDBOX/home-vg" out rc
   mkdir -p "$home"
   cat > "$snippet" <<EOF
 CLAUDE_HOME="$home"
 VAULT_GIT_REPO="https://github.com/user/repo.git"
-run_as_claude() { echo "RAC \$1" >> "$log"; return 0; }
+run_as_claude() {
+  echo "RAC \$1" >> "$log"
+  case "\$1" in
+    *"remote get-url origin"*) echo "https://github.com/user/repo.git" ;;
+    *"git clone"*) mkdir -p "$home/vault-git/.claude" ;;
+  esac
+  return 0
+}
 setup_vault_git
 mkdir -p "$home/vault-git/.git"
 setup_vault_git
@@ -1294,30 +1329,96 @@ EOF
     && [[ "$(sed -n 1p "$log")" == *"git clone --filter=blob:none --sparse"* ]] \
     && [[ "$(sed -n 1p "$log")" == *"https://github.com/user/repo.git"* ]] \
     && [[ "$(sed -n 1p "$log")" == *"git sparse-checkout set .claude"* ]] \
-    && [[ "$(sed -n 2p "$log")" == *"git pull"* ]] \
-    && [[ "$(sed -n 2p "$log")" != *"git clone"* ]]; then
-    pass "setup_vault_git: brak repo → clone sparse .claude; istniejący .git → git pull"
+    && [[ "$(sed -n 2p "$log")" == *"remote get-url origin"* ]] \
+    && [[ "$(sed -n 3p "$log")" == *"git pull"* ]] \
+    && [[ "$(sed -n 3p "$log")" != *"git clone"* ]]; then
+    pass "setup_vault_git: brak repo → clone sparse .claude; .git + zgodny origin → git pull"
   else
     problem "setup_vault_git: zły guard clone/pull (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
   fi
   # Katalog bez .git = cudzy stan → kopia zapasowa, potem clone (wzorzec clone_repo).
   local log2="$SANDBOX/vg2.log" out2 rc2
-  rm -rf "$home/vault-git"
+  rm -rf "$home/vault-git" "$home"/vault-git.backup.*
   mkdir -p "$home/vault-git/costam"
   cat > "$snippet" <<EOF
 CLAUDE_HOME="$home"
 VAULT_GIT_REPO="https://github.com/user/repo.git"
-run_as_claude() { echo "RAC \$1" >> "$log2"; return 0; }
+run_as_claude() {
+  echo "RAC \$1" >> "$log2"
+  case "\$1" in *"git clone"*) mkdir -p "$home/vault-git/.claude" ;; esac
+  return 0
+}
 setup_vault_git
 EOF
   out2="$(run_snippet "$snippet")"
   rc2=$?
-  if [ "$rc2" -eq 0 ] && [ ! -d "$home/vault-git" ] \
-    && ls -d "$home"/vault-git.backup.* >/dev/null 2>&1 \
+  # Stary katalog (z 'costam') poszedł do backupu, a nowy vault-git to świeży
+  # clone atrapy — zawiera już tylko .claude.
+  if [ "$rc2" -eq 0 ] && [ ! -d "$home/vault-git/costam" ] \
+    && ls -d "$home"/vault-git.backup.*/costam >/dev/null 2>&1 \
+    && [ -d "$home/vault-git/.claude" ] \
     && grep -q "git clone" "$log2" 2>/dev/null; then
     pass "setup_vault_git: katalog bez .git → kopia zapasowa + clone"
   else
     problem "setup_vault_git: backup non-git zawiódł (rc=$rc2, log: $(cat "$log2" 2>/dev/null), output: $out2)"
+  fi
+}
+
+# --- Test 49b: setup_vault_git — post-condition: repo bez .claude → fail-fast (bez cichego sukcesu) ---
+test_setup_vault_git_postcondition() {
+  # Atrapa git NIE tworzy .claude (repo usera bez tego katalogu) —
+  # `git sparse-checkout set .claude` przechodzi mimo braku ścieżki w repo,
+  # więc bez post-condition instalator raportowałby sukces z wiszącym
+  # symlinkiem (skille nigdy nie docierają do vaulta).
+  local snippet="$SANDBOX/t-vg-post.sh" home="$SANDBOX/home-vg-post" out rc
+  mkdir -p "$home"
+  cat > "$snippet" <<EOF
+CLAUDE_HOME="$home"
+VAULT_GIT_REPO="https://github.com/user/repo.git"
+run_as_claude() { case "\$1" in *"git clone"*) mkdir -p "$home/vault-git" ;; esac; return 0; }
+setup_vault_git
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -ne 0 ] && [[ "$out" == *".claude"* ]] && [[ "$out" != *"NIEOSIAGALNE"* ]]; then
+    pass "setup_vault_git: clone bez .claude → fail-fast (post-condition), nie cichy sukces"
+  else
+    problem "setup_vault_git: brak fail-fast przy repo bez .claude (rc=$rc, output: $out)"
+  fi
+}
+
+# --- Test 49c: setup_vault_git — origin mismatch przy re-runie → backup + re-clone z NOWEGO repo ---
+test_setup_vault_git_origin_mismatch() {
+  # Istniejący vault-git wskazuje INNE repo niż aktualny VAULT_GIT_REPO
+  # (collect_config pyta o repo przy każdym runie) — pull ze starego origin
+  # ciągnąłby skille z niezweryfikowanego źródła. Oczekiwane: backup + clone.
+  local snippet="$SANDBOX/t-vg-origin.sh" log="$SANDBOX/vg-origin.log" home="$SANDBOX/home-vg-origin" out rc
+  mkdir -p "$home/vault-git/.git"
+  cat > "$snippet" <<EOF
+CLAUDE_HOME="$home"
+VAULT_GIT_REPO="https://github.com/user/NOWE-repo.git"
+run_as_claude() {
+  echo "RAC \$1" >> "$log"
+  case "\$1" in
+    *"remote get-url origin"*) echo "https://github.com/user/STARE-repo.git" ;;
+    *"git clone"*) mkdir -p "$home/vault-git/.claude" ;;
+  esac
+  return 0
+}
+setup_vault_git
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+    && ls -d "$home"/vault-git.backup.*/.git >/dev/null 2>&1 \
+    && grep -q "git clone" "$log" 2>/dev/null \
+    && grep -q "NOWE-repo.git" "$log" 2>/dev/null \
+    && [[ "$(cat "$log")" != *"git pull"* ]] \
+    && [[ "$out" == *"różni się"* ]]; then
+    pass "setup_vault_git: origin mismatch → warn + backup starego repo + clone z nowego (bez pull)"
+  else
+    problem "setup_vault_git: origin mismatch nieobsłużony (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
   fi
 }
 
@@ -1412,6 +1513,39 @@ EOF
   fi
 }
 
+# --- Test 51b: create_obsidian_sync_service — re-run RESTARTUJE serwis (nowy sync-config/unit wchodzi w życie) ---
+test_obsidian_sync_service_restart_on_rerun() {
+  # `systemctl enable --now` NIE restartuje działającego serwisu — przy
+  # re-runie nowy sync-config (czytany przy starcie procesu sync) i nadpisany
+  # unit nie weszłyby w życie mimo raportu OK. Rejestrator systemctl asertuje
+  # restart po zapisie unitu (symetria z unitem Pulsa).
+  local snippet="$SANDBOX/t-ob-restart.sh" log="$SANDBOX/ob-restart.log" sysd="$SANDBOX/systemd-restart" bin="$SANDBOX/stub-bin-restart" out rc
+  mkdir -p "$sysd" "$bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/ob"
+  chmod +x "$bin/ob"
+  cat > "$snippet" <<EOF
+export PATH="$bin:\$PATH"
+SYSTEMD_DIR="$sysd"
+CLAUDE_HOME="/home/claude"
+systemctl() { echo "SYSTEMCTL \$*" >> "$log"; }
+create_obsidian_sync_service
+echo "---RERUN---" >> "$log"
+create_obsidian_sync_service
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  local rerun_log
+  rerun_log="$(sed -n '/---RERUN---/,$p' "$log" 2>/dev/null)"
+  if [ "$rc" -eq 0 ] \
+    && grep -q "SYSTEMCTL enable obsidian-sync" <<<"$rerun_log" \
+    && grep -q "SYSTEMCTL restart obsidian-sync" <<<"$rerun_log" \
+    && grep -q "SYSTEMCTL daemon-reload" <<<"$rerun_log"; then
+    pass "create_obsidian_sync_service: re-run → daemon-reload + enable + restart (unit/config wchodzą w życie)"
+  else
+    problem "create_obsidian_sync_service: re-run bez restartu serwisu (rc=$rc, log: $(cat "$log" 2>/dev/null))"
+  fi
+}
+
 echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje), fazy 4 (blok 5 loginów) i fazy 5 (Obsidian + unity systemd) =="
 test_syntax
 test_flags_port
@@ -1461,9 +1595,13 @@ test_build_puls_env_lines
 test_build_obsidian_sync_unit
 test_configure_obsidian_file_types
 test_link_vault_claude_idempotent
+test_link_vault_claude_foreign_dir_backup
 test_setup_vault_git_guard
+test_setup_vault_git_postcondition
+test_setup_vault_git_origin_mismatch
 test_main_obsidian_order_and_skip
 test_unit_rollback_only_when_created
+test_obsidian_sync_service_restart_on_rerun
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

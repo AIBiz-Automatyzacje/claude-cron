@@ -906,21 +906,43 @@ configure_obsidian_file_types() {
 # gh z login_gh — czysty URL bez tokenu (R5). `--sparse` + `sparse-checkout set`
 # zamiast `--no-checkout` + jawnego `git checkout <branch>`: checkout dzieje
 # się sam na domyślnym branchu repo usera (main/master — nie zgadujemy nazwy).
-# Guard .git → git pull (kontrakt re-run: nigdy re-clone istniejącego repo).
+# Guard .git → git pull (kontrakt re-run: nigdy re-clone istniejącego repo,
+# CHYBA że origin nie zgadza się z VAULT_GIT_REPO — collect_config pyta o repo
+# przy każdym pełnym runie, więc pull ze STAREGO origin ciągnąłby skille
+# (wykonywane z --dangerously-skip-permissions) z innego źródła niż operator
+# skonfigurował; mismatch → backup + świeży clone).
+clone_vault_git_sparse() {
+  local vault_git="$1"
+  info "Pobieram katalog .claude (sparse checkout z $VAULT_GIT_REPO)..."
+  run_as_claude "git clone --filter=blob:none --sparse $(printf '%q' "$VAULT_GIT_REPO") $(printf '%q' "$vault_git") && cd $(printf '%q' "$vault_git") && git sparse-checkout set .claude"
+}
+
 setup_vault_git() {
-  local vault_git="$CLAUDE_HOME/vault-git"
+  local vault_git="$CLAUDE_HOME/vault-git" origin_url
   echo ""
   if [ -d "$vault_git/.git" ]; then
-    info "Aktualizuję repo .claude (git pull)..."
-    run_as_claude "cd $(printf '%q' "$vault_git") && git pull --ff-only"
+    origin_url="$(run_as_claude "git -C $(printf '%q' "$vault_git") remote get-url origin" 2>/dev/null || true)"
+    if [ "$origin_url" = "$VAULT_GIT_REPO" ]; then
+      info "Aktualizuję repo .claude (git pull)..."
+      run_as_claude "cd $(printf '%q' "$vault_git") && git pull --ff-only"
+    else
+      warn "Origin $vault_git (${origin_url:-brak}) różni się od skonfigurowanego repo ($VAULT_GIT_REPO) — kopia zapasowa i ponowny clone..."
+      mv "$vault_git" "${vault_git}.backup.$(date +%s)"
+      clone_vault_git_sparse "$vault_git"
+    fi
   else
     if [ -d "$vault_git" ]; then
       warn "$vault_git istnieje bez gita — tworzę kopię zapasową..."
       mv "$vault_git" "${vault_git}.backup.$(date +%s)"
     fi
-    info "Pobieram katalog .claude (sparse checkout z $VAULT_GIT_REPO)..."
-    run_as_claude "git clone --filter=blob:none --sparse $(printf '%q' "$VAULT_GIT_REPO") $(printf '%q' "$vault_git") && cd $(printf '%q' "$vault_git") && git sparse-checkout set .claude"
+    clone_vault_git_sparse "$vault_git"
   fi
+  # Post-condition (fail-fast): `git sparse-checkout set .claude` przechodzi
+  # nawet gdy repo NIE zawiera .claude (git nie waliduje ścieżki) — bez tego
+  # guardu link_vault_claude tworzyłby WISZĄCY symlink i skille nigdy nie
+  # trafiłyby do vaulta (cichy ubytek), mimo raportu sukcesu.
+  [ -d "$vault_git/.claude" ] \
+    || fail "Repo $VAULT_GIT_REPO nie zawiera katalogu .claude (sparse checkout nie zmaterializował $vault_git/.claude). Dodaj katalog .claude do repo vaulta i wklej ponownie komendę instalacji."
   ok "Repo .claude: $vault_git"
 }
 
@@ -928,8 +950,16 @@ setup_vault_git() {
 # cel to symlink NA KATALOG — bez -n drugi run tworzyłby link WEWNĄTRZ
 # katalogu docelowego zamiast podmienić sam symlink (idempotencja re-run).
 link_vault_claude() {
-  run_as_claude "ln -sfn $(printf '%q' "$CLAUDE_HOME/vault-git/.claude") $(printf '%q' "$CLAUDE_HOME/vault/.claude")"
-  ok "Symlink .claude podpięty: $CLAUDE_HOME/vault/.claude"
+  local vault_claude="$CLAUDE_HOME/vault/.claude"
+  # Cudzy stan: REALNY katalog .claude (stary obsidian-vps-installer / ręczna
+  # instalacja wg MIGRACJA-PULS) wywala ln -sfn ("cannot overwrite directory")
+  # → trap ERR → rollback całego runu. Wzorzec backup-mv jak w setup_vault_git.
+  if [ -d "$vault_claude" ] && [ ! -L "$vault_claude" ]; then
+    warn "$vault_claude istnieje jako katalog — tworzę kopię zapasową..."
+    mv "$vault_claude" "${vault_claude}.backup.$(date +%s)"
+  fi
+  run_as_claude "ln -sfn $(printf '%q' "$CLAUDE_HOME/vault-git/.claude") $(printf '%q' "$vault_claude")"
+  ok "Symlink .claude podpięty: $vault_claude"
 }
 
 # build_obsidian_sync_unit <ścieżka ob> <ścieżka vaulta> — czysta funkcja
@@ -971,7 +1001,11 @@ create_obsidian_sync_service() {
     push_rollback "systemctl disable --now $OB_SYNC_SERVICE 2>/dev/null || true; rm -f '$unit_file'; systemctl daemon-reload"
   fi
   systemctl daemon-reload
-  systemctl enable --now "$OB_SYNC_SERVICE"
+  # enable + restart zamiast `enable --now`: --now NIE restartuje działającego
+  # serwisu, więc przy re-runie nowy sync-config (czytany przy starcie procesu
+  # sync) i nadpisany unit nie weszłyby w życie. Symetria z unitem Pulsa.
+  systemctl enable "$OB_SYNC_SERVICE"
+  systemctl restart "$OB_SYNC_SERVICE"
   ok "Serwis $OB_SYNC_SERVICE uruchomiony"
 }
 
