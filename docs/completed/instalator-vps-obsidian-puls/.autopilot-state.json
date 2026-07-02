@@ -1,0 +1,67 @@
+{
+  "wersja": 1,
+  "zadanie": "instalator-vps-obsidian-puls",
+  "fazy": [
+    {
+      "numer": 1,
+      "nazwa": "Szkielet komponentowy (IU1)",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 2,
+      "nazwa": "Preflight + detekcja stanu + blok 4 pytań (IU2)",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 3,
+      "nazwa": "Narzędzia — Faza 2 spec-u (IU3)",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 4,
+      "nazwa": "Blok 5 loginów (IU4)",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 5,
+      "nazwa": "Obsidian + Puls — Faza 4 spec-u (IU5)",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 6,
+      "nazwa": "Sieć + finał — Fazy 5-6 spec-u (IU6)",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 7,
+      "nazwa": "--reset + README (IU7)",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    }
+  ],
+  "zakonczenie": {
+    "walidacja": "done",
+    "complete": "done",
+    "compound": "done"
+  }
+}

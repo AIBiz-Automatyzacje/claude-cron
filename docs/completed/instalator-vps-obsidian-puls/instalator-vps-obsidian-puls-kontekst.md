@@ -168,3 +168,12 @@ Kluczowe wnioski:
 - **Test „kształtu" wygenerowanego skryptu ≠ test zachowania**: `cron-node-guard.sh` asertowany tylko grepem treści — brzegi 22.12/22.13/25.0 wymagają URUCHOMIENIA skryptu ze stubem `node` w PATH (P2-2); analogicznie idempotencja `install_update_cron` (re-run, cudze wpisy, rollback tylko własnego stanu) bez testu (P2-3).
 - **Heurystyki na odroczonych formatach wyjść (ob sync-status, tailscale funnel status) = obowiązkowy punkt Operator checklist**: substring-match `complete`/`synced` łapie też „incomplete"/„not synced" (fałszywy pozytyw bramki R11) — word boundary + testy adversarialne, a realny format potwierdza operator na żywym VPS (OP-1/OP-2/OP-3).
 - Konwencja na Unit 7: dedup/rollback crontaba po unikalnym markerze linii, nie substringu `$SERVICE_NAME` (blast radius na cudze wpisy roota); walidacja user-inputu na granicy (`WEBHOOK_BASE_URL` przez wzorzec `ask_valid`).
+
+## Review fazy 7 (2026-07-02)
+
+Raport: `docs/active/instalator-vps-obsidian-puls/review-faza-7.md`. Gate: ⚠️ ZASTRZEŻENIA — 0 × P1, 1 × P2 (KOD), 11 × P3 (8 KOD + 3 TEST), 1 × OPERATOR (scalone z 4 zgłoszeń). Wszystkie trzy automatyzowalne checkboxy `Weryfikacja:` fazy 7 przeszły (harness 89/89 PASS w tym testy resetu 62–65; grep guardów `rm -rf` → `${…:?}` w `remove_reset_path`; grep nagłówków README). Checkbox [Manual] pełny cykl VPS przeniesiony do „Operator checklist faza 7".
+
+Kluczowe wnioski:
+- **Lista „NIE zostanie usunięte" musi obejmować KAŻDY artefakt postawiony przez instalator, nie tylko zasoby współdzielone**: reset pomija Tailscale Funnel (persystentny publiczny endpoint HTTPS na port 7777 zostaje po deinstalacji — P2-1) i globalny pakiet npm `obsidian-headless` (P3) — oba to artefakty Pulsa, żaden nie figuruje na listach print_reset_plan/print_reset_summary wymaganych przez spec R12.
+- **Komunikaty ręczne z parametrami bieżącego runu ≠ parametry instalacji**: instrukcja `ufw delete deny $PORT/tcp` bierze PORT z flagi resetu (default 7777), a realny port instalacji jest w `Environment=CLAUDE_CRON_PORT` unit-pliku — czytać stan z artefaktów, nie z flag.
+- **Zachowania chroniące (anulowanie resetu bez tty) wymagają dedykowanej asercji**: `confirm_reset` przez `ask_tty` z defaultem `""` poprawnie anuluje przy braku terminala, ale żaden test tego nie przybija — regresja defaultu skasowałaby `/home/claude` z pipe'a bezobsługowo.

@@ -19,7 +19,7 @@ node --test setup.test.mjs         # testy setupu (ESM)
 
 Nie ma buildu, bundlera, lintera ani typecheckera. Backend to czysty CommonJS, frontend to vanilla JS ładowany bezpośrednio przez `<script>` (patrz `public/index.html`). Testy używają wyłącznie wbudowanego `node:test` + `node:assert`.
 
-Instalatory (odpalane przez usera, nie w dev-loopie): `install.sh` (macOS), `install.ps1` (Windows), `scripts/install-vps.sh` (Linux/VPS). Ich testy: `install.test.sh`, `install.ps1.Tests.ps1` (Pester), `setup.test.mjs`.
+Instalatory (odpalane przez usera, nie w dev-loopie): `install.sh` (macOS), `install.ps1` (Windows), `scripts/install-vps.sh` (Linux/VPS — komponentowy, Obsidian+Puls+Tailscale, flagi `--only-puls`/`--reset`, guard lib-only `CLAUDE_CRON_LIB_ONLY`). Ich testy: `install.test.sh`, `install.ps1.Tests.ps1` (Pester), `scripts/install-vps.test.sh`, `setup.test.mjs`.
 
 ## Runtime — twarde wymaganie Node
 
