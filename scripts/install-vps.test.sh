@@ -1850,6 +1850,143 @@ test_main_final_phase_order() {
   fi
 }
 
+# --- Test 59: cron-node-guard.sh — WYKONANIE wygenerowanego skryptu z atrapą node (granice wersji) ---
+test_cron_node_guard_behavior() {
+  local snippet="$SANDBOX/t-guard-gen.sh" guard="$SANDBOX/guard-inst/cron-node-guard.sh" \
+    glog="$SANDBOX/guard.log" shim="$SANDBOX/guard-shim"
+  mkdir -p "$SANDBOX/guard-inst" "$shim"
+  cat > "$snippet" <<EOF
+chown() { :; }
+write_cron_node_guard "$guard" "$glog"
+EOF
+  run_snippet "$snippet" > /dev/null
+  if [ ! -x "$guard" ]; then
+    problem "cron-node-guard: skrypt nie został wygenerowany ($guard)"
+    return
+  fi
+  # PATH-shim z atrapą node — guard uruchamiany NAPRAWDĘ, nie grep treści:
+  # test zachowania łapie np. odwrócony -ge/-gt. Pusta wersja = atrapa
+  # padniętego node (brak node i puste `node -v` dają ten sam RAW="").
+  run_guard_with_node() {
+    if [ -n "$1" ]; then
+      printf '#!/bin/sh\necho %s\n' "$1" > "$shim/node"
+    else
+      printf '#!/bin/sh\nexit 127\n' > "$shim/node"
+    fi
+    chmod +x "$shim/node"
+    PATH="$shim:$PATH" bash "$guard" >/dev/null 2>&1
+  }
+  local r2212 r2213 r24 r25 rnone
+  run_guard_with_node v22.12.0; r2212=$?
+  run_guard_with_node v22.13.0; r2213=$?
+  run_guard_with_node v24.4.1;  r24=$?
+  run_guard_with_node v25.0.0;  r25=$?
+  run_guard_with_node "";       rnone=$?
+  if [ "$r2212" -eq 1 ] && [ "$r2213" -eq 0 ] && [ "$r24" -eq 0 ] \
+    && [ "$r25" -eq 1 ] && [ "$rnone" -eq 1 ]; then
+    pass "cron-node-guard: 22.12→1, 22.13→0, 24.x→0, 25.0→1 (granica wykluczająca), brak node→1"
+  else
+    problem "cron-node-guard: złe granice wersji (22.12=$r2212 22.13=$r2213 24.x=$r24 25.0=$r25 brak=$rnone)"
+  fi
+  # Wstrzymany restart MUSI zostawić ślad diagnostyczny w cron-logu.
+  if grep -q "WSTRZYMANY" "$glog" 2>/dev/null; then
+    pass "cron-node-guard: wstrzymanie restartu logowane do cron-loga"
+  else
+    problem "cron-node-guard: brak wpisu WSTRZYMANY w cron-logu ($glog)"
+  fi
+}
+
+# --- Test 60: install_update_cron — idempotencja re-run + kontrakt „nigdy cudzego stanu" ---
+test_install_update_cron_idempotent() {
+  local snippet="$SANDBOX/t-cron-rerun.sh" cronfile="$SANDBOX/rerun-cronfile" \
+    install="$SANDBOX/rerun-install" home="$SANDBOX/rerun-home" out rc out2 rc2
+  mkdir -p "$install/scripts" "$home"
+  local foreign='0 3 * * * tar czf /backup/notes.tgz /home/claude/notes'
+  printf '%s\n' "$foreign" > "$cronfile"
+  cat > "$snippet" <<EOF
+INSTALL_DIR="$install"
+CLAUDE_HOME="$home"
+FLAG_ONLY_PULS=0
+CRONFILE="$cronfile"
+crontab() {
+  case "\$1" in
+    -l) if [ -f "\$CRONFILE" ]; then cat "\$CRONFILE"; else return 1; fi ;;
+    -)  cat > "\$CRONFILE" ;;
+  esac
+}
+install_update_cron "$install/scripts/cron-node-guard.sh" "$home/claude-cron-update.log"
+install_update_cron "$install/scripts/cron-node-guard.sh" "$home/claude-cron-update.log"
+echo "STACK=[\${ROLLBACK_STACK[*]-}]"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  local puls_lines rollback_count
+  puls_lines="$(grep -c 'claude-cron' "$cronfile" 2>/dev/null)"
+  rollback_count="$(grep -o "grep -v 'claude-cron'" <<<"$out" | grep -c . || true)"
+  if [ "$rc" -eq 0 ] && [ "$puls_lines" = "1" ] \
+    && grep -qF "$foreign" "$cronfile" \
+    && [ "$rollback_count" = "1" ]; then
+    pass "install_update_cron: re-run → dokładnie 1 linia Pulsa, cudzy wpis zachowany, rollback zarejestrowany raz"
+  else
+    problem "install_update_cron: idempotencja re-run zawiodła (rc=$rc, puls_lines=$puls_lines, rollback=$rollback_count, cron: $(cat "$cronfile" 2>/dev/null), out: $out)"
+  fi
+  # Wpis Pulsa SPRZED runa = cudzy stan — rollback crontaba NIE może być
+  # rejestrowany (odwinięcie skasowałoby wpis nie z tego runu).
+  printf '%s\n%s\n' "$foreign" '0 2 * * * su - claude -c "stara-instalacja" && systemctl restart claude-cron' > "$cronfile"
+  cat > "$snippet" <<EOF
+INSTALL_DIR="$install"
+CLAUDE_HOME="$home"
+FLAG_ONLY_PULS=0
+CRONFILE="$cronfile"
+crontab() {
+  case "\$1" in
+    -l) if [ -f "\$CRONFILE" ]; then cat "\$CRONFILE"; else return 1; fi ;;
+    -)  cat > "\$CRONFILE" ;;
+  esac
+}
+install_update_cron "$install/scripts/cron-node-guard.sh" "$home/claude-cron-update.log"
+echo "STACK=[\${ROLLBACK_STACK[*]-}]"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  puls_lines="$(grep -c 'claude-cron' "$cronfile" 2>/dev/null)"
+  if [ "$rc2" -eq 0 ] && [ "$puls_lines" = "1" ] \
+    && grep -qF "$foreign" "$cronfile" \
+    && ! grep -q 'stara-instalacja' "$cronfile" \
+    && [[ "$out2" == *"STACK=[]"* ]]; then
+    pass "install_update_cron: wpis sprzed runa → dedup do 1 linii, cudzy wpis nietknięty, rollback NIErejestrowany"
+  else
+    problem "install_update_cron: kontrakt cudzego stanu zawiódł (rc=$rc2, puls_lines=$puls_lines, cron: $(cat "$cronfile" 2>/dev/null), out: $out2)"
+  fi
+}
+
+# --- Test 61: set_service_webhook_env — pad restartu = warn, nie trap ERR (finał nie odwija rollbacku) ---
+test_set_service_webhook_env_restart_fail_warns() {
+  local snippet="$SANDBOX/t-webhook-warn.sh" sysd="$SANDBOX/systemd-webhook" out rc
+  mkdir -p "$sysd"
+  cat > "$sysd/claude-cron.service" <<'UNIT'
+[Service]
+StandardOutput=journal
+SyslogIdentifier=claude-cron
+UNIT
+  cat > "$snippet" <<EOF
+SYSTEMD_DIR="$sysd"
+WEBHOOK_BASE_URL="https://srv.ts.net"
+systemctl() { return 1; }
+set_service_webhook_env
+echo "PO_WEBHOOK"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"PO_WEBHOOK"* ]] && [[ "$out" == *"ręcznie"* ]] \
+    && grep -q '^Environment=WEBHOOK_BASE_URL=https://srv.ts.net$' "$sysd/claude-cron.service" \
+    && [ ! -f "$sysd/claude-cron.service.tmp" ]; then
+    pass "set_service_webhook_env: pad restartu → warn + rc 0 (bez ERR); unit zapisany atomowo (brak .tmp)"
+  else
+    problem "set_service_webhook_env: pad restartu wyzwala fail/rollback lub zły zapis (rc=$rc, unit: $(cat "$sysd/claude-cron.service" 2>/dev/null), out: $out)"
+  fi
+}
+
 echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje), fazy 4 (blok 5 loginów), fazy 5 (Obsidian + unity systemd) i fazy 6 (auto-update/weryfikacja/dowód/Funnel/podsumowanie) =="
 test_syntax
 test_flags_port
@@ -1913,6 +2050,9 @@ test_print_summary_funnel_variants
 test_setup_funnel
 test_verify_services_and_sync_wait
 test_main_final_phase_order
+test_cron_node_guard_behavior
+test_install_update_cron_idempotent
+test_set_service_webhook_env_restart_fail_warns
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

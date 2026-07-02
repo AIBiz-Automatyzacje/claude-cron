@@ -1327,9 +1327,16 @@ add_webhook_env_line() {
 set_service_webhook_env() {
   local service_file="$SYSTEMD_DIR/${SERVICE_NAME}.service" updated
   updated="$(add_webhook_env_line "$WEBHOOK_BASE_URL" < "$service_file")"
-  printf '%s\n' "$updated" > "$service_file"
-  systemctl daemon-reload
-  systemctl restart "$SERVICE_NAME"
+  # Zapis atomowy (temp+mv) — pad w połowie zapisu nie zostawia okaleczonego unitu.
+  printf '%s\n' "$updated" > "${service_file}.tmp"
+  mv "${service_file}.tmp" "$service_file"
+  # Warn-nie-fail (konwencja finału, jak verify_services/create_welcome_note):
+  # Funnel to opcjonalny krok NA SAMYM KOŃCU — pad restartu pod trap ERR
+  # odwinąłby rollback działającej, zweryfikowanej instalacji.
+  if ! systemctl daemon-reload || ! systemctl restart "$SERVICE_NAME"; then
+    warn "Restart serwisu z WEBHOOK_BASE_URL nie powiódł się — uruchom ręcznie: systemctl daemon-reload && systemctl restart $SERVICE_NAME (diagnoza: journalctl -u $SERVICE_NAME -n 30)"
+    return 0
+  fi
   sleep 1
   ok "WEBHOOK_BASE_URL ustawiony w serwisie systemd"
 }
