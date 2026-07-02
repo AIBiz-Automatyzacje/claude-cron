@@ -11,7 +11,9 @@
 # unit-plików utworzonych w tym runie (faza 5) oraz finał: CRON_CMD auto-update
 # (02:00, cytowanie %q, --only-puls bez vault-git, --no-auto-update bez crona),
 # weryfikacja serwisów + pętla pierwszego synca, plik-dowód Witaj-z-VPS.md,
-# Funnel opt-in (N → zero wywołań tailscale) i podsumowanie PL (faza 6).
+# Funnel opt-in (N → zero wywołań tailscale) i podsumowanie PL (faza 6) oraz
+# reset/deinstalacja: potwierdzenie dosłownym TAK, guardy ${…:?} listy ścieżek,
+# idempotencja na czystym systemie i kolejność serwisy→pliki→cron→userdel (faza 7).
 # Wzorzec z install.test.sh: lib-only source + sandbox mktemp + pass/problem.
 #
 # Każdy scenariusz działa w ŚWIEŻYM subshellu (bash -c + source lib-only):
@@ -1987,7 +1989,168 @@ EOF
   fi
 }
 
-echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje), fazy 4 (blok 5 loginów), fazy 5 (Obsidian + unity systemd) i fazy 6 (auto-update/weryfikacja/dowód/Funnel/podsumowanie) =="
+# --- Test 62: run_reset — odpowiedź ≠ TAK → exit 0 bez ŻADNEGO usunięcia (rejestrator) ---
+test_reset_requires_tak() {
+  local snippet="$SANDBOX/t-reset-notak.sh" sysd="$SANDBOX/reset-sysd-a" \
+    log="$SANDBOX/reset-log-a" tty="$SANDBOX/reset-tty-a" out rc
+  mkdir -p "$sysd"
+  touch "$sysd/obsidian-sync.service" "$sysd/claude-cron.service"
+  # Odpowiedź inna niż dosłowne TAK (w tym "tak" małymi) NIE może potwierdzić.
+  printf 'tak\n' > "$tty"
+  cat > "$snippet" <<EOF
+parse_flags --reset
+TTY_DEVICE="$tty"
+SYSTEMD_DIR="$sysd"
+SUDOERS_DIR="$sysd"
+check_root() { :; }
+systemctl() { echo "systemctl \$*" >> "$log"; }
+userdel() { echo "userdel \$*" >> "$log"; }
+crontab() { echo "crontab \$*" >> "$log"; }
+run_reset
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"anulowany"* ]] && [[ "$out" != *"NIEOSIAGALNE"* ]] \
+    && [ ! -s "$log" ] \
+    && [ -f "$sysd/obsidian-sync.service" ] && [ -f "$sysd/claude-cron.service" ]; then
+    pass "run_reset: odpowiedź ≠ TAK → exit 0, zero wywołań systemctl/userdel/crontab, pliki nietknięte"
+  else
+    problem "run_reset: brak TAK NIE zatrzymał usuwania (rc=$rc, log: $(cat "$log" 2>/dev/null), out: $out)"
+  fi
+}
+
+# --- Test 63: build_reset_paths bez pustych/względnych ścieżek; remove_reset_path — guard \${…:?} ---
+test_reset_paths_guards() {
+  local snippet="$SANDBOX/t-reset-paths.sh" out rc
+  cat > "$snippet" <<'EOF'
+build_reset_paths
+printf 'N=%s\n' "${#RESET_PATHS[@]}"
+for p in "${RESET_PATHS[@]}"; do
+  [ -n "$p" ] || { echo "PUSTA_SCIEZKA"; exit 1; }
+  case "$p" in /*) ;; *) echo "WZGLEDNA_SCIEZKA=$p"; exit 1 ;; esac
+  printf 'P=%s\n' "$p"
+done
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"N=3"* ]] \
+    && [[ "$out" == *"P=/etc/systemd/system/obsidian-sync.service"* ]] \
+    && [[ "$out" == *"P=/etc/systemd/system/claude-cron.service"* ]] \
+    && [[ "$out" == *"P=/etc/sudoers.d/claude-cron"* ]]; then
+    pass "build_reset_paths: 3 ścieżki, wszystkie niepuste i absolutne (unit-pliki + sudoers)"
+  else
+    problem "build_reset_paths: lista z pustą/względną ścieżką lub złym składem (rc=$rc, out: $out)"
+  fi
+
+  # Guard ${…:?}: pusta ścieżka → twardy fail PRZED rm; ofiara-plik przeżywa.
+  local victim="$SANDBOX/reset-victim"
+  touch "$victim"
+  cat > "$snippet" <<'EOF'
+remove_reset_path ""
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -ne 0 ] && [[ "$out" != *"NIEOSIAGALNE"* ]] && [ -f "$victim" ]; then
+    pass "remove_reset_path: pusta ścieżka → fail bez wykonania rm"
+  else
+    problem "remove_reset_path: pusta ścieżka NIE sfailowała (rc=$rc, out: $out)"
+  fi
+
+  # Happy path + no-op: istniejący plik usunięty, nieistniejący → rc 0 (idempotencja).
+  cat > "$snippet" <<EOF
+remove_reset_path "$victim"
+remove_reset_path "$SANDBOX/reset-nie-istnieje"
+echo "PO_REMOVE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"PO_REMOVE"* ]] && [ ! -e "$victim" ]; then
+    pass "remove_reset_path: usuwa istniejący plik, nieistniejący = no-op bez błędu"
+  else
+    problem "remove_reset_path: happy path / no-op zawiódł (rc=$rc, out: $out)"
+  fi
+}
+
+# --- Test 64: run_reset na czystym systemie (brak artefaktów) → przechodzi bez błędów ---
+test_reset_idempotent_on_clean_system() {
+  local snippet="$SANDBOX/t-reset-clean.sh" sysd="$SANDBOX/reset-sysd-b" \
+    sud="$SANDBOX/reset-sud-b" log="$SANDBOX/reset-log-b" tty="$SANDBOX/reset-tty-b" out rc
+  mkdir -p "$sysd" "$sud"
+  printf 'TAK\n' > "$tty"
+  cat > "$snippet" <<EOF
+parse_flags --reset
+TTY_DEVICE="$tty"
+SYSTEMD_DIR="$sysd"
+SUDOERS_DIR="$sud"
+check_root() { :; }
+has_user_claude() { return 1; }
+systemctl() { echo "systemctl \$*" >> "$log"; }
+userdel() { echo "userdel \$*" >> "$log"; }
+crontab() { return 1; }
+run_reset
+echo "PO_RESECIE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"PO_RESECIE"* ]] && [[ "$out" == *"zakończona"* ]] \
+    && ! grep -q 'userdel' "$log" 2>/dev/null \
+    && ! grep -q 'disable' "$log" 2>/dev/null; then
+    pass "run_reset: czysty system (brak artefaktów) → rc 0, bez userdel/disable (idempotentny)"
+  else
+    problem "run_reset: czysty system zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), out: $out)"
+  fi
+}
+
+# --- Test 65: run_reset z artefaktami — kolejność (serwisy → pliki → cron → userdel) + skutki ---
+test_reset_full_flow_order() {
+  local snippet="$SANDBOX/t-reset-full.sh" sysd="$SANDBOX/reset-sysd-c" \
+    sud="$SANDBOX/reset-sud-c" log="$SANDBOX/reset-log-c" tty="$SANDBOX/reset-tty-c" \
+    cronfile="$SANDBOX/reset-cron-c" out rc
+  mkdir -p "$sysd" "$sud"
+  touch "$sysd/obsidian-sync.service" "$sysd/claude-cron.service" "$sud/claude-cron"
+  local foreign='0 4 * * * /usr/local/bin/certbot renew'
+  printf '%s\n%s\n' "$foreign" \
+    '0 2 * * * su - claude -c "update" && systemctl restart claude-cron' > "$cronfile"
+  printf 'TAK\n' > "$tty"
+  cat > "$snippet" <<EOF
+parse_flags --reset
+TTY_DEVICE="$tty"
+SYSTEMD_DIR="$sysd"
+SUDOERS_DIR="$sud"
+CRONFILE="$cronfile"
+check_root() { :; }
+has_user_claude() { return 0; }
+systemctl() { echo "systemctl \$*" >> "$log"; }
+userdel() { echo "userdel \$*" >> "$log"; }
+crontab() {
+  case "\$1" in
+    -l) cat "\$CRONFILE" ;;
+    -)  cat > "\$CRONFILE" ;;
+  esac
+}
+run_reset
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  local first_line last_line
+  first_line="$(head -1 "$log" 2>/dev/null)"
+  last_line="$(tail -1 "$log" 2>/dev/null)"
+  if [ "$rc" -eq 0 ] \
+    && [[ "$first_line" == *"disable --now obsidian-sync"* ]] \
+    && grep -q 'disable --now claude-cron' "$log" \
+    && [[ "$last_line" == *"userdel -r claude"* ]] \
+    && [ ! -f "$sysd/obsidian-sync.service" ] && [ ! -f "$sysd/claude-cron.service" ] \
+    && [ ! -f "$sud/claude-cron" ] \
+    && grep -qF "$foreign" "$cronfile" && ! grep -q 'claude-cron' "$cronfile"; then
+    pass "run_reset: serwisy stop→pliki→cron→userdel; unit-pliki+sudoers usunięte, cudzy cron zachowany"
+  else
+    problem "run_reset: pełny przebieg zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), cron: $(cat "$cronfile" 2>/dev/null), out: $out)"
+  fi
+}
+
+echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje), fazy 4 (blok 5 loginów), fazy 5 (Obsidian + unity systemd), fazy 6 (auto-update/weryfikacja/dowód/Funnel/podsumowanie) i fazy 7 (reset: potwierdzenie TAK, guardy ścieżek, idempotencja) =="
 test_syntax
 test_flags_port
 test_flags_unknown
@@ -2053,6 +2216,10 @@ test_main_final_phase_order
 test_cron_node_guard_behavior
 test_install_update_cron_idempotent
 test_set_service_webhook_env_restart_fail_warns
+test_reset_requires_tak
+test_reset_paths_guards
+test_reset_idempotent_on_clean_system
+test_reset_full_flow_order
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

@@ -358,7 +358,7 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 
 ---
 
-- [ ] **Unit 7: Tryb `--reset` + README/runbook one-linera**
+- [x] **Unit 7: Tryb `--reset` + README/runbook one-linera**
 
 **Cel:** Brakujący VPS-uninstall (z potwierdzeniem) + dokumentacja komendy instalacji dla kursanta i testera.
 
@@ -376,7 +376,7 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 **Skills in play:** —
 
 **Podejście:**
-- `--reset`: wypisz DOKŁADNĄ listę do usunięcia → `ask_tty` potwierdzenie (wpisz `TAK`, nie samo Enter) → kolejność: stop/disable obu serwisów → unit-pliki → cron root (dedup-filter jak dziś) → `/etc/sudoers.d/claude-cron` → `userdel -r claude` (kasuje vault lokalny, vault-git, auth Claude/gh/ob — dane Sync bezpieczne na serwerze Obsidian; zaznacz w komunikacie). KAŻDY `rm -rf` z guardem `${var:?}` i `[ -e ]`.
+- `--reset`: wypisz DOKŁADNĄ listę do usunięcia → `ask_tty` potwierdzenie (wpisz `TAK`, nie samo Enter) → kolejność: stop/disable obu serwisów → unit-pliki → cron root (dedup-filter jak dziś) → `/etc/sudoers.d/claude-cron` → `userdel -r claude` (kasuje vault lokalny, vault-git, auth Claude/gh/ob — dane Sync bezpieczne na serwerze Obsidian; zaznacz w komunikacie). KAŻDY `rm -rf` z guardem `${var:?}` i `[ -e ]`. *(Zrealizowane z jednym odchyleniem: sudoers usuwany razem z unit-plikami PRZED cronem — wspólna tablica `build_reset_paths` jako jedno źródło prawdy dla `print_reset_plan` i `run_reset` eliminuje rozjazd wypisane-vs-usunięte; brak zależności funkcjonalnej od kolejności cron↔sudoers. Tablica `RESET_PATHS` zamiast stdout+`while read` — grep-strażnik harnessu zakazuje `read` poza `ask_tty`. Guardy `rm -rf` scentralizowane w `remove_reset_path`: `${1:?}` + `[ -e ]`/`[ -L ]`.)*
 - Świadome NIE-usuwanie: Tailscale (urządzenie zostaje w tailnecie — wypisz instrukcję `tailscale logout` + usunięcie z admin console), UFW (reguły zostają — wypisz `ufw delete deny <PORT>`), Node/gh/pakiety apt (współdzielone z systemem).
 - README: blok „Instalacja na VPS" — prerequisites (checklist ze spec-u), one-liner, wariant `wget -qO-`, przykład flag `curl … | sudo bash -s -- --only-puls`, `--reset`, env-override do testów z brancha.
 
@@ -385,15 +385,15 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 - `install-vps.sh` L524–529 (dedup crona — odwrócić do usunięcia)
 
 **Scenariusze testowe:**
-- [Unit] `--reset` bez potwierdzenia `TAK` → exit bez żadnego usunięcia (rejestrator wywołań)
-- [Unit] lista usuwanych ścieżek: każda przechodzi walidację guardu `${var:?}` (test funkcji budującej listę — brak pustych zmiennych)
-- [Unit] `--reset` przy nieistniejących artefaktach (świeży system) → przechodzi bez błędów (idempotentny)
-- [Manual] pełny cykl na VPS: install → `--reset` → re-install działa od zera
+- [x] [Unit] `--reset` bez potwierdzenia `TAK` → exit bez żadnego usunięcia (rejestrator wywołań)
+- [x] [Unit] lista usuwanych ścieżek: każda przechodzi walidację guardu `${var:?}` (test funkcji budującej listę — brak pustych zmiennych; `build_reset_paths`: 3 ścieżki niepuste i absolutne + testy `remove_reset_path` na pustej ścieżce)
+- [x] [Unit] `--reset` przy nieistniejących artefaktach (świeży system) → przechodzi bez błędów (idempotentny)
+- [ ] [Manual] pełny cykl na VPS: install → `--reset` → re-install działa od zera
 
 **Weryfikacja:**
-- `bash scripts/install-vps.test.sh` — asercje resetu PASS
-- `grep -n 'rm -rf' scripts/install-vps.sh` — każda linia zawiera `${…:?}` lub poprzedzający guard `[ -e/-d ]` (kontrola wzrokowa w review + grep count)
-- README zawiera sekcje: one-liner, prerequisites, flagi (grep nagłówków)
+- [x] `bash scripts/install-vps.test.sh` — asercje resetu PASS (89/89)
+- [x] `grep -n 'rm -rf' scripts/install-vps.sh` — każda linia zawiera `${…:?}` lub poprzedzający guard `[ -e/-d ]` (jedyny wykonywany `rm -rf` w `remove_reset_path` L1684 z `${path:?}` za guardem `[ -e ]||[ -L ]`; L990 to `ExecStartPre` w heredocu unitu systemd — kontekst systemd, nie shell instalatora)
+- [x] README zawiera sekcje: one-liner, prerequisites, flagi (grep nagłówków: 1.1 Prerequisites, 1.3 one-liner, 1.4 Flagi, 1.5 Reset, 1.6 env-override)
 
 ## Wpływ systemowy
 

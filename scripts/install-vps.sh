@@ -1656,11 +1656,196 @@ print_summary() {
   echo ""
 }
 
+# ============ FAZA 7: RESET (deinstalacja, --reset) ============
+
+# build_reset_paths — wypełnia tablicę RESET_PATHS plikami-artefaktami
+# instalacji do usunięcia. Tablica zamiast stdout+read: grep-strażnik
+# harnessu zakazuje `read` poza ask_tty. Osobna funkcja (nie inline
+# w run_reset), żeby test mógł zwalidować listę BEZ wykonywania rm —
+# każda ścieżka musi być niepusta i absolutna, zanim remove_reset_path
+# dostanie ją do rm -rf.
+RESET_PATHS=()
+build_reset_paths() {
+  RESET_PATHS=(
+    "$SYSTEMD_DIR/${OB_SYNC_SERVICE}.service"
+    "$SYSTEMD_DIR/${SERVICE_NAME}.service"
+    "$SUDOERS_DIR/$SERVICE_NAME"
+  )
+}
+
+# remove_reset_path <ścieżka> — usunięcie artefaktu resetu. Guard ${…:?}
+# (pusta wartość = twardy fail PRZED rm, nie rm -rf na przypadkowej ścieżce)
+# + guard istnienia (nieistniejący artefakt = no-op, reset na czystym
+# systemie przechodzi bez błędów). -L łapie wiszący symlink ([ -e ] podąża
+# za linkiem i dla wiszącego zwraca false).
+remove_reset_path() {
+  local path="${1:?remove_reset_path: pusta ścieżka — odmawiam rm -rf}"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    rm -rf "${path:?}"
+    ok "Usunięto: $path"
+  else
+    info "Brak $path — pomijam."
+  fi
+}
+
+# DOKŁADNA lista do usunięcia (spec R12) — kursant widzi każdy artefakt
+# PRZED potwierdzeniem, plus jawną listę tego, czego reset świadomie
+# NIE usuwa (Tailscale/UFW/pakiety współdzielone z systemem).
+print_reset_plan() {
+  echo ""
+  echo -e "${YELLOW}${BOLD}RESET — deinstalacja Pulsa i Obsidian Sync z tego VPS${NC}"
+  echo "─────────────────────────────────────"
+  echo "Zostanie usunięte:"
+  echo "  • serwis $OB_SYNC_SERVICE (stop + disable)"
+  echo "  • serwis $SERVICE_NAME (stop + disable)"
+  local reset_path
+  build_reset_paths
+  for reset_path in "${RESET_PATHS[@]}"; do
+    echo "  • plik $reset_path"
+  done
+  echo "  • wpis auto-update w crontabie roota (linie z '$SERVICE_NAME')"
+  echo "  • użytkownik '$CLAUDE_USER' wraz z całym $CLAUDE_HOME"
+  echo "    (vault lokalny, vault-git, baza data/, loginy Claude/gh/ob)"
+  echo ""
+  echo -e "  ${GREEN}Dane vaulta są BEZPIECZNE na serwerze Obsidian Sync${NC} — VPS trzymał"
+  echo "  tylko lokalną kopię; komputer i telefon nadal mają wszystko."
+  echo ""
+  echo "NIE zostanie usunięte (współdzielone z systemem):"
+  echo "  • Tailscale — urządzenie zostaje w tailnecie; odłącz je ręcznie:"
+  echo "      tailscale logout"
+  echo "    i usuń maszynę w panelu: https://login.tailscale.com/admin/machines"
+  echo "  • reguły UFW — port odblokujesz ręcznie: ufw delete deny $PORT/tcp"
+  echo "  • Node.js, gh i pakiety apt (git, curl, cron)"
+  echo ""
+}
+
+# Potwierdzenie DOSŁOWNYM „TAK" — nie [T/n]: operacja kasuje /home/claude,
+# więc samo Enter (odruchowe) nie może jej uruchomić. Brak tty → default ""
+# → anulowanie: bez jawnej zgody z klawiatury niczego nie kasujemy.
+confirm_reset() {
+  local answer=""
+  ask_tty answer "Aby potwierdzić deinstalację, wpisz TAK (wielkimi literami; Enter = anuluj): " ""
+  if [ "$answer" != "TAK" ]; then
+    info "Reset anulowany — nic nie zostało usunięte."
+    exit 0
+  fi
+}
+
+# Stop/disable serwisów PRZED usuwaniem plików (proces sync/serwera nie może
+# przeżyć skasowania swojego unitu). Guard [ -f ] na unit-pliku: świeży system
+# bez serwisu = no-op; `|| true` — padnięty/zamaskowany serwis nie przerywa resetu.
+reset_services() {
+  command -v systemctl &>/dev/null || return 0
+  local svc
+  for svc in "$OB_SYNC_SERVICE" "$SERVICE_NAME"; do
+    if [ -f "$SYSTEMD_DIR/$svc.service" ]; then
+      systemctl disable --now "$svc" 2>/dev/null || true
+      ok "Serwis $svc zatrzymany i wyłączony"
+    else
+      info "Serwis $svc nie istnieje — pomijam."
+    fi
+  done
+}
+
+# Usunięcie wpisu auto-update z crontaba roota — odwrócony dedup-filter
+# z install_update_cron (grep -v po $SERVICE_NAME): cudze wpisy roota zostają.
+# `|| true` na pipeline: grep -v zwraca 1, gdy wpis Pulsa był jedyną linią
+# (pusty wynik), a pipefail zrobiłby z tego ERR mimo poprawnego czyszczenia.
+remove_update_cron() {
+  if ! command -v crontab &>/dev/null; then
+    info "Brak crontab — pomijam wpis auto-update."
+    return 0
+  fi
+  local current
+  if ! current="$(crontab -l 2>/dev/null)"; then
+    info "Crontab roota pusty — brak wpisu auto-update."
+    return 0
+  fi
+  if ! grep -q "$SERVICE_NAME" <<<"$current"; then
+    info "Brak wpisu auto-update w crontabie — pomijam."
+    return 0
+  fi
+  printf '%s\n' "$current" | grep -v "$SERVICE_NAME" | crontab - || true
+  ok "Wpis auto-update usunięty z crontaba roota"
+}
+
+# `userdel -r` kasuje cały /home/claude (vault lokalny, vault-git, loginy
+# Claude/gh/ob) — dane vaulta zostają na serwerze Obsidian Sync (komunikat
+# w print_reset_plan/summary). Pad userdel (np. proces usera jeszcze żyje)
+# = warn z instrukcją, nie ERR — reset ma usunąć co się da i powiedzieć,
+# co zostało do ręcznego dokończenia.
+remove_claude_user() {
+  if ! has_user_claude; then
+    info "Użytkownik '$CLAUDE_USER' nie istnieje — pomijam."
+    return 0
+  fi
+  info "Usuwam użytkownika '$CLAUDE_USER' wraz z katalogiem domowym..."
+  if userdel -r "$CLAUDE_USER"; then
+    ok "Użytkownik '$CLAUDE_USER' usunięty (dane vaulta są nadal na serwerze Obsidian Sync)"
+  else
+    warn "userdel nie powiódł się — dokończ ręcznie: userdel -r $CLAUDE_USER"
+  fi
+}
+
+print_reset_summary() {
+  echo ""
+  echo "========================================"
+  echo -e "${GREEN}Deinstalacja zakończona.${NC}"
+  echo "========================================"
+  echo ""
+  echo -e "  ${BOLD}Dane vaulta są bezpieczne${NC} — serwer Obsidian Sync nadal je przechowuje;"
+  echo "  VPS miał tylko lokalną kopię."
+  echo ""
+  echo -e "  ${BOLD}Pozostało na VPS (usuń ręcznie, jeśli chcesz):${NC}"
+  echo "    - Tailscale: tailscale logout, potem usuń maszynę w"
+  echo "      https://login.tailscale.com/admin/machines"
+  echo "    - UFW: ufw delete deny $PORT/tcp"
+  echo "    - Node.js, gh, git, curl, cron (pakiety apt współdzielone z systemem)"
+  echo ""
+  echo "  Ponowna instalacja: wklej komendę instalacji jeszcze raz."
+  echo ""
+}
+
+# --reset (R12): pełna deinstalacja — osobna ścieżka wykonywana WCZEŚNIE
+# w main(), przed jakimkolwiek flow instalacyjnym; kończy skrypt. Kolejność:
+# lista → potwierdzenie TAK → stop/disable serwisów → pliki (unit-pliki,
+# sudoers) → daemon-reload → cron roota → userdel -r. Wszystkie kroki
+# idempotentne (guardy [ -f ]/has_*) — reset na czystym systemie przechodzi.
+# Rollback wyłączony: reset przy błędzie niczego nie „cofa" — usuwa co się
+# da i raportuje, co zostało.
+run_reset() {
+  check_root
+  disable_rollback
+  resolve_install_paths
+  print_reset_plan
+  confirm_reset
+
+  reset_services
+  local reset_path
+  build_reset_paths
+  for reset_path in "${RESET_PATHS[@]}"; do
+    remove_reset_path "$reset_path"
+  done
+  if command -v systemctl &>/dev/null; then
+    systemctl daemon-reload 2>/dev/null || true
+  fi
+  remove_update_cron
+  remove_claude_user
+  print_reset_summary
+}
+
 # ============ MAIN ============
 
 main() {
   trap on_err ERR
   parse_flags "$@"
+
+  # --reset = deinstalacja: osobna ścieżka PRZED całym flow instalacyjnym,
+  # kończy skrypt (spec R12) — żadne pytanie/instalacja nie może jej poprzedzić.
+  if [ "$FLAG_RESET" = 1 ]; then
+    run_reset
+    exit 0
+  fi
 
   print_banner
   run_preflight          # FAZA 0: root/OS/internet + checklist + detekcja stanu

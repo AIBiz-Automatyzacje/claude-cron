@@ -177,13 +177,13 @@ Ostatnia aktualizacja: 2026-07-02
 
 ## Faza 7: `--reset` + README (IU7)
 
-- [ ] `--reset`: wypisz DOKŁADNĄ listę → potwierdzenie wpisaniem `TAK` → kolejność: stop/disable serwisów → unit-pliki → cron root (dedup-filter) → `/etc/sudoers.d/claude-cron` → `userdel -r claude` (komunikat: dane Sync bezpieczne na serwerze Obsidian)
-- [ ] KAŻDY `rm -rf` z guardem `${var:?}` i `[ -e ]`
-- [ ] Świadome NIE-usuwanie: Tailscale (instrukcja `tailscale logout` + admin console), UFW (instrukcja `ufw delete deny <PORT>`), Node/gh/apt
-- [ ] README: sekcja „Instalacja na VPS" — prerequisites (checklist), one-liner, wariant `wget -qO-`, flagi przez `bash -s --`, `--reset`, env-override do testów z brancha
-- [ ] Test: `--reset` bez potwierdzenia `TAK` → exit bez żadnego usunięcia (rejestrator)
-- [ ] Test: lista usuwanych ścieżek — funkcja budująca listę bez pustych zmiennych (walidacja guardów)
-- [ ] Test: `--reset` na czystym systemie (brak artefaktów) → przechodzi bez błędów (idempotentny)
+- [x] `--reset`: wypisz DOKŁADNĄ listę → potwierdzenie wpisaniem `TAK` → kolejność: stop/disable serwisów → unit-pliki → cron root (dedup-filter) → `/etc/sudoers.d/claude-cron` → `userdel -r claude` (komunikat: dane Sync bezpieczne na serwerze Obsidian) — odchylenie od planu: sudoers usuwany razem z unit-plikami (wspólna lista `build_reset_paths`, jedno źródło prawdy dla print_reset_plan i run_reset; brak zależności funkcjonalnej od kolejności cron↔sudoers)
+- [x] KAŻDY `rm -rf` z guardem `${var:?}` i `[ -e ]` — scentralizowane w `remove_reset_path` (`${1:?}` + `[ -e ] || [ -L ]` dla wiszących symlinków)
+- [x] Świadome NIE-usuwanie: Tailscale (instrukcja `tailscale logout` + admin console), UFW (instrukcja `ufw delete deny <PORT>`), Node/gh/apt
+- [x] README: sekcja „Instalacja na VPS" — prerequisites (checklist), one-liner, wariant `wget -qO-`, flagi przez `bash -s --`, `--reset`, env-override do testów z brancha (kroki 1.1–1.7; usunięta nieaktualna tabela pytań starego instalatora, odwołania „z kroku 1.4"→„1.7" w sekcjach Mac/Windows)
+- [x] Test: `--reset` bez potwierdzenia `TAK` → exit bez żadnego usunięcia (rejestrator)
+- [x] Test: lista usuwanych ścieżek — funkcja budująca listę bez pustych zmiennych (walidacja guardów; `build_reset_paths` wypełnia tablicę `RESET_PATHS` zamiast stdout — pętla `while read` złamałaby grep-strażnika `read` poza `ask_tty`)
+- [x] Test: `--reset` na czystym systemie (brak artefaktów) → przechodzi bez błędów (idempotentny)
 - [ ] Test: [Manual] pełny cykl na VPS: install → `--reset` → re-install od zera
 - [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje resetu PASS
 - [ ] Weryfikacja: `grep -n 'rm -rf' scripts/install-vps.sh` — każda linia z `${…:?}` lub poprzedzającym guardem
