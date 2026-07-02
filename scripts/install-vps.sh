@@ -35,11 +35,21 @@ CLAUDE_USER="claude"
 # mogły ją nadpisać na sandbox (DI jak TTY_DEVICE) bez pisania po /etc.
 SYSTEMD_DIR="/etc/systemd/system"
 
+# Katalog wpisów sudoers — zmienna z tego samego powodu co SYSTEMD_DIR
+# (DI: testy auto-update piszą po sandboxie, nie po /etc).
+SUDOERS_DIR="/etc/sudoers.d"
+
 # Typy plików Obsidian Sync — 'unsupported' = przełącznik "All other file types"
 # z GUI Obsidiana. Bez niego pliki nie-media (raporty HTML/JSON/CSV ze skilli)
 # zostają na VPS i nigdy nie docierają na komputer/telefon — selektywny sync
 # jest per-device (przewodnik headless sekcja 3). Stała bez pytania (decyzja 8).
 OB_FILE_TYPES="image,audio,video,pdf,unsupported"
+
+# Okno czekania na pierwszy sync vaulta (spec FAZA 6: „do 90 s") i interwał
+# odpytywania `ob sync-status`. Timeout = warn, nie fail: duży vault legalnie
+# synchronizuje się dłużej, a ERR odwinąłby rollback działającej instalacji.
+SYNC_WAIT_MAX_SECONDS=90
+SYNC_POLL_SECONDS=5
 
 DEFAULT_PORT=7777
 DEFAULT_TZ="Europe/Warsaw"
@@ -1290,14 +1300,51 @@ setup_tailscale() {
   fi
 }
 
+# ============ FAZA 6: FUNNEL (opt-in NA SAMYM KOŃCU) ============
+
+# parse_funnel_url <wyjście `tailscale funnel status`> — czysta funkcja:
+# pierwszy URL https, bez końcowego slasha. Format wyjścia funnel status jest
+# nieudokumentowany (odroczone w planie) — brak dopasowania → setup_funnel
+# pyta usera o URL. grep -oE, nie -oP: harness biega też na BSD grep.
+parse_funnel_url() {
+  { grep -oE 'https://[^[:space:]]+' <<<"$1" || true; } | head -1 | sed 's|/$||'
+}
+
+# add_webhook_env_line <url> — czysta funkcja (stdin: treść unitu → stdout):
+# linia Environment=WEBHOOK_BASE_URL wstawiona przed SyslogIdentifier, stara
+# usuwana (idempotentny re-run z Funnelem). Przepisanie treści zamiast
+# `sed -i "/…/i …"`: to składnia GNU — BSD sed (macOS, gdzie biega harness)
+# jej nie zna, a test ma weryfikować REALNĄ transformację, nie stub seda.
+add_webhook_env_line() {
+  local url="$1"
+  grep -v '^Environment=WEBHOOK_BASE_URL=' \
+    | awk -v line="Environment=WEBHOOK_BASE_URL=$url" \
+        '/SyslogIdentifier/ { print line } { print }'
+}
+
+# Wpis WEBHOOK_BASE_URL do unitu Pulsa + restart — env czytany przez server.js
+# przy starcie, więc bez restartu Funnel nie działałby do najbliższego bootu.
+set_service_webhook_env() {
+  local service_file="$SYSTEMD_DIR/${SERVICE_NAME}.service" updated
+  updated="$(add_webhook_env_line "$WEBHOOK_BASE_URL" < "$service_file")"
+  printf '%s\n' "$updated" > "$service_file"
+  systemctl daemon-reload
+  systemctl restart "$SERVICE_NAME"
+  sleep 1
+  ok "WEBHOOK_BASE_URL ustawiony w serwisie systemd"
+}
+
+# Opcjonalny Tailscale Funnel — pytanie celowo NA SAMYM KOŃCU przebiegu
+# (spec FAZA 6): jego koszt (jednorazowe zatwierdzenie w admin console
+# Tailscale) ma paść PO tym, jak wszystko działa. W lekcji B1 webhooki są
+# nieużywane — kto nie wie, klika N; wraca re-runem po lekcji o webhookach.
 setup_funnel() {
-  # Tailscale Funnel dla webhooków
   echo ""
-  local setup_funnel_answer=""
-  ask_tty setup_funnel_answer "Włączyć Tailscale Funnel dla webhooków? (wystawia /webhook/* na internet) [t/N]: " "N"
+  local answer=""
+  ask_tty answer "Włączyć Tailscale Funnel dla webhooków? (wystawia /webhook/* na internet) [t/N]: " "N"
 
   WEBHOOK_BASE_URL=""
-  if [[ ! "$setup_funnel_answer" =~ ^[TtYy]$ ]]; then
+  if [[ ! "$answer" =~ ^[TtYy]$ ]]; then
     return 0
   fi
 
@@ -1307,71 +1354,74 @@ setup_funnel() {
   fi
 
   info "Uruchamiam Tailscale Funnel na porcie $PORT..."
-  tailscale funnel --bg "$PORT" 2>/dev/null || warn "Funnel nie wystartował — może wymagać włączenia w panelu Tailscale"
+  # rc łapany w if, stderr NIEtłumiony (konwencja z review fazy 5) — komunikat
+  # tailscale z linkiem do zatwierdzenia node-attribute musi dotrzeć do usera.
+  if ! tailscale funnel --bg "$PORT"; then
+    warn "Funnel nie wystartował — pierwsze uruchomienie może wymagać zatwierdzenia w panelu Tailscale (link w komunikacie powyżej)."
+  fi
 
-  # Spróbuj odczytać URL funnela
-  local funnel_status
-  funnel_status=$(tailscale funnel status 2>/dev/null || echo "")
-  if echo "$funnel_status" | grep -q "https://"; then
-    WEBHOOK_BASE_URL=$(echo "$funnel_status" | grep -oP 'https://[^ ]+' | head -1 | sed 's/\/$//')
+  local funnel_status=""
+  if ! funnel_status="$(tailscale funnel status)"; then
+    funnel_status=""
+  fi
+  WEBHOOK_BASE_URL="$(parse_funnel_url "$funnel_status")"
+  if [ -n "$WEBHOOK_BASE_URL" ]; then
     ok "Funnel aktywny: $WEBHOOK_BASE_URL"
   else
     ask_tty WEBHOOK_BASE_URL "Podaj URL Tailscale Funnel (np. https://srv123.tail456.ts.net): " ""
   fi
 
-  # Dopisz WEBHOOK_BASE_URL do systemd
-  if [ -n "$WEBHOOK_BASE_URL" ]; then
-    sed -i "/SyslogIdentifier/i Environment=WEBHOOK_BASE_URL=$WEBHOOK_BASE_URL" "$SERVICE_FILE"
-    systemctl daemon-reload
-    systemctl restart "$SERVICE_NAME"
-    sleep 1
-    ok "WEBHOOK_BASE_URL ustawiony w serwisie systemd"
+  if [ -z "$WEBHOOK_BASE_URL" ]; then
+    warn "Brak URL Funnela — webhooki włączysz później, wklejając ponownie komendę instalacji."
+    return 0
   fi
+  set_service_webhook_env
 }
 
-setup_auto_update() {
-  if [ "$FLAG_NO_AUTO_UPDATE" = 1 ]; then
-    info "Auto-update pominięty (--no-auto-update)"
-    return 0
+# ============ FAZA 6: AUTO-UPDATE (cron 02:00, opt-out --no-auto-update) ============
+
+# build_cron_cmd <vault_git> <install_dir> <guard_script> <cron_log> <only_puls>
+# — czysta funkcja: linia crontaba auto-update. Godziny 02:00 NIE ZMIENIAĆ —
+# spójność z oknem maintenance 02:00–02:15 (lib/config.js MAINTENANCE_WINDOW)
+# i missed-job detection schedulera. Ścieżki przez %q (fix P3 z zadania
+# ulatwienie-instalacji: niecytowany $VAULT_GIT psuł cron przy spacji);
+# dla zwykłych ścieżek %q nie emituje znaku % (specjalnego w crontabie).
+# Pull leci jako $CLAUDE_USER (gh credential helper z bloku loginów) z logiem
+# do claude-cron-update.log (odwołanie autoryzacji gh na GitHubie = cichy
+# fail crona, log wystarczy — spec FAZA 6); restart jako root, wstrzymywany
+# przez node-guard. Przy --only-puls nie ma vault-git — segment pomijany.
+build_cron_cmd() {
+  local vault_git="$1" install_dir="$2" guard_script="$3" cron_log="$4" only_puls="$5"
+  local inner=""
+  if [ "$only_puls" != 1 ]; then
+    inner="cd $(printf '%q' "$vault_git") && git pull && "
   fi
+  inner+="cd $(printf '%q' "$install_dir") && git pull && bash $(printf '%q' "$guard_script")"
+  inner="{ $inner; } >> $(printf '%q' "$cron_log") 2>&1"
+  printf '0 2 * * * su - %s -c %q && systemctl restart %s\n' \
+    "$CLAUDE_USER" "$inner" "$SERVICE_NAME"
+}
 
-  echo ""
-  echo -e "${CYAN}Auto-update${NC}"
-  echo "─────────────────────────────────────"
-  echo ""
-  echo -e "  Codzienny cron (2:00) — automatycznie pulluje"
-  echo -e "  vault-git i claude-cron, potem restartuje serwis."
-  echo ""
-
-  local setup_autoupdate=""
-  ask_tty setup_autoupdate "Ustawić automatyczną aktualizację? [T/n]: " "T"
-
-  if [[ "$setup_autoupdate" =~ ^[Nn]$ ]]; then
-    info "Pominięto — możesz dodać ręcznie później"
-    return 0
+# Passwordless sudo dla restartu serwisu przez usera claude — rollback tylko
+# gdy plik sudoers powstał w TYM runie (kontrakt jak unit-pliki), wpis na
+# stosie PRZED zapisem (konwencja z review fazy 5, wpis idempotentny).
+write_update_sudoers() {
+  local sudoers_file="$SUDOERS_DIR/$SERVICE_NAME"
+  if [ ! -f "$sudoers_file" ]; then
+    push_rollback "rm -f '$sudoers_file'"
   fi
-
-  # Passwordless sudo dla restartu serwisu
-  echo "$CLAUDE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart $SERVICE_NAME" > "/etc/sudoers.d/$SERVICE_NAME"
-  chmod 440 "/etc/sudoers.d/$SERVICE_NAME"
+  echo "$CLAUDE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart $SERVICE_NAME" > "$sudoers_file"
+  chmod 440 "$sudoers_file"
   ok "Passwordless sudo dla restartu serwisu"
+}
 
-  # Sprawdź, czy vault-git istnieje
-  local vault_git="$CLAUDE_HOME/vault-git"
-  if [ ! -d "$vault_git/.git" ]; then
-    local vault_git_input=""
-    ask_tty vault_git_input "Ścieżka do repo vault-git [$vault_git]: " "$vault_git"
-    vault_git="$vault_git_input"
-    vault_git="${vault_git/#\~/$CLAUDE_HOME}"
-  fi
-
-  # Pre-check wersji Node dla crona — wstrzymuje restart, gdy Node serwisu jest
-  # niekompatybilny (np. operator zdegradował Node po instalacji). git pull i tak
-  # się wykona (kod się zaktualizuje), ale restart na złym Node tylko ubiłby wszystkie
-  # joby (node:sqlite rzuca przy starcie — zob. lib/runtime-guard.js). Skrypt zapisany
-  # obok instalacji, uruchamiany jako user $CLAUDE_USER (ten sam Node co serwis).
-  local guard_script="$INSTALL_DIR/scripts/cron-node-guard.sh"
-  local cron_log="$CLAUDE_HOME/claude-cron-update.log"
+# Pre-check wersji Node dla crona — wstrzymuje restart, gdy Node serwisu jest
+# niekompatybilny (np. operator zdegradował Node po instalacji). git pull i tak
+# się wykona (kod się zaktualizuje), ale restart na złym Node tylko ubiłby wszystkie
+# joby (node:sqlite rzuca przy starcie — zob. lib/runtime-guard.js). Skrypt zapisany
+# obok instalacji, uruchamiany jako user $CLAUDE_USER (ten sam Node co serwis).
+write_cron_node_guard() {
+  local guard_script="$1" cron_log="$2"
 
   cat > "$guard_script" <<GUARD
 #!/usr/bin/env bash
@@ -1414,23 +1464,135 @@ log_warn "Restart serwisu WSTRZYMANY: Node v\$RAW jest niekompatybilny (wymagane
 exit 1
 GUARD
   chmod +x "$guard_script"
-  chown "$CLAUDE_USER:$CLAUDE_USER" "$guard_script" 2>/dev/null || true
+  # chown może paść (nietypowy fs) — nie blokuje auto-update (guard jest
+  # world-readable), więc warn zamiast fail; stderr chown zostaje widoczny.
+  if ! chown "$CLAUDE_USER:$CLAUDE_USER" "$guard_script"; then
+    warn "Nie udało się zmienić właściciela $guard_script — auto-update zadziała mimo to."
+  fi
   ok "Cron Node guard: $guard_script"
+}
 
-  # Komenda crona
-  # 02:00 — okno maintenance ciche, by restart nie kolidował z porannymi jobami (zob. lib/config.js MAINTENANCE_WINDOW).
-  # git pull ZAWSZE; restart tylko gdy guard (uruchomiony jako $CLAUDE_USER) potwierdzi kompatybilny Node.
-  local cron_cmd existing_cron
-  cron_cmd="0 2 * * * su - $CLAUDE_USER -c \"cd $vault_git && git pull && cd $INSTALL_DIR && git pull && bash $guard_script\" && systemctl restart $SERVICE_NAME"
+# Wpis do crontaba roota z dedupem (grep -v po $SERVICE_NAME) — re-run
+# nadpisuje własną linię zamiast dublować. Rollback tylko gdy crontab nie
+# miał jeszcze wpisu Pulsa (wpis sprzed runa = cudzy stan); rejestrowany
+# PRZED zapisem, sam wpis idempotentny.
+install_update_cron() {
+  local guard_script="$1" cron_log="$2" cron_cmd existing_cron
+  cron_cmd="$(build_cron_cmd "$CLAUDE_HOME/vault-git" "$INSTALL_DIR" "$guard_script" "$cron_log" "$FLAG_ONLY_PULS")"
 
-  # Dodaj do crontaba roota (bez duplikatów)
+  if ! crontab -l 2>/dev/null | grep -q "$SERVICE_NAME"; then
+    push_rollback "crontab -l 2>/dev/null | grep -v '$SERVICE_NAME' | crontab - || true"
+  fi
+
   existing_cron=$(crontab -l 2>/dev/null | grep -v "$SERVICE_NAME" || true)
   if [ -n "$existing_cron" ]; then
     printf '%s\n%s\n' "$existing_cron" "$cron_cmd" | crontab -
   else
-    echo "$cron_cmd" | crontab -
+    printf '%s\n' "$cron_cmd" | crontab -
   fi
-  ok "Cron: codziennie o 2:00 — auto-update + restart"
+  ok "Cron: codziennie o 02:00 — auto-update + restart serwisu"
+}
+
+# Auto-update ZAWSZE (spec FAZA 6) — bez pytania; jedyny opt-out to flaga
+# --no-auto-update. Konsekwencję kursant widzi wcześniej w podsumowaniu
+# konfiguracji i zatwierdza przez „Kontynuujemy?".
+setup_auto_update() {
+  if [ "$FLAG_NO_AUTO_UPDATE" = 1 ]; then
+    info "Auto-update pominięty (--no-auto-update)"
+    return 0
+  fi
+
+  echo ""
+  info "Ustawiam codzienny auto-update (cron o 02:00)..."
+  local guard_script="$INSTALL_DIR/scripts/cron-node-guard.sh"
+  local cron_log="$CLAUDE_HOME/claude-cron-update.log"
+  write_update_sudoers
+  write_cron_node_guard "$guard_script" "$cron_log"
+  install_update_cron "$guard_script" "$cron_log"
+}
+
+# ============ FAZA 6: WERYFIKACJA + PLIK-DOWÓD ============
+
+check_service_active() {
+  local svc="$1"
+  if systemctl is-active --quiet "$svc"; then
+    ok "Serwis $svc działa"
+  else
+    warn "Serwis $svc NIE działa — sprawdź: journalctl -u $svc -n 30"
+  fi
+}
+
+# is_sync_complete <wyjście `ob sync-status`> — czysta heurystyka pierwszego
+# synca. Dokładne stringi wyjść ob odroczone (młody pakiet, format może się
+# zmieniać) — dopasowanie odporne, case-insensitive; potwierdzenie na żywym
+# narzędziu = Operator checklist. 'syncing' celowo NIE matchuje ('synced'
+# wymaga pełnego 'ed').
+is_sync_complete() {
+  grep -qiE 'synced|up.to.date|complete' <<<"$1"
+}
+
+# Pętla do SYNC_WAIT_MAX_SECONDS na pierwszy sync vaulta (R11). Timeout =
+# warn + instrukcja, nie fail — zob. komentarz przy stałych SYNC_*.
+wait_for_first_sync() {
+  info "Czekam na pierwszy sync vaulta (do ${SYNC_WAIT_MAX_SECONDS} s)..."
+  local waited=0 status_out=""
+  while [ "$waited" -lt "$SYNC_WAIT_MAX_SECONDS" ]; do
+    if status_out="$(run_as_claude "ob sync-status --path ~/vault" 2>&1)" \
+      && is_sync_complete "$status_out"; then
+      ok "Pierwszy sync zakończony"
+      return 0
+    fi
+    sleep "$SYNC_POLL_SECONDS"
+    waited=$((waited + SYNC_POLL_SECONDS))
+  done
+  warn "Sync jeszcze trwa po ${SYNC_WAIT_MAX_SECONDS} s — przy dużym vaulcie to normalne."
+  warn "Postęp sprawdzisz: su - $CLAUDE_USER -c 'ob sync-status --path ~/vault'"
+}
+
+# Weryfikacja finału (R11): oba serwisy active + czekanie na pierwszy sync.
+# Padnięty serwis = warn z instrukcją, nie fail — instalacja jest kompletna,
+# a ERR tutaj odwinąłby rollback stanu, który w większości działa.
+verify_services() {
+  echo ""
+  info "Sprawdzam serwisy..."
+  check_service_active "$SERVICE_NAME"
+  if [ "$FLAG_ONLY_PULS" != 1 ]; then
+    check_service_active "$OB_SYNC_SERVICE"
+    wait_for_first_sync
+  fi
+}
+
+# build_welcome_note — czysta funkcja: treść pliku-dowodu (PL, spec FAZA 6).
+build_welcome_note() {
+  cat <<'NOTE'
+# 🎉 Twój asystent w chmurze działa!
+
+Ta notatka powstała na Twoim serwerze VPS i dotarła tu przez Obsidian Sync.
+Jeśli czytasz ją na telefonie lub komputerze, cały łańcuch działa:
+
+VPS → Obsidian Sync → Twoje urządzenie
+
+Możesz spokojnie usunąć tę notatkę.
+NOTE
+}
+
+# Plik-dowód: prawdziwy test end-to-end (zapis na VPS → ob sync → serwer →
+# telefon) i moment „wow" kursanta — nagroda na JEGO urządzeniu, nie w
+# terminalu (dashboard w B1 jeszcze nieosiągalny). Pad zapisu = warn, nie
+# fail (notatka to dowód, nie stan krytyczny — rollback działającej
+# instalacji byłby gorszy niż brak notatki). Pomijany w main() przy
+# --only-puls (konwencja rejestratora wywołań).
+create_welcome_note() {
+  echo ""
+  info "Tworzę notatkę-dowód w vaulcie..."
+  if build_welcome_note | run_as_claude "cat > ~/vault/Witaj-z-VPS.md"; then
+    ok "Notatka zapisana: ~/vault/Witaj-z-VPS.md"
+    echo ""
+    echo -e "  ${BOLD}📱 Otwórz Obsidiana na telefonie — za chwilę pojawi się notatka${NC}"
+    echo -e "  ${BOLD}   «Witaj z VPS». Jeśli ją widzisz — wszystko działa.${NC}"
+  else
+    warn "Nie udało się zapisać notatki ~/vault/Witaj-z-VPS.md — sprawdź, czy vault istnieje."
+  fi
 }
 
 print_summary() {
@@ -1440,19 +1602,23 @@ print_summary() {
   echo "========================================"
   echo ""
   echo -e "  ${BOLD}Serwis:${NC}     $SERVICE_NAME (systemd)"
+  [ "$FLAG_ONLY_PULS" = 1 ] || echo -e "  ${BOLD}Serwis:${NC}     $OB_SYNC_SERVICE (systemd)"
   echo -e "  ${BOLD}Użytkownik:${NC} $CLAUDE_USER"
   echo -e "  ${BOLD}Repo:${NC}       $INSTALL_DIR"
   echo -e "  ${BOLD}Workspace:${NC}  $WORKSPACE"
   echo -e "  ${BOLD}Port:${NC}       $PORT"
 
   if [ -n "$TS_IP" ]; then
-    echo -e "  ${BOLD}Dashboard:${NC}  ${CYAN}http://$TS_IP:$PORT${NC} (przez Tailscale)"
+    echo ""
+    echo -e "  ${BOLD}Dashboard:${NC}  ${CYAN}http://$TS_IP:$PORT${NC}"
+    echo "              Otworzysz go po zainstalowaniu Tailscale na swoim komputerze —"
+    echo "              pokażemy to w lekcji o Pulsie."
   fi
   if [ -n "$WEBHOOK_BASE_URL" ]; then
     echo -e "  ${BOLD}Webhooki:${NC}   ${CYAN}$WEBHOOK_BASE_URL/webhook/<token>${NC}"
   fi
   if [ -n "$DISCORD_URL" ]; then
-    echo -e "  ${BOLD}Discord:${NC}    włączony"
+    echo -e "  ${BOLD}Discord:${NC}    powiadomienia włączone"
   fi
 
   echo ""
@@ -1460,11 +1626,12 @@ print_summary() {
   echo "    systemctl status $SERVICE_NAME        # status serwisu"
   echo "    journalctl -u $SERVICE_NAME -f        # logi na żywo"
   echo "    systemctl restart $SERVICE_NAME       # restart"
+  [ "$FLAG_ONLY_PULS" = 1 ] || echo "    systemctl status $OB_SYNC_SERVICE       # status synca Obsidiana"
   echo "    su - $CLAUDE_USER -c 'cd ~/claude-cron && git pull'  # aktualizacja kodu"
   echo ""
 
   if [ -n "$TS_IP" ]; then
-    echo -e "  ${BOLD}Połączenie z Twojego Maca:${NC}"
+    echo -e "  ${BOLD}Połączenie z Twojego komputera (po lekcji o Pulsie):${NC}"
     echo "    Dodaj do ~/.zshrc:"
     echo "      export CLAUDE_CRON_VPS_URL=http://$TS_IP:$PORT"
     echo ""
@@ -1472,8 +1639,12 @@ print_summary() {
 
   echo -e "  ${BOLD}Bezpieczeństwo:${NC}"
   echo "    - Port $PORT jest ZABLOKOWANY w firewallu (dostęp tylko przez Tailscale)"
-  echo "    - Dashboard nie jest dostępny z publicznego internetu"
-  echo "    - Publicznie wystawione są tylko endpointy /webhook/* (Tailscale Funnel)"
+  echo "    - Dashboard NIE jest dostępny z publicznego internetu"
+  if [ -n "$WEBHOOK_BASE_URL" ]; then
+    echo "    - Publicznie wystawione są tylko endpointy /webhook/* (Tailscale Funnel)"
+  else
+    echo "    - Nic nie jest wystawione na publiczny internet (Funnel wyłączony)"
+  fi
   echo "    - Claude CLI działa jako dedykowany użytkownik '$CLAUDE_USER' (nie root)"
   echo ""
 }
@@ -1520,10 +1691,21 @@ main() {
   clone_repo
   setup_puls_dependencies
   create_systemd_service
+
+  # FAZA 5 spec-u: sieć — zero interakcji (UFW + odczyt TS_IP; samo
+  # `tailscale up` to PAUZA 5 bloku loginów).
   configure_firewall
   setup_tailscale
-  setup_funnel
+
+  # FAZA 6 spec-u: auto-update ZAWSZE (opt-out --no-auto-update) → weryfikacja
+  # serwisów (do 90 s na pierwszy sync) → plik-dowód (nagroda na telefonie) →
+  # opcjonalny Funnel NA SAMYM KOŃCU → podsumowanie. Pominięcie pliku-dowodu
+  # przy --only-puls zapada TUTAJ (konwencja rejestratora wywołań w testach,
+  # jak install_ob i blok Obsidian).
   setup_auto_update
+  verify_services
+  [ "$FLAG_ONLY_PULS" = 1 ] || create_welcome_note
+  setup_funnel
   print_summary
 }
 

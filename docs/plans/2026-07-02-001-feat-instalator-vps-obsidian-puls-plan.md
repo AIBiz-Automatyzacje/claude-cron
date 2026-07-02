@@ -319,7 +319,7 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 
 ---
 
-- [ ] **Unit 6: FAZA 5 + 6 — UFW, auto-update, weryfikacja, plik-dowód, Funnel opt-in, podsumowanie**
+- [x] **Unit 6: FAZA 5 + 6 — UFW, auto-update, weryfikacja, plik-dowód, Funnel opt-in, podsumowanie**
 
 **Cel:** Zamknięcie przebiegu: sieć bez interakcji, cron 02:00 zawsze, dowód działania na telefonie, opcjonalny Funnel NA KOŃCU, podsumowanie PL.
 
@@ -340,21 +340,21 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 - Auto-update ZAWSZE (opt-out `--no-auto-update`): sudoers NOPASSWD (jak dziś), node-guard heredoc (jak dziś), cron 02:00 (**NIE zmieniać godziny** — spójność z `MAINTENANCE_WINDOW`). **Fix P3**: cytowanie `"$VAULT_GIT"`/ścieżek w `CRON_CMD`; pull vault-git działa przez gh credential helper (auth z IU4); pad pulla logowany (jak dziś do `claude-cron-update.log`). Przy `--only-puls` bez vault-git w cronie.
 - Weryfikacja: `systemctl is-active` obu serwisów; pętla do 90 s na pierwszy sync (`ob sync-status`).
 - Plik-dowód: `su - claude` → heredoc do `~/vault/Witaj-z-VPS.md` (treść PL ze spec-u) + komunikat „Otwórz Obsidiana na telefonie…". Pomijany przy `--only-puls`.
-- Funnel: `ask_tty` „[t/N]" NA KOŃCU; T → `tailscale funnel --bg $PORT` → parsowanie URL (fallback: zapytaj) → wstrzyknięcie `WEBHOOK_BASE_URL` do unitu (istniejący `sed -i` przed `SyslogIdentifier`) + `daemon-reload` + restart; N → nic.
+- Funnel: `ask_tty` „[t/N]" NA KOŃCU; T → `tailscale funnel --bg $PORT` → parsowanie URL (fallback: zapytaj) → wstrzyknięcie `WEBHOOK_BASE_URL` do unitu (istniejący `sed -i` przed `SyslogIdentifier`) + `daemon-reload` + restart; N → nic. *(Zrealizowane przepisaniem treści unitu w czystej `add_webhook_env_line` zamiast `sed -i "/i"` — składnia GNU, harness biega na BSD sed; stara linia usuwana = idempotentny re-run.)*
 - Podsumowanie PL: dashboard `http://<TS_IP>:<PORT>` z adnotacją „otworzysz po zainstalowaniu Tailscale na komputerze — lekcja o Pulsie", webhooki (jeśli Funnel), komendy serwisowe, security-nota.
 
 **Wzorce do naśladowania:**
 - `install-vps.sh` L322–349 (UFW), L437–533 (auto-update/sudoers/guard/dedup), L401–435 (Funnel + sed), L535–578 (summary box)
 
 **Scenariusze testowe:**
-- [Unit] budowa `CRON_CMD` (funkcja czysta): ścieżka ze spacją poprawnie cytowana; `--only-puls` → bez segmentu vault-git; `--no-auto-update` → cron w ogóle nie instalowany
-- [Unit] treść pliku-dowodu (funkcja czysta): zawiera nagłówek i PL treść; generacja podsumowania: z Funnel → sekcja webhooków, bez → adnotacja o lekcji
-- [Unit] Funnel=N → zero wywołań `tailscale funnel` (rejestrator)
-- [Manual] telefon: notatka „Witaj z VPS" dochodzi przez Sync; Funnel=T → `curl https://<funnel-url>/webhook/test` zwraca odpowiedź serwera (nie timeout)
+- [x] [Unit] budowa `CRON_CMD` (funkcja czysta): ścieżka ze spacją poprawnie cytowana; `--only-puls` → bez segmentu vault-git; `--no-auto-update` → cron w ogóle nie instalowany (`build_cron_cmd` + testy `setup_auto_update`)
+- [x] [Unit] treść pliku-dowodu (funkcja czysta): zawiera nagłówek i PL treść; generacja podsumowania: z Funnel → sekcja webhooków, bez → adnotacja o lekcji (`build_welcome_note`/`print_summary`)
+- [x] [Unit] Funnel=N → zero wywołań `tailscale funnel` (rejestrator; bonus: T → wpis `WEBHOOK_BASE_URL` do unitu + restart, re-run bez duplikatu)
+- [ ] [Manual] telefon: notatka „Witaj z VPS" dochodzi przez Sync; Funnel=T → `curl https://<funnel-url>/webhook/test` zwraca odpowiedź serwera (nie timeout)
 
 **Weryfikacja:**
-- `bash scripts/install-vps.test.sh` — asercje CRON_CMD/podsumowania/pliku-dowodu PASS
-- `grep -n '0 2 \* \* \*' scripts/install-vps.sh` — godzina crona niezmieniona (02:00)
+- [x] `bash scripts/install-vps.test.sh` — asercje CRON_CMD/podsumowania/pliku-dowodu PASS (78/78)
+- [x] `grep -n '0 2 \* \* \*' scripts/install-vps.sh` — godzina crona niezmieniona (02:00; jedyne wystąpienie w `build_cron_cmd`)
 
 ---
 

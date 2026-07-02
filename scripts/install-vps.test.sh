@@ -8,7 +8,10 @@
 # bez rollbacku i pomijanie pauz ob przy --only-puls (faza 4) oraz Obsidian +
 # unity systemd: ENV_LINES, unit obsidian-sync, weryfikacja file-types,
 # sparse checkout/symlink .claude, kolejność sync-config → enable, rollback
-# unit-plików utworzonych w tym runie (faza 5).
+# unit-plików utworzonych w tym runie (faza 5) oraz finał: CRON_CMD auto-update
+# (02:00, cytowanie %q, --only-puls bez vault-git, --no-auto-update bez crona),
+# weryfikacja serwisów + pętla pierwszego synca, plik-dowód Witaj-z-VPS.md,
+# Funnel opt-in (N → zero wywołań tailscale) i podsumowanie PL (faza 6).
 # Wzorzec z install.test.sh: lib-only source + sandbox mktemp + pass/problem.
 #
 # Każdy scenariusz działa w ŚWIEŻYM subshellu (bash -c + source lib-only):
@@ -605,7 +608,7 @@ install_claude_cli install_ob install_tailscale login_block \
 configure_obsidian_file_types setup_vault_git link_vault_claude \
 create_obsidian_sync_service clone_repo \
 setup_puls_dependencies create_systemd_service configure_firewall setup_tailscale \
-setup_funnel setup_auto_update print_summary"
+setup_auto_update verify_services create_welcome_note setup_funnel print_summary"
 
 write_recorder_snippet() {
   local snippet="$1" main_args="$2"
@@ -1546,7 +1549,308 @@ EOF
   fi
 }
 
-echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje), fazy 4 (blok 5 loginów) i fazy 5 (Obsidian + unity systemd) =="
+# --- Test 52: build_cron_cmd — prefix 02:00, ścieżki ze spacją przez %q, --only-puls bez vault-git ---
+test_build_cron_cmd() {
+  # Roundtrip jak w produkcji (konwencja review f5: treść komendy, nie kształt):
+  # linia crontaba → eval (stub su łapie argument -c) → eval inner (stuby
+  # cd/git/bash weryfikują, że ścieżka ze spacją dociera jako JEDEN argument).
+  local snippet="$SANDBOX/t-cron-cmd.sh" log="$SANDBOX/cron-cmd.log" \
+    vg="$SANDBOX/va ult-git" id="$SANDBOX/cl audecron" out
+  mkdir -p "$id"
+  cat > "$snippet" <<EOF
+LOG='$log'
+VG='$vg'
+ID='$id'
+EOF
+  cat >> "$snippet" <<'EOF'
+line="$(build_cron_cmd "$VG" "$ID" "$ID/scripts/cron-node-guard.sh" "$ID/update.log" 0)"
+case "$line" in "0 2 * * * "*) echo "PREFIX_OK" >> "$LOG" ;; esac
+cmd="${line#"0 2 * * * "}"
+su() { SU_INNER="$4"; }
+systemctl() { echo "SC:$*" >> "$LOG"; }
+eval "$cmd"
+cd() { echo "CD:$1" >> "$LOG"; }
+git() { echo "GIT:$*" >> "$LOG"; }
+bash() { echo "BASH:$1" >> "$LOG"; }
+eval "$SU_INNER"
+line_op="$(build_cron_cmd "$VG" "$ID" "$ID/scripts/cron-node-guard.sh" "$ID/update.log" 1)"
+case "$line_op" in *"ult-git"*) echo "OP_HAS_VG" >> "$LOG" ;; esac
+EOF
+  out="$(run_snippet "$snippet")"
+  if grep -q "PREFIX_OK" "$log" 2>/dev/null \
+    && grep -q "CD:$vg" "$log" \
+    && grep -q "CD:$id" "$log" \
+    && [ "$(grep -c '^GIT:pull' "$log")" = "2" ] \
+    && grep -q "BASH:$id/scripts/cron-node-guard.sh" "$log" \
+    && grep -q "SC:restart claude-cron" "$log" \
+    && ! grep -q "OP_HAS_VG" "$log"; then
+    pass "build_cron_cmd: 02:00 + ścieżki ze spacją jako jeden argument; --only-puls bez segmentu vault-git"
+  else
+    problem "build_cron_cmd: złe cytowanie/segmenty (log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+}
+
+# --- Test 53: setup_auto_update — --no-auto-update → cron nie instalowany; pełny → sudoers + guard + cron ---
+test_setup_auto_update() {
+  local snippet="$SANDBOX/t-au.sh" log="$SANDBOX/au.log" cronfile="$SANDBOX/au-cronfile" \
+    sudoers="$SANDBOX/au-sudoers" install="$SANDBOX/au-install" home="$SANDBOX/au-home" out rc out2 rc2
+  mkdir -p "$sudoers" "$install/scripts" "$home"
+  cat > "$snippet" <<EOF
+FLAG_NO_AUTO_UPDATE=1
+crontab() { echo "CRONTAB \$*" >> "$log"; }
+setup_auto_update
+echo "PO_SKIP"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"pominięty"* ]] && [[ "$out" == *"PO_SKIP"* ]] && [ ! -s "$log" ]; then
+    pass "setup_auto_update: --no-auto-update → cron w ogóle nie instalowany (zero wywołań crontab)"
+  else
+    problem "setup_auto_update: opt-out zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+  # Pełny przebieg w sandboxie (SUDOERS_DIR/INSTALL_DIR przez DI, crontab jako
+  # atrapa plikowa — asercje TREŚCI: NOPASSWD, progi guardu, linia 02:00).
+  cat > "$snippet" <<EOF
+SUDOERS_DIR="$sudoers"
+INSTALL_DIR="$install"
+CLAUDE_HOME="$home"
+FLAG_NO_AUTO_UPDATE=0
+FLAG_ONLY_PULS=0
+CRONFILE="$cronfile"
+crontab() {
+  case "\$1" in
+    -l) if [ -f "\$CRONFILE" ]; then cat "\$CRONFILE"; else return 1; fi ;;
+    -)  cat > "\$CRONFILE" ;;
+  esac
+}
+chown() { :; }
+setup_auto_update
+echo "STACK=[\${ROLLBACK_STACK[*]-}]"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  if [ "$rc2" -eq 0 ] \
+    && grep -q "NOPASSWD: /usr/bin/systemctl restart claude-cron" "$sudoers/claude-cron" 2>/dev/null \
+    && [ -x "$install/scripts/cron-node-guard.sh" ] \
+    && grep -q "MIN_NODE_MAJOR=22" "$install/scripts/cron-node-guard.sh" \
+    && grep -q "MIN_NODE_MINOR=13" "$install/scripts/cron-node-guard.sh" \
+    && grep -q "^0 2 \* \* \* su - claude -c" "$cronfile" \
+    && grep -q "vault-git" "$cronfile" \
+    && [[ "$out2" == *"rm -f '$sudoers/claude-cron'"* ]]; then
+    pass "setup_auto_update: sudoers NOPASSWD + node-guard (progi 22.13) + cron 02:00 z vault-git; rollback sudoers na stosie"
+  else
+    problem "setup_auto_update: pełny przebieg zawiódł (rc=$rc2, cron: $(cat "$cronfile" 2>/dev/null), output: $out2)"
+  fi
+}
+
+# --- Test 54: plik-dowód — build_welcome_note (treść PL) + create_welcome_note (zapis przez run_as_claude) ---
+test_welcome_note() {
+  local snippet="$SANDBOX/t-note.sh" home="$SANDBOX/home-note" out rc out2 rc2
+  mkdir -p "$home/vault"
+  echo 'build_welcome_note' > "$snippet"
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"# 🎉 Twój asystent w chmurze działa!"* ]] \
+    && [[ "$out" == *"Obsidian Sync"* ]]; then
+    pass "build_welcome_note: nagłówek + polska treść dowodu"
+  else
+    problem "build_welcome_note: zła treść (rc=$rc, output: $out)"
+  fi
+  # Zapis przez run_as_claude (stub z podmienionym HOME — `~/vault` rozwija
+  # się w shellu atrapy) + komunikat „otwórz Obsidiana na telefonie".
+  cat > "$snippet" <<EOF
+run_as_claude() { HOME="$home" bash -c "\$1"; }
+create_welcome_note
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  if [ "$rc2" -eq 0 ] && [[ "$out2" == *"telefonie"* ]] && [[ "$out2" == *"Witaj z VPS"* ]] \
+    && grep -q "asystent w chmurze" "$home/vault/Witaj-z-VPS.md" 2>/dev/null; then
+    pass "create_welcome_note: notatka w vaulcie + komunikat o telefonie"
+  else
+    problem "create_welcome_note: zapis/komunikat zawiódł (rc=$rc2, output: $out2)"
+  fi
+}
+
+# --- Test 55: print_summary — bez Funnela adnotacja o lekcji bez webhooków; z Funnelem sekcja webhooków ---
+test_print_summary_funnel_variants() {
+  local snippet="$SANDBOX/t-summary.sh" out out2
+  cat > "$snippet" <<'EOF'
+TS_IP="100.64.0.1"; PORT=7777; WORKSPACE="/home/claude/vault"
+INSTALL_DIR="/home/claude/claude-cron"; DISCORD_URL=""; WEBHOOK_BASE_URL=""
+FLAG_ONLY_PULS=0
+print_summary
+EOF
+  out="$(run_snippet "$snippet")"
+  cat > "$snippet" <<'EOF'
+TS_IP="100.64.0.1"; PORT=7777; WORKSPACE="/home/claude/vault"
+INSTALL_DIR="/home/claude/claude-cron"; DISCORD_URL=""; WEBHOOK_BASE_URL="https://srv.ts.net"
+FLAG_ONLY_PULS=0
+print_summary
+EOF
+  out2="$(run_snippet "$snippet")"
+  if [[ "$out" == *"lekcji o Pulsie"* ]] && [[ "$out" == *"http://100.64.0.1:7777"* ]] \
+    && [[ "$out" != *"/webhook/"* ]] && [[ "$out" == *"ZABLOKOWANY"* ]] \
+    && [[ "$out2" == *"https://srv.ts.net/webhook/<token>"* ]] \
+    && [[ "$out2" == *"lekcji o Pulsie"* ]]; then
+    pass "print_summary: bez Funnela adnotacja o lekcji, zero webhooków; z Funnelem sekcja webhooków"
+  else
+    problem "print_summary: złe warianty podsumowania (out: $out, out2: $out2)"
+  fi
+}
+
+# --- Test 56: setup_funnel — N → zero wywołań tailscale; T → funnel --bg + wpis do unitu + restart ---
+test_setup_funnel() {
+  # N (default bez tty): rejestrator tailscale nie może zobaczyć ŻADNEGO wywołania.
+  local snippet="$SANDBOX/t-funnel.sh" log="$SANDBOX/funnel-n.log" out rc
+  cat > "$snippet" <<EOF
+PORT=7777
+tailscale() { echo "TS \$*" >> "$log"; }
+setup_funnel
+echo "URL=[\$WEBHOOK_BASE_URL]"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -s "$log" ] && [[ "$out" == *"URL=[]"* ]]; then
+    pass "setup_funnel: odpowiedź N (default) → zero wywołań tailscale funnel"
+  else
+    problem "setup_funnel: gałąź N zawiodła (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+  # T: funnel --bg + URL z parsera + linia WEBHOOK_BASE_URL przed
+  # SyslogIdentifier + daemon-reload/restart; drugi run bez duplikatu linii.
+  local log2="$SANDBOX/funnel-t.log" sysd="$SANDBOX/systemd-funnel" out2 rc2
+  mkdir -p "$sysd"
+  echo "t" > "$SANDBOX/tty-funnel"
+  cat > "$sysd/claude-cron.service" <<'UNIT'
+[Service]
+Environment=CLAUDE_CRON_PORT=7777
+StandardOutput=journal
+SyslogIdentifier=claude-cron
+UNIT
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/tty-funnel"
+PORT=7777
+SYSTEMD_DIR="$sysd"
+tailscale() {
+  echo "TS \$*" >> "$log2"
+  if [ "\$1" = "funnel" ] && [ "\$2" = "status" ]; then echo "https://srv123.tail456.ts.net/"; fi
+}
+systemctl() { echo "SC \$*" >> "$log2"; }
+sleep() { :; }
+setup_funnel
+setup_funnel
+echo "URL=[\$WEBHOOK_BASE_URL]"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  local unit="$sysd/claude-cron.service" pos_env="" pos_sys="" env_count=0
+  pos_env="$(grep -n '^Environment=WEBHOOK_BASE_URL=https://srv123.tail456.ts.net$' "$unit" 2>/dev/null | cut -d: -f1)"
+  pos_sys="$(grep -n 'SyslogIdentifier' "$unit" 2>/dev/null | cut -d: -f1)"
+  env_count="$(grep -c 'WEBHOOK_BASE_URL' "$unit" 2>/dev/null)"
+  if [ "$rc2" -eq 0 ] && [[ "$out2" == *"URL=[https://srv123.tail456.ts.net]"* ]] \
+    && grep -q "TS funnel --bg 7777" "$log2" 2>/dev/null \
+    && grep -q "SC restart claude-cron" "$log2" 2>/dev/null \
+    && grep -q "SC daemon-reload" "$log2" 2>/dev/null \
+    && [ "$env_count" = "1" ] && [ -n "$pos_env" ] && [ -n "$pos_sys" ] && [ "$pos_env" -lt "$pos_sys" ]; then
+    pass "setup_funnel: T → funnel --bg + WEBHOOK_BASE_URL przed SyslogIdentifier + restart; re-run bez duplikatu"
+  else
+    problem "setup_funnel: gałąź T zawiodła (rc=$rc2, env_count=$env_count, unit: $(cat "$unit" 2>/dev/null), log: $(cat "$log2" 2>/dev/null), output: $out2)"
+  fi
+}
+
+# --- Test 57: weryfikacja finału — is_sync_complete, pętla pierwszego synca, verify_services ---
+test_verify_services_and_sync_wait() {
+  local snippet="$SANDBOX/t-sync.sh" cnt="$SANDBOX/sync-cnt" out rc out2 rc2 out3
+  cat > "$snippet" <<'EOF'
+r_ing=0; is_sync_complete "Status: syncing 42%" || r_ing=$?
+r_ed=0;  is_sync_complete "Status: Fully synced" || r_ed=$?
+r_utd=0; is_sync_complete "vault up to date" || r_utd=$?
+echo "ING=$r_ing ED=$r_ed UTD=$r_utd"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"ING=1 ED=0 UTD=0"* ]]; then
+    pass "is_sync_complete: 'syncing' → jeszcze nie; 'synced'/'up to date' → gotowe"
+  else
+    problem "is_sync_complete: złe rozpoznanie (output: $out)"
+  fi
+  # Pętla: 3. odpytanie zwraca synced → sukces bez wyczerpania okna.
+  echo 0 > "$cnt"
+  cat > "$snippet" <<EOF
+sleep() { :; }
+run_as_claude() {
+  local c; c=\$(cat "$cnt"); c=\$((c+1)); echo \$c > "$cnt"
+  if [ \$c -ge 3 ]; then echo "Status: fully synced"; else echo "Status: syncing"; fi
+}
+wait_for_first_sync
+echo "PO_SYNC"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  if [ "$rc2" -eq 0 ] && [[ "$out2" == *"Pierwszy sync zakończony"* ]] \
+    && [[ "$out2" == *"PO_SYNC"* ]] && [ "$(cat "$cnt")" = "3" ]; then
+    pass "wait_for_first_sync: sukces przy 3. odpytaniu sync-status"
+  else
+    problem "wait_for_first_sync: happy path zawiódł (rc=$rc2, próby=$(cat "$cnt" 2>/dev/null), output: $out2)"
+  fi
+  # Timeout: sync w kółko trwa → warn (nie fail) + instrukcja; verify_services
+  # przy obu serwisach active raportuje oba.
+  cat > "$snippet" <<'EOF'
+sleep() { :; }
+run_as_claude() { echo "Status: syncing"; }
+wait_for_first_sync
+echo "PO_TIMEOUT"
+FLAG_ONLY_PULS=0
+systemctl() { return 0; }
+run_as_claude() { echo "fully synced"; }
+verify_services
+EOF
+  out3="$(run_snippet "$snippet")"
+  if [ "$?" -eq 0 ] && [[ "$out3" == *"PO_TIMEOUT"* ]] && [[ "$out3" == *"jeszcze trwa"* ]] \
+    && [[ "$out3" == *"Serwis claude-cron działa"* ]] \
+    && [[ "$out3" == *"Serwis obsidian-sync działa"* ]]; then
+    pass "wait_for_first_sync: timeout → warn bez faila; verify_services raportuje oba serwisy"
+  else
+    problem "weryfikacja finału zawiodła (output: $out3)"
+  fi
+}
+
+# --- Test 58: sekwencja main() fazy 5+6 — auto-update → weryfikacja → dowód → Funnel → podsumowanie ---
+test_main_final_phase_order() {
+  # Funnel MUSI być NA SAMYM KOŃCU (przed samym podsumowaniem) — spec FAZA 6;
+  # plik-dowód pomijany przy --only-puls (decyzja w main(), rejestrator widzi
+  # realny brak wywołania).
+  local snippet="$SANDBOX/t-final-seq.sh" out calls out2
+  write_recorder_snippet "$snippet" ""
+  out="$(run_snippet "$snippet")"
+  calls="$(grep '^CALL ' <<<"$out" || true)"
+  local p_fw p_au p_vs p_note p_fun p_sum
+  p_fw="$(grep -n '^CALL configure_firewall$' <<<"$calls" | cut -d: -f1)"
+  p_au="$(grep -n '^CALL setup_auto_update$' <<<"$calls" | cut -d: -f1)"
+  p_vs="$(grep -n '^CALL verify_services$' <<<"$calls" | cut -d: -f1)"
+  p_note="$(grep -n '^CALL create_welcome_note$' <<<"$calls" | cut -d: -f1)"
+  p_fun="$(grep -n '^CALL setup_funnel$' <<<"$calls" | cut -d: -f1)"
+  p_sum="$(grep -n '^CALL print_summary$' <<<"$calls" | cut -d: -f1)"
+  if [ -n "$p_fw" ] && [ -n "$p_au" ] && [ -n "$p_vs" ] && [ -n "$p_note" ] && [ -n "$p_fun" ] && [ -n "$p_sum" ] \
+    && [ "$p_fw" -lt "$p_au" ] && [ "$p_au" -lt "$p_vs" ] && [ "$p_vs" -lt "$p_note" ] \
+    && [ "$p_note" -lt "$p_fun" ] && [ "$p_fun" -lt "$p_sum" ] \
+    && [ "$p_sum" = "$(wc -l <<<"$calls" | tr -d ' ')" ]; then
+    pass "main(): UFW → auto-update → weryfikacja → plik-dowód → Funnel → podsumowanie (Funnel na końcu)"
+  else
+    problem "main(): zła sekwencja finału (fw=$p_fw au=$p_au vs=$p_vs note=$p_note fun=$p_fun sum=$p_sum, calls: $calls)"
+  fi
+  write_recorder_snippet "$snippet" "--only-puls"
+  out2="$(run_snippet "$snippet")"
+  if [[ "$out2" != *"CALL create_welcome_note"* ]] \
+    && [[ "$out2" == *"CALL verify_services"* ]] \
+    && [[ "$out2" == *"CALL setup_funnel"* ]] \
+    && [[ "$out2" == *"CALL print_summary"* ]]; then
+    pass "main --only-puls: plik-dowód pominięty, weryfikacja/Funnel/podsumowanie obecne"
+  else
+    problem "main --only-puls: złe wywołania finału (output: $out2)"
+  fi
+}
+
+echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje), fazy 4 (blok 5 loginów), fazy 5 (Obsidian + unity systemd) i fazy 6 (auto-update/weryfikacja/dowód/Funnel/podsumowanie) =="
 test_syntax
 test_flags_port
 test_flags_unknown
@@ -1602,6 +1906,13 @@ test_setup_vault_git_origin_mismatch
 test_main_obsidian_order_and_skip
 test_unit_rollback_only_when_created
 test_obsidian_sync_service_restart_on_rerun
+test_build_cron_cmd
+test_setup_auto_update
+test_welcome_note
+test_print_summary_funnel_variants
+test_setup_funnel
+test_verify_services_and_sync_wait
+test_main_final_phase_order
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

@@ -1,7 +1,7 @@
 # Kontekst: Połączony instalator VPS (Obsidian + Puls)
 
 Branch: `feature/instalator-vps-obsidian-puls`
-Ostatnia aktualizacja: 2026-07-02 (Faza 5 ukończona)
+Ostatnia aktualizacja: 2026-07-02 (Faza 6 ukończona)
 
 ## Stan implementacji
 
@@ -10,7 +10,8 @@ Ostatnia aktualizacja: 2026-07-02 (Faza 5 ukończona)
 - **Faza 3 (IU3) — DONE**: sekcja narzędzi jako funkcje `install_*` w `main()` PRZED `login_block` (`install_base_packages` z guard-first per binarka + fail-fast weryfikacja, `install_node` z nodesource bez zmian progów, `install_claude_cli` natywnie przez claude.ai/install.sh zamiast npm, `install_ob` pomijane przy `--only-puls` w `main()`, `install_tailscale` przeniesiony z końca skryptu — samo `tailscale up` zostaje do IU4). `push_rollback "userdel -r claude"` i `npm rm -g obsidian-headless` tylko dla stanu utworzonego w tym runie. Cienki `login_block()` (wrapper na `login_claude_cli`) wyznacza granicę FAZY 2/3 dla testu sekwencji. Harness 31/31 PASS (rejestrator wywołań `main()`), grep `@anthropic-ai/claude-code` → 0 linii, suite projektu 163/163 PASS.
 - **Faza 4 (IU4) — DONE**: `login_block()` rozpięty na 5 pauz (`login_claude_cli` → `login_gh` → `login_ob` → `login_ob_sync` → `login_tailscale`), każda za swoim guardem `has_*` (resume wskakuje w brakujący login), pauzy 3–4 pomijane przy `--only-puls`. Na wejściu bloku `drop_rollback "userdel -r claude"` (fix P2-1 z review fazy 3) + `disable_rollback`, na wyjściu `enable_rollback`. PAUZA 2 po loginie robi `gh auth setup-git` + `validate_repo_access` (`gh repo view`, retry-in-place z ponownym pytaniem o repo, 3 próby) — także przy resume z guardem gh=zrobione. Wartości usera w komendach `su -c` przez `printf %q`. `setup_tailscale` zredukowany do odczytu TS_IP (interaktywne `tailscale up` = PAUZA 5). Dodane testy 32–46 (w tym testy jednostkowe `install_*` — fix P2-2). Harness 46/46 PASS, suite projektu 163/163 PASS.
 - **Faza 5 (IU5) — DONE**: cała bezobsługowa część Obsidian+Puls jako funkcje pod trapem ERR: `configure_obsidian_file_types` (sync-config → weryfikacja `verify_ob_file_types` na `unsupported` w `sync-status`), `setup_vault_git` (sparse checkout `.claude` → `~/vault-git`: `git clone --filter=blob:none --sparse` + `git sparse-checkout set .claude`, guard `.git` → `git pull`, katalog bez `.git` → backup), `link_vault_claude` (`ln -sfn`, idempotentny), `create_obsidian_sync_service` (unit z `Restart=always`, `User=claude`, `ExecStartPre` lock cleanup). Puls: `build_puls_env_lines` wydzielone jako czysta funkcja (WORKSPACE/PORT/PATH, DISCORD warunkowo, bez `WEBHOOK_BASE_URL`). Kolejność twarda w `main()` (sync-config PRZED `enable --now obsidian-sync`, test sekwencji), rollback unit-plików tylko gdy utworzone w tym runie (`SYSTEMD_DIR` jako DI). Harness 61/61 PASS, suite projektu 163/163 PASS.
-- Fazy 6–7: do zrobienia.
+- **Faza 6 (IU6) — DONE**: sieć + finał przebiegu. UFW jako `configure_firewall` (bez zmian merytorycznych), auto-update ZAWSZE z jedynym opt-outem `--no-auto-update` (`setup_auto_update`: sudoers NOPASSWD + node-guard heredoc + cron **02:00** bez zmiany godziny; `build_cron_cmd` jako czysta funkcja z `printf %q` — fix P3 cytowania `"$VAULT_GIT"`; `--only-puls` → bez segmentu vault-git; cały łańcuch crona logowany do `claude-cron-update.log`), weryfikacja serwisów `systemctl is-active` ×2 + `wait_for_first_sync` (pętla do 90 s, timeout = warn z instrukcją, nie fail), plik-dowód `~/vault/Witaj-z-VPS.md` (PL, pomijany przy `--only-puls`), Funnel jako opcjonalne pytanie `[t/N]` NA KOŃCU (T → `tailscale funnel --bg` → URL z fallbackiem-pytaniem → `add_webhook_env_line` przepisuje unit + daemon-reload + restart; N → nic), podsumowanie PL (`print_summary`: dashboard z adnotacją o lekcji, sekcja webhooków tylko z Funnelem). Rollbacki per-run dla sudoers i wpisu crona (konwencja z review fazy 5), `SUDOERS_DIR` jako DI. Harness 78/78 PASS, suite projektu 163/163 PASS.
+- Faza 7: do zrobienia.
 
 ## Powiązane pliki
 
@@ -80,6 +81,14 @@ Ostatnia aktualizacja: 2026-07-02 (Faza 5 ukończona)
 33. **Rollback unitów warunkowy per run**: `systemctl disable --now` + `rm` unit-pliku rejestrowane na stosie TYLKO gdy plik powstał w tym runie (guard `[ -f ]` przed zapisem); pady automatów (`ob sync-config`, `git clone`, `systemctl`) idą przez trap ERR i odwijają stos. Weryfikacja file-types failuje przez `fail` (exit 1 bez odwijania stosu) — znane P3-1 z review fazy 1, poza scope IU5.
 34. **`MAIN_COMPONENT_FNS` w harnessie rozszerzone o 4 nowe funkcje-komponenty** — rejestrator sekwencji `main()` stubuje komponenty (inaczej testy odpaliłyby realne `su`/`systemctl`); żaden istniejący test niezmodyfikowany.
 
+### Decyzje z Fazy 6 (implementacja IU6)
+
+35. **`add_webhook_env_line` (czysta funkcja przepisująca treść unitu) zamiast `sed -i "/SyslogIdentifier/i …"`** — składnia insert to GNU sed, a harness biega na macOS (BSD sed); bonus: stara linia `WEBHOOK_BASE_URL` usuwana przed wstawieniem = idempotentny re-run z Funnelem bez duplikatów.
+36. **`setup_auto_update` bez pytań interaktywnych** — spec FAZA 6 wymaga auto-update ZAWSZE z jedynym opt-outem `--no-auto-update`; ścieżka vault-git na sztywno `$CLAUDE_HOME/vault-git` (ustalona w IU5), przy `--only-puls` segment pomijany.
+37. **Cały łańcuch CRON_CMD z redirectem `{ …; } >> claude-cron-update.log 2>&1`** — dotychczasowy kod logował tam wyłącznie node-guard, nie pady pulla; redirect domyka literalny wymóg spec-u („pad pulla logowany").
+38. **Rollbacki per-run dla sudoers i wpisu crona** (`push_rollback` PRZED zapisem, tylko gdy stan powstał w tym runie) — plan mówił „jak dziś" (bez rollbacku), ale konwencja z review fazy 5 obowiązuje Unit 6+; `SUDOERS_DIR=/etc/sudoers.d` jako DI dla testów (wzorzec `SYSTEMD_DIR`).
+39. **`is_sync_complete` (pętla 90 s) i `parse_funnel_url` to świadome heurystyki** — dokładne stringi wyjść `ob sync-status` i `tailscale funnel status` odroczone w planie; fallbacki: timeout = warn z instrukcją, brak URL = pytanie do usera.
+
 ## Odroczone do implementacji
 
 - Spike operatora `su - claude -c "cmd" < /dev/tty` pod prawdziwym pipe (GATE fazy 4 pozostaje otwarty; implementacja jednopunktowa — patrz decyzja 26).
@@ -139,3 +148,13 @@ Kluczowe wnioski:
 - **OP-1 [P1 OPERATOR] blokuje merge, nie kontynuację faz**: spike su+/dev/tty pod prawdziwym pipe + manualny przebieg 5 pauz na czystym VPS — jedyne otwarte weryfikacje R2/R6; architektura przygotowana jednopunktowo (redirect w `run_login`, forma su w `login_cmd_as_claude`), z zastrzeżeniem gołych `su` poza loginami (clone/npm/cron).
 - `run_verify` — dopisać kontrakt dispatchu (goła nazwa funkcji BEZ argumentów vs string BEZ funkcji instalatora) zanim Unit 5/6 wpadną w pułapkę; rc 127 w gałęzi `bash -c` traktować jako błąd instalatora, nie fail weryfikacji.
 - Konwencja na Unit 5+: magic stringi rollbacku (`userdel -r`) do wspólnego helpera; kroki automatyczne poza pauzą na poziom `login_block`/`main`, nie wewnątrz funkcji `login_*`.
+
+## Review fazy 5 (2026-07-02)
+
+Raport: `docs/active/instalator-vps-obsidian-puls/review-faza-5.md`. Gate: ⚠️ ZASTRZEŻENIA — 0 × P1, 4 × P2, 16 × P3, 3 × OPERATOR (scalone z 7 zgłoszeń). Oba automatyzowalne checkboxy `Weryfikacja:` fazy 5 przeszły (harness 61/61 PASS; test kolejności sync-config → enable = Test 50 harnessu); checkbox [Manual] Unit 5 przeniesiony do „Operator checklist faza 5".
+
+Kluczowe wnioski:
+- **Idempotencja gałęzi re-run wymaga post-conditions, nie tylko guardów**: `.git → git pull` bez sprawdzenia originu (P2-2), bez ponowienia `sparse-checkout set` (P3) i bez fail-fast `[ -d .claude ]` (P2-1) kończy się wiszącym symlinkiem i skillami z niewłaściwego źródła przy raporcie „OK" — resume musi weryfikować STAN końcowy, nie tylko istnienie artefaktu-markera.
+- **`systemctl enable --now` ≠ restart**: re-run z nowym unit-plikiem/sync-configiem zostawia działający stary proces (P2-3) — po nadpisaniu unitu zawsze `systemctl restart` (symetria z unitem Pulsa).
+- **Guard „cudzego stanu" musi być spójny w obrębie fazy**: `setup_vault_git` backupuje nie-gitowy katalog, `link_vault_claude` wywala cały run w rollback na realnym `~/vault/.claude` (P2-4) — wzorzec backup-mv stosować przy każdej kolizji z istniejącym stanem.
+- Konwencja na Unit 6+: nie tłumić stderr+rc zewnętrznych CLI w jednej konstrukcji (`2>/dev/null || true`); `push_rollback` PRZED akcją zapisu (wpisy idempotentne); testy z pełnym stubem `run_as_claude` = test kształtu komendy — dokładać asercje treści (`--file-types …unsupported`) i post-conditions.

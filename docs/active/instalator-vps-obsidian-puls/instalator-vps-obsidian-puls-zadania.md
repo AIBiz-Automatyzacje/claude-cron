@@ -149,15 +149,15 @@ Ostatnia aktualizacja: 2026-07-02
 
 ## Faza 6: Sieć + finał (IU6)
 
-- [ ] UFW: sekcja bez zmian merytorycznych (allow 22 pierwsze, deny `$PORT`, idempotencja)
-- [ ] Auto-update ZAWSZE (opt-out `--no-auto-update`): sudoers NOPASSWD + node-guard heredoc + cron **02:00** (bez zmiany godziny); fix P3: cytowanie `"$VAULT_GIT"` w CRON_CMD; `--only-puls` → bez segmentu vault-git
-- [ ] Weryfikacja serwisów: `systemctl is-active` ×2; pętla do 90 s na pierwszy sync
-- [ ] Plik-dowód: heredoc → `~/vault/Witaj-z-VPS.md` (treść PL ze spec-u) + komunikat „otwórz Obsidiana na telefonie" (pomijany przy `--only-puls`)
-- [ ] Funnel: `ask_tty` „[t/N]" NA KOŃCU; T → `tailscale funnel --bg $PORT` → URL (fallback: zapytaj) → `sed -i` WEBHOOK_BASE_URL + daemon-reload + restart; N → nic
-- [ ] Podsumowanie PL: dashboard z adnotacją „po lekcji o Pulsie", webhooki (jeśli Funnel), komendy, security-nota
-- [ ] Test: budowa CRON_CMD (czysta funkcja) — ścieżka ze spacją cytowana; `--only-puls` → bez vault-git; `--no-auto-update` → cron nie instalowany
-- [ ] Test: treść pliku-dowodu (czysta funkcja) — nagłówek + PL treść; podsumowanie: z Funnel → sekcja webhooków, bez → adnotacja o lekcji
-- [ ] Test: Funnel=N → zero wywołań `tailscale funnel` (rejestrator)
+- [x] UFW: sekcja bez zmian merytorycznych (allow 22 pierwsze, deny `$PORT`, idempotencja)
+- [x] Auto-update ZAWSZE (opt-out `--no-auto-update`): sudoers NOPASSWD + node-guard heredoc + cron **02:00** (bez zmiany godziny); fix P3: cytowanie `"$VAULT_GIT"` w CRON_CMD (`printf %q` w czystej `build_cron_cmd`); `--only-puls` → bez segmentu vault-git
+- [x] Weryfikacja serwisów: `systemctl is-active` ×2; pętla do 90 s na pierwszy sync (`wait_for_first_sync`, timeout = warn, nie fail)
+- [x] Plik-dowód: heredoc → `~/vault/Witaj-z-VPS.md` (treść PL ze spec-u) + komunikat „otwórz Obsidiana na telefonie" (pomijany przy `--only-puls`)
+- [x] Funnel: `ask_tty` „[t/N]" NA KOŃCU; T → `tailscale funnel --bg $PORT` → URL (fallback: zapytaj) → wpis WEBHOOK_BASE_URL do unitu (przepisanie treści zamiast `sed -i "/i"` — składnia GNU, harness biega na BSD sed; stara linia usuwana = idempotentny re-run) + daemon-reload + restart; N → nic
+- [x] Podsumowanie PL: dashboard z adnotacją „po lekcji o Pulsie", webhooki (jeśli Funnel), komendy, security-nota
+- [x] Test: budowa CRON_CMD (czysta funkcja) — ścieżka ze spacją cytowana; `--only-puls` → bez vault-git; `--no-auto-update` → cron nie instalowany (testy 52–53)
+- [x] Test: treść pliku-dowodu (czysta funkcja) — nagłówek + PL treść; podsumowanie: z Funnel → sekcja webhooków, bez → adnotacja o lekcji (testy 54–55)
+- [x] Test: Funnel=N → zero wywołań `tailscale funnel` (rejestrator) (test 56; bonus: T → wpis do unitu + restart, test 57 weryfikacji, test 58 sekwencji finału main())
 - [ ] Test: [Manual] telefon: notatka „Witaj z VPS" dochodzi przez Sync; Funnel=T → `curl https://<funnel-url>/webhook/test` odpowiada (nie timeout)
 - [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje CRON_CMD/podsumowania/pliku-dowodu PASS
 - [ ] Weryfikacja: `grep -n '0 2 \* \* \*' scripts/install-vps.sh` — godzina crona 02:00 niezmieniona
