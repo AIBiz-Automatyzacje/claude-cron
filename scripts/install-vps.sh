@@ -339,20 +339,28 @@ drop_rollback() {
 
 # Trap ERR: odwija stos w ODWROTNEJ kolejności (LIFO) i wypisuje każdy
 # cofnięty krok. Przy wyłączonym rollbacku (blok loginów) tylko kończy
-# z oryginalnym kodem błędu.
+# z oryginalnym kodem błędu (run_login/halt_leave_partial mają własne
+# komunikaty). Przy PUSTYM stosie komunikat + instrukcja resume zostają —
+# bez tego pad przed pierwszym push_rollback (np. apt w install_node)
+# kończy się gołym błędem narzędzia i promptem, bez słowa od instalatora.
 on_err() {
   local status=$?
   trap - ERR
-  if [ "$ROLLBACK_ENABLED" != "1" ] || [ "${#ROLLBACK_STACK[@]}" -eq 0 ]; then
+  if [ "$ROLLBACK_ENABLED" != "1" ]; then
     exit "$status"
   fi
   echo ""
-  warn "Błąd instalacji — cofam kroki wykonane w tym uruchomieniu:"
-  local i
-  for (( i=${#ROLLBACK_STACK[@]}-1; i>=0; i-- )); do
-    warn "  ↩ ${ROLLBACK_STACK[i]}"
-    bash -c "${ROLLBACK_STACK[i]}" || warn "    (nie udało się cofnąć: ${ROLLBACK_STACK[i]})"
-  done
+  warn "Instalacja przerwana błędem (kod $status)."
+  if [ "${#ROLLBACK_STACK[@]}" -gt 0 ]; then
+    warn "Cofam kroki wykonane w tym uruchomieniu:"
+    local i
+    for (( i=${#ROLLBACK_STACK[@]}-1; i>=0; i-- )); do
+      warn "  ↩ ${ROLLBACK_STACK[i]}"
+      bash -c "${ROLLBACK_STACK[i]}" || warn "    (nie udało się cofnąć: ${ROLLBACK_STACK[i]})"
+    done
+  fi
+  warn "Napraw przyczynę (komunikat wyżej) i wklej ponownie tę samą komendę instalacji — re-run pominie gotowe kroki:"
+  warn "  $RESUME_ONE_LINER"
   exit "$status"
 }
 
@@ -595,6 +603,24 @@ is_node_supported() {
 # po pierwszej pauzie interaktywnej nie instaluje się już żadne narzędzie
 # (egzekwowane testem sekwencji w harnessie). Guard-first: nic nie instalujemy
 # ponownie i nie rejestrujemy rollbacku dla stanu zastanego sprzed runa.
+
+# Świeży VPS: unattended-upgrades budzi się po pierwszym `apt-get update`
+# i trzyma locka dpkg przez wiele minut (dziesiątki pakietów z pierwszego
+# boota) — apt bez timeoutu pada od razu ("E: Unable to acquire the dpkg
+# frontend lock"). APT_CONFIG (env, dziedziczony przez procesy potomne)
+# dokłada DPkg::Lock::Timeout także do apt-get wywoływanych WEWNĄTRZ
+# zewnętrznych skryptów (nodesource setup_22.x) — flaga `-o` na naszych
+# wywołaniach nie objęłaby ich. Plik tymczasowy jest ADDYTYWNY: apt czyta
+# go zamiast /etc/apt/apt.conf (na Ubuntu zwykle nieobecny), a apt.conf.d/
+# wciąż normalnie.
+APT_LOCK_TIMEOUT_SECONDS=900
+
+setup_apt_lock_wait() {
+  local conf
+  conf="$(mktemp)"
+  printf 'DPkg::Lock::Timeout "%s";\n' "$APT_LOCK_TIMEOUT_SECONDS" > "$conf"
+  export APT_CONFIG="$conf"
+}
 
 # Pakiety bazowe jednym apt (git/curl/cron/gh; gh jest w Ubuntu universe).
 # ca-certificates dokładane przy każdej instalacji brakujących — nie ma
@@ -1882,6 +1908,7 @@ main() {
   # powrotu do instalacji pakietów. Decyzja o pominięciu kroków Obsidianowych
   # zapada TUTAJ (nie wewnątrz install_ob) — rejestrator wywołań w testach
   # widzi wtedy realny brak wywołania, nie early-return.
+  setup_apt_lock_wait
   install_base_packages
   install_node
   ensure_claude_user

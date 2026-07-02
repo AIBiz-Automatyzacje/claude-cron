@@ -605,7 +605,7 @@ EOF
 # komponent podmieniona na stub echo "CALL <nazwa>" — main wykonuje się bez
 # side-effectów, a harness bada KOLEJNOŚĆ i OBECNOŚĆ wywołań (DI jak w t.23).
 MAIN_COMPONENT_FNS="print_banner run_preflight resolve_install_paths collect_config \
-apply_timezone install_base_packages install_node ensure_claude_user ensure_workspace \
+apply_timezone setup_apt_lock_wait install_base_packages install_node ensure_claude_user ensure_workspace \
 install_claude_cli install_ob install_tailscale login_block \
 configure_obsidian_file_types setup_vault_git link_vault_claude \
 create_obsidian_sync_service clone_repo \
@@ -2243,6 +2243,73 @@ EOF
   fi
 }
 
+# --- Test 67: on_err z PUSTYM stosem rollbacku — komunikat + resume, nie cichy exit
+# (realny pad z VPS 2026-07-02: unattended-upgrades ubił apt w install_node PRZED
+# pierwszym push_rollback → user dostał goły błąd apt i prompt, zero instrukcji) ---
+test_on_err_empty_stack_message() {
+  local snippet="$SANDBOX/t-onerr-empty.sh" out rc
+  cat > "$snippet" <<'EOF'
+trap on_err ERR
+false
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -ne 0 ] && [[ "$out" != *"NIEOSIAGALNE"* ]] \
+    && [[ "$out" == *"przerwana błędem"* ]] && [[ "$out" == *"curl -fsSL"* ]]; then
+    pass "on_err: pusty stos → komunikat błędu + one-liner resume (nie cichy exit)"
+  else
+    problem "on_err: pusty stos kończy bez komunikatu/resume (rc=$rc, out: $out)"
+  fi
+
+  # Blok loginów (rollback wyłączony): cisza ZOSTAJE — run_login/halt_leave_partial
+  # mają własne komunikaty, podwójny wydruk by je zaszumił.
+  local snippet2="$SANDBOX/t-onerr-disabled.sh" out2 rc2
+  cat > "$snippet2" <<'EOF'
+trap on_err ERR
+disable_rollback
+false
+EOF
+  out2="$(run_snippet "$snippet2")"
+  rc2=$?
+  if [ "$rc2" -ne 0 ] && [[ "$out2" != *"przerwana błędem"* ]]; then
+    pass "on_err: rollback wyłączony → bez komunikatu (komunikaty ma blok loginów)"
+  else
+    problem "on_err: rollback wyłączony a komunikat się pojawił (rc=$rc2, out: $out2)"
+  fi
+}
+
+# --- Test 68: setup_apt_lock_wait — eksportuje APT_CONFIG z DPkg::Lock::Timeout;
+# main() woła go PRZED pierwszym apt (install_base_packages) ---
+test_setup_apt_lock_wait() {
+  local snippet="$SANDBOX/t-apt-lock.sh" out rc
+  cat > "$snippet" <<'EOF'
+setup_apt_lock_wait
+[ -n "${APT_CONFIG:-}" ] || { echo "BRAK_EXPORTU"; exit 1; }
+cat "$APT_CONFIG"
+bash -c 'cat "$APT_CONFIG"' | grep -q 'DPkg::Lock::Timeout' && echo "DZIEDZICZONY"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *'DPkg::Lock::Timeout "900";'* ]] \
+    && [[ "$out" == *"DZIEDZICZONY"* ]]; then
+    pass "setup_apt_lock_wait: APT_CONFIG z timeoutem 900 s, widoczny w procesie potomnym"
+  else
+    problem "setup_apt_lock_wait: brak eksportu/timeoutu (rc=$rc, out: $out)"
+  fi
+
+  # Sekwencja main(): timeout locka MUSI być ustawiony przed pierwszym apt.
+  local snippet2="$SANDBOX/t-apt-lock-seq.sh" out2 calls
+  write_recorder_snippet "$snippet2" ""
+  out2="$(run_snippet "$snippet2")"
+  calls="$(grep '^CALL ' <<<"$out2" || true)"
+  if sed -n '1,/^CALL install_base_packages$/p' <<<"$calls" | grep -q '^CALL setup_apt_lock_wait$'; then
+    pass "main(): setup_apt_lock_wait wywołany przed install_base_packages"
+  else
+    problem "main(): setup_apt_lock_wait NIE poprzedza install_base_packages (calls: $calls)"
+  fi
+}
+
 echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje), fazy 4 (blok 5 loginów), fazy 5 (Obsidian + unity systemd), fazy 6 (auto-update/weryfikacja/dowód/Funnel/podsumowanie) i fazy 7 (reset: potwierdzenie TAK, guardy ścieżek, idempotencja) =="
 test_syntax
 test_flags_port
@@ -2314,6 +2381,8 @@ test_reset_paths_guards
 test_reset_idempotent_on_clean_system
 test_reset_full_flow_order
 test_disable_funnel
+test_on_err_empty_stack_message
+test_setup_apt_lock_wait
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"
