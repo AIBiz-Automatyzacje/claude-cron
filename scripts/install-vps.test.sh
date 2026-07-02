@@ -2089,6 +2089,7 @@ has_user_claude() { return 1; }
 systemctl() { echo "systemctl \$*" >> "$log"; }
 userdel() { echo "userdel \$*" >> "$log"; }
 crontab() { return 1; }
+tailscale() { echo "tailscale \$*" >> "$log"; }
 run_reset
 echo "PO_RESECIE"
 EOF
@@ -2124,6 +2125,7 @@ check_root() { :; }
 has_user_claude() { return 0; }
 systemctl() { echo "systemctl \$*" >> "$log"; }
 userdel() { echo "userdel \$*" >> "$log"; }
+tailscale() { echo "tailscale \$*" >> "$log"; }
 crontab() {
   case "\$1" in
     -l) cat "\$CRONFILE" ;;
@@ -2134,19 +2136,110 @@ run_reset
 EOF
   out="$(run_snippet "$snippet")"
   rc=$?
-  local first_line last_line
+  local first_line second_line last_line
   first_line="$(head -1 "$log" 2>/dev/null)"
+  second_line="$(sed -n 2p "$log" 2>/dev/null)"
   last_line="$(tail -1 "$log" 2>/dev/null)"
   if [ "$rc" -eq 0 ] \
-    && [[ "$first_line" == *"disable --now obsidian-sync"* ]] \
+    && [[ "$first_line" == *"tailscale funnel reset"* ]] \
+    && [[ "$second_line" == *"disable --now obsidian-sync"* ]] \
     && grep -q 'disable --now claude-cron' "$log" \
     && [[ "$last_line" == *"userdel -r claude"* ]] \
     && [ ! -f "$sysd/obsidian-sync.service" ] && [ ! -f "$sysd/claude-cron.service" ] \
     && [ ! -f "$sud/claude-cron" ] \
     && grep -qF "$foreign" "$cronfile" && ! grep -q 'claude-cron' "$cronfile"; then
-    pass "run_reset: serwisy stop→pliki→cron→userdel; unit-pliki+sudoers usunięte, cudzy cron zachowany"
+    pass "run_reset: funnel off→serwisy stop→pliki→cron→userdel; unit-pliki+sudoers usunięte, cudzy cron zachowany"
   else
     problem "run_reset: pełny przebieg zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), cron: $(cat "$cronfile" 2>/dev/null), out: $out)"
+  fi
+}
+
+# --- Test 66: disable_funnel — brak tailscale = no-op; `funnel reset` z fallbackiem
+# na `--bg <port> off`; pad OBU składni → warn bez przerwania resetu; plan i summary
+# wymieniają Funnel jawnie (P2-1 z review fazy 7: persystentny Funnel po deinstalacji) ---
+test_disable_funnel() {
+  local snippet="$SANDBOX/t-funnel-disable.sh" log="$SANDBOX/funnel-disable.log" out rc
+
+  # Brak tailscale: pusty PATH → guard command -v pomija bez wywołań i bez błędu.
+  mkdir -p "$SANDBOX/empty-bin"
+  cat > "$snippet" <<EOF
+PATH="$SANDBOX/empty-bin"
+disable_funnel
+echo "PO_OFF"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"PO_OFF"* ]] && [[ "$out" == *"pomijam"* ]]; then
+    pass "disable_funnel: brak tailscale → no-op z komunikatem, rc 0"
+  else
+    problem "disable_funnel: gałąź bez tailscale zawiodła (rc=$rc, out: $out)"
+  fi
+
+  # Happy path: `funnel reset` przechodzi → fallback NIE jest wołany.
+  cat > "$snippet" <<EOF
+tailscale() { echo "tailscale \$*" >> "$log"; }
+disable_funnel
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"Funnel wyłączony"* ]] \
+    && grep -q '^tailscale funnel reset$' "$log" 2>/dev/null \
+    && ! grep -q 'off' "$log" 2>/dev/null; then
+    pass "disable_funnel: tailscale dostępny → funnel reset, bez fallbacku"
+  else
+    problem "disable_funnel: happy path zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), out: $out)"
+  fi
+
+  # Stary CLI: `funnel reset` pada → fallback `funnel --bg 7777 off`.
+  local log2="$SANDBOX/funnel-disable-old.log"
+  cat > "$snippet" <<EOF
+parse_flags --reset
+tailscale() {
+  echo "tailscale \$*" >> "$log2"
+  [ "\$2" = "reset" ] && return 1
+  return 0
+}
+disable_funnel
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"Funnel wyłączony"* ]] \
+    && grep -q -- '^tailscale funnel --bg 7777 off$' "$log2" 2>/dev/null; then
+    pass "disable_funnel: pad 'funnel reset' → fallback --bg <port> off"
+  else
+    problem "disable_funnel: fallback starej składni zawiódł (rc=$rc, log: $(cat "$log2" 2>/dev/null), out: $out)"
+  fi
+
+  # Pad OBU składni: warn z instrukcją ręczną, rc 0 — reset leci dalej.
+  cat > "$snippet" <<'EOF'
+parse_flags --reset
+tailscale() { return 1; }
+disable_funnel
+echo "PO_PADZIE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"PO_PADZIE"* ]] && [[ "$out" == *"tailscale funnel status"* ]]; then
+    pass "disable_funnel: pad obu składni → warn z komendą ręczną, reset kontynuuje"
+  else
+    problem "disable_funnel: pad obu składni przerwał reset lub brak warn (rc=$rc, out: $out)"
+  fi
+
+  # Jawne pozycje o Funnelu w planie resetu i podsumowaniu (dokładna lista R12).
+  cat > "$snippet" <<'EOF'
+parse_flags --reset
+resolve_install_paths
+print_reset_plan
+echo "===SUMMARY==="
+print_reset_summary
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  local plan_part="${out%%===SUMMARY===*}" summary_part="${out#*===SUMMARY===}"
+  if [ "$rc" -eq 0 ] && [[ "$plan_part" == *"Funnel"* ]] && [[ "$summary_part" == *"Funnel"* ]]; then
+    pass "print_reset_plan/print_reset_summary: Funnel wymieniony jawnie w obu listach"
+  else
+    problem "print_reset_plan/summary: brak jawnej pozycji o Funnelu (rc=$rc, out: $out)"
   fi
 }
 
@@ -2220,6 +2313,7 @@ test_reset_requires_tak
 test_reset_paths_guards
 test_reset_idempotent_on_clean_system
 test_reset_full_flow_order
+test_disable_funnel
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

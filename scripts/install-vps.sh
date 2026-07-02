@@ -1704,6 +1704,7 @@ print_reset_plan() {
     echo "  • plik $reset_path"
   done
   echo "  • wpis auto-update w crontabie roota (linie z '$SERVICE_NAME')"
+  echo "  • Tailscale Funnel — wyłączenie publicznego URL webhooków (jeśli był włączony)"
   echo "  • użytkownik '$CLAUDE_USER' wraz z całym $CLAUDE_HOME"
   echo "    (vault lokalny, vault-git, baza data/, loginy Claude/gh/ob)"
   echo ""
@@ -1711,7 +1712,8 @@ print_reset_plan() {
   echo "  tylko lokalną kopię; komputer i telefon nadal mają wszystko."
   echo ""
   echo "NIE zostanie usunięte (współdzielone z systemem):"
-  echo "  • Tailscale — urządzenie zostaje w tailnecie; odłącz je ręcznie:"
+  echo "  • Tailscale (sam daemon — Funnel zostanie wyłączony, patrz wyżej) —"
+  echo "    urządzenie zostaje w tailnecie; odłącz je ręcznie:"
   echo "      tailscale logout"
   echo "    i usuń maszynę w panelu: https://login.tailscale.com/admin/machines"
   echo "  • reguły UFW — port odblokujesz ręcznie: ufw delete deny $PORT/tcp"
@@ -1728,6 +1730,25 @@ confirm_reset() {
   if [ "$answer" != "TAK" ]; then
     info "Reset anulowany — nic nie zostało usunięte."
     exit 0
+  fi
+}
+
+# Wyłączenie Tailscale Funnel — `tailscale funnel --bg` z setup_funnel to
+# konfiguracja PERSYSTENTNA (przeżywa reboot): bez jawnego wyłączenia publiczny
+# URL https://<host>.ts.net dalej forwardowałby internet na port $PORT po
+# deinstalacji — cokolwiek później zbinduje ten port, byłoby wystawione
+# publicznie bez wiedzy usera. Best-effort: `funnel reset` (bieżący CLI)
+# z fallbackiem na starszą składnię `funnel --bg <port> off`; pad obu = warn
+# z komendą ręczną, nie ERR (konwencja resetu: usuń co się da i raportuj).
+disable_funnel() {
+  if ! command -v tailscale &>/dev/null; then
+    info "Brak tailscale — Funnel nie mógł być włączony, pomijam."
+    return 0
+  fi
+  if tailscale funnel reset 2>/dev/null || tailscale funnel --bg "$PORT" off 2>/dev/null; then
+    ok "Tailscale Funnel wyłączony (publiczny URL webhooków zamknięty)"
+  else
+    warn "Nie udało się wyłączyć Funnela — sprawdź: tailscale funnel status, wyłącz ręcznie: tailscale funnel reset"
   fi
 }
 
@@ -1797,7 +1818,8 @@ print_reset_summary() {
   echo "  VPS miał tylko lokalną kopię."
   echo ""
   echo -e "  ${BOLD}Pozostało na VPS (usuń ręcznie, jeśli chcesz):${NC}"
-  echo "    - Tailscale: tailscale logout, potem usuń maszynę w"
+  echo "    - Tailscale (Funnel został wyłączony — zweryfikuj: tailscale funnel status):"
+  echo "      tailscale logout, potem usuń maszynę w"
   echo "      https://login.tailscale.com/admin/machines"
   echo "    - UFW: ufw delete deny $PORT/tcp"
   echo "    - Node.js, gh, git, curl, cron (pakiety apt współdzielone z systemem)"
@@ -1808,8 +1830,9 @@ print_reset_summary() {
 
 # --reset (R12): pełna deinstalacja — osobna ścieżka wykonywana WCZEŚNIE
 # w main(), przed jakimkolwiek flow instalacyjnym; kończy skrypt. Kolejność:
-# lista → potwierdzenie TAK → stop/disable serwisów → pliki (unit-pliki,
-# sudoers) → daemon-reload → cron roota → userdel -r. Wszystkie kroki
+# lista → potwierdzenie TAK → wyłączenie Funnela (najpierw zamykamy publiczny
+# URL) → stop/disable serwisów → pliki (unit-pliki, sudoers) → daemon-reload
+# → cron roota → userdel -r. Wszystkie kroki
 # idempotentne (guardy [ -f ]/has_*) — reset na czystym systemie przechodzi.
 # Rollback wyłączony: reset przy błędzie niczego nie „cofa" — usuwa co się
 # da i raportuje, co zostało.
@@ -1820,6 +1843,7 @@ run_reset() {
   print_reset_plan
   confirm_reset
 
+  disable_funnel
   reset_services
   local reset_path
   build_reset_paths

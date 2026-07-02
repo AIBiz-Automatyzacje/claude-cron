@@ -184,10 +184,19 @@ Ostatnia aktualizacja: 2026-07-02
 - [x] Test: `--reset` bez potwierdzenia `TAK` → exit bez żadnego usunięcia (rejestrator)
 - [x] Test: lista usuwanych ścieżek — funkcja budująca listę bez pustych zmiennych (walidacja guardów; `build_reset_paths` wypełnia tablicę `RESET_PATHS` zamiast stdout — pętla `while read` złamałaby grep-strażnika `read` poza `ask_tty`)
 - [x] Test: `--reset` na czystym systemie (brak artefaktów) → przechodzi bez błędów (idempotentny)
-- [ ] Test: [Manual] pełny cykl na VPS: install → `--reset` → re-install od zera
-- [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje resetu PASS
-- [ ] Weryfikacja: `grep -n 'rm -rf' scripts/install-vps.sh` — każda linia z `${…:?}` lub poprzedzającym guardem
-- [ ] Weryfikacja: README zawiera sekcje one-liner/prerequisites/flagi (grep nagłówków)
+- [ ] Test: [Manual] pełny cykl na VPS: install → `--reset` → re-install od zera — wymaga operatora (checklist)
+- [x] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje resetu PASS (89/89 PASS, w tym testy 62–65, review fazy 7)
+- [x] Weryfikacja: `grep -n 'rm -rf' scripts/install-vps.sh` — każda linia z `${…:?}` lub poprzedzającym guardem (L1682/L1684 `${1:?}`/`${path:?}` w `remove_reset_path`; L990 to template unitu systemd spoza ścieżki resetu — review fazy 7)
+- [x] Weryfikacja: README zawiera sekcje one-liner/prerequisites/flagi (grep nagłówków) (L28/L32/L53/L83, review fazy 7)
+
+## Do poprawy po review fazy 7
+
+- [x] 🟠 [P2] **scripts/install-vps.sh:1713** — reset nie domyka Tailscale Funnel: `setup_funnel` włącza `tailscale funnel --bg $PORT` (konfiguracja persystentna, przeżywa reboot), a `--reset` ani go nie wyłącza (`run_reset` L1816), ani nie wymienia w sekcji „NIE zostanie usunięte" (`print_reset_plan`/`print_reset_summary` instruują tylko o `tailscale logout` i UFW). Funnel to artefakt Pulsa, nie zasób „współdzielony z systemem" — kursant, który zostawi Tailscale (domyślna ścieżka, bez `tailscale logout`), ma po deinstalacji nadal aktywny publiczny URL `https://<host>.ts.net` forwardujący internet na port 7777; cokolwiek później zbinduje ten port, będzie publicznie wystawione. Spec R12/plan wymaga DOKŁADNEJ listy usuwanego + jawnej listy nie-usuwanego. Fix: best-effort `tailscale funnel --bg off`/`tailscale funnel off` w `run_reset` (guard `command -v tailscale` + `|| true`) + jawna pozycja o Funnelu w obu listach (plan + summary)
+- [ ] 🟡 [P3] 11 pozycji P3 (KOD 8 / TEST 3, po scaleniu duplikatów) — pełna lista z fixami w `docs/active/instalator-vps-obsidian-puls/review-faza-7.md` (m.in.: instrukcja `ufw delete deny $PORT/tcp` z portem bieżącego runu zamiast portu z unitu (instalacja `--port 8888` + reset bez flagi = zły port w komunikacie); niespójny guard kolizji flag `--reset` w `parse_flags` (tylko `--only-puls`/`--no-obsidian` odrzucane); nazwa `reset_services` sugeruje restart, robi stop+disable; `build_reset_paths` wołane 2× w jednym przebiegu; bezwarunkowe `ok` po `systemctl disable || true`; nieakotwiczony `grep -v "$SERVICE_NAME"` kasuje cudze linie crontaba wspominające claude-cron; `|| true` na pipeline maskuje pad `crontab -`; globalny pakiet npm `obsidian-headless` nie usuwany i nie wymieniony na liście „NIE zostanie usunięte"; testy: brak testu `confirm_reset` bez tty (curl|bash bez terminala → anuluj), mock `crontab` w teście 65 nie loguje pozycji kroku cron, nietestowana gałąź padu `userdel -r` (warn + kontynuacja pod trap ERR))
+
+## Operator checklist faza 7
+
+- [ ] Operator: scenariusz [Manual] IU7 — pełny cykl install → `--reset` → re-install od zera na prawdziwym VPS (testy 62–65 mockują systemctl/userdel/crontab — rejestrator pokrywa sekwencję, nie zachowanie realnych narzędzi; plan L391 + Operator gate) — Operator action: na realnym Ubuntu VPS z zainstalowanym Pulsem uruchom prawdziwe `curl … | sudo bash -s -- --reset` (env-override `CLAUDE_CRON_REPO`/`CLAUDE_CRON_REF` z feature-brancha); potwierdź: plan resetu wypisany, potwierdzenie wymaga wpisania `TAK` z klawiatury, serwisy stop/disable + daemon-reload przechodzą, `userdel -r claude` usuwa konto (lub daje warn z instrukcją przy żywych procesach — reset kontynuuje), crontab roota bez wpisu Pulsa (cudze wpisy nietknięte), po czym ponowny one-liner instaluje od zera bez błędów; pokrywa się z pozycją „`--reset` → re-install od zera" w Operator gate
 
 ## Operator gate (całościowy, poza autopilotem)
 
