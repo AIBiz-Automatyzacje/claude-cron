@@ -74,9 +74,19 @@ Ostatnia aktualizacja: 2026-07-02
 - [x] Test: kolejność w `main()` — wszystkie `install_*` PRZED `login_block` (rejestrator wywołań)
 - [x] Test: `--only-puls` → kroki obsidianowe nie wywoływane (rejestrator)
 - [x] Test: rollback warunkowy — `has_user_claude`=istnieje → brak `userdel` na stosie
-- [ ] Test: [Manual] czysty Ubuntu: `command -v node gh claude ob tailscale` po Fazie 2 spec-u
-- [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje sekwencji i guardów PASS
-- [ ] Weryfikacja: `grep -n '@anthropic-ai/claude-code' scripts/install-vps.sh` → 0 linii
+- [ ] Test: [Manual] czysty Ubuntu: `command -v node gh claude ob tailscale` po Fazie 2 spec-u — wymaga operatora (checklist)
+- [x] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje sekwencji i guardów PASS (31/31 PASS, review fazy 3)
+- [x] Weryfikacja: `grep -n '@anthropic-ai/claude-code' scripts/install-vps.sh` → 0 linii (potwierdzone, review fazy 3)
+
+## Do poprawy po review fazy 3
+
+- [x] 🟠 [P2] **scripts/install-vps.sh:615** — rollback `userdel -r claude` pozostaje na stosie i aktywny PO bloku loginów (rollback wyłącza tylko `halt_leave_partial`). Na świeżej instalacji każdy ERR w późniejszych krokach automatycznych (`clone_repo` fail, `npm install` fail) odwija stos i wykonuje `userdel -r`, kasując `/home/claude` wraz z `~/.claude/.credentials.json` — niszczy świeżo wykonany interaktywny login OAuth Claude (sprzeczne z R6 leave-partial i decyzją 25). Fix: przed `userdel` w rollbacku sprawdzić brak credentiali (albo zdejmować/neutralizować wpis `userdel` po udanym loginie / po wejściu w `login_block`), ewentualnie `userdel` bez `-r` gdy credentials istnieją
+- [x] 🟠 [P2] **scripts/install-vps.test.sh:595** — nowe funkcje fazy 3 (`install_base_packages`, `install_claude_cli`, `install_ob`, `install_tailscale`) nie mają ŻADNYCH testów jednostkowych własnego zachowania — w testach sekwencji (29–31) są w całości stubowane. Dodać per funkcja: happy path guard-skip (narzędzie już obecne → zero wywołań apt/npm/curl), error case fail-fast (weryfikacja po instalacji pada → fail) oraz test warunkowego rollbacku `install_ob` (`push_rollback "npm rm -g obsidian-headless"` TYLKO gdy zainstalowano w tym runie — symetrycznie do testu 31 dla `userdel`). Wzorzec DI do stubowania granicy systemu już istnieje (testy 23, 28, 31)
+- [ ] 🟡 [P3] 17 pozycji P3 (KOD 13 / TEST 4, po scaleniu duplikatów) — pełna lista z fixami w `docs/active/instalator-vps-obsidian-puls/review-faza-3.md` (m.in.: pin wersji `obsidian-headless` + root lifecycle scripts; `install_ob` weryfikuje `ob` w PATH roota zamiast `run_as_claude`; `push_rollback` po weryfikacji zamiast po akcji mutującej; `install_tailscale` bez warn po timeout pętli + bezwarunkowy `sleep 2`; brak pipefail w `curl|bash` pod `su`; shadowing `local install_node`; duplikacja listy binarek; dwa szwy per-user (`run_as_claude` vs gołe `su`); test 29 tylko po konwencji nazw + brak asercji kolejności wewnątrz fazy; `MAIN_COMPONENT_FNS` bez asercji kompletności; doprecyzowanie R7 w planie)
+
+## Operator checklist faza 3
+
+- [ ] Operator: czysty Ubuntu VPS — po Fazie 2 spec-u komplet narzędzi obecny: `command -v node gh claude ob tailscale` (jedyna weryfikacja realnych zewnętrznych instalatorów: apt/universe `gh`, nodesource `setup_22.x`, `claude.ai/install.sh` jako user claude przez `su` z PATH `~/.local/bin`, `tailscale.com/install.sh` + start daemona, `npm -g obsidian-headless`; domyka otwarty checkbox [Manual] fazy 3) — Operator action: czysty Ubuntu VPS/kontener z rootem i siecią, prawdziwy `curl … | sudo bash` z env-override `CLAUDE_CRON_REPO`/`CLAUDE_CRON_REF` z feature-brancha; po dojściu instalatora do bloku loginów sprawdź `command -v node gh claude ob tailscale` (claude i ob także jako `su - claude -c "command -v claude ob"`) oraz `systemctl is-active tailscaled`; pokrywa się częściowo z Operator gate całościowym
 
 ## Faza 4: Blok 5 loginów (IU4)
 

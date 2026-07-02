@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Skryptowe testy install-vps.sh — flagi, ask_tty, run_login, rollback (faza 1),
 # preflight, guardy has_*, walidacja bloku pytań (faza 2) oraz sekwencja
-# narzędzi install_* przed login_block i warunkowy rollback userdel (faza 3).
+# narzędzi install_* przed login_block, warunkowy rollback userdel/npm rm,
+# neutralizacja userdel na granicy loginów i testy jednostkowe funkcji
+# install_* — guard-skip + fail-fast (faza 3).
 # Wzorzec z install.test.sh: lib-only source + sandbox mktemp + pass/problem.
 #
 # Każdy scenariusz działa w ŚWIEŻYM subshellu (bash -c + source lib-only):
@@ -673,7 +675,218 @@ EOF
   fi
 }
 
-echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania) i fazy 3 (narzędzia/sekwencja) =="
+# --- Test 32: login_block zdejmuje rollback userdel — ERR po loginach nie kasuje usera ---
+test_login_block_drops_userdel_rollback() {
+  # P2-1 review fazy 3: świeży user (userdel na stosie) + wejście w blok
+  # loginów → wpis userdel zdjęty (ERR w clone/npm nie skasuje credentiali
+  # OAuth w /home/claude). Inne wpisy stosu zostają nietknięte.
+  local snippet="$SANDBOX/t-login-drop.sh" out
+  cat > "$snippet" <<'EOF'
+useradd() { :; }
+resolve_install_paths() { :; }
+has_user_claude() { return 1; }
+login_claude_cli() { :; }
+push_rollback "echo inne"
+ensure_claude_user
+echo "PRZED=[${ROLLBACK_STACK[*]-}]"
+login_block
+echo "PO=[${ROLLBACK_STACK[*]-}]"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"PRZED=[echo inne userdel -r claude]"* ]] \
+    && [[ "$out" == *"PO=[echo inne]"* ]]; then
+    pass "login_block: wpis 'userdel -r' zdjęty ze stosu, pozostałe wpisy zostają"
+  else
+    problem "login_block: rollback userdel NIE został zneutralizowany (output: $out)"
+  fi
+}
+
+# --- Test 33: install_base_packages — guard-skip bez apt; brak narzędzia po instalacji → fail ---
+test_install_base_packages() {
+  # Happy: wszystkie binarki obecne (atrapy przez PATH jak w t.23) →
+  # zero wywołań apt-get (guard-skip, cudzy stan nietykany).
+  local snippet="$SANDBOX/t-base.sh" log="$SANDBOX/apt.log" bin="$SANDBOX/stub-bin-base" out rc t
+  mkdir -p "$bin"
+  for t in git curl crontab gh; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/$t"
+    chmod +x "$bin/$t"
+  done
+  cat > "$snippet" <<EOF
+export PATH="$bin:\$PATH"
+apt-get() { echo "APT \$*" >> "$log"; }
+systemctl() { :; }
+install_base_packages
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -s "$log" ]; then
+    pass "install_base_packages: komplet narzędzi obecny → zero wywołań apt-get"
+  else
+    problem "install_base_packages: guard-skip zawiódł (rc=$rc, apt-log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+  # Error: gh nieobecne (restrykcyjny PATH — maszyna dev może mieć gh),
+  # apt-get (stub) nic nie instaluje → weryfikacja po instalacji fail-fast.
+  local bin2="$SANDBOX/stub-bin-base-err" log2="$SANDBOX/apt-err.log" out2 rc2
+  mkdir -p "$bin2"
+  for t in git curl crontab; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$bin2/$t"
+    chmod +x "$bin2/$t"
+  done
+  cat > "$snippet" <<EOF
+export PATH="$bin2"
+apt-get() { echo "APT \$*" >> "$log2"; }
+systemctl() { :; }
+install_base_packages
+echo "NIEOSIAGALNE"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  if [ "$rc2" -ne 0 ] && [[ "$out2" == *"brak 'gh'"* ]] && [[ "$out2" != *"NIEOSIAGALNE"* ]] \
+    && grep -q "APT install" "$log2" 2>/dev/null; then
+    pass "install_base_packages: brak gh po instalacji → fail-fast z komunikatem"
+  else
+    problem "install_base_packages: fail-fast zawiódł (rc=$rc2, output: $out2)"
+  fi
+}
+
+# --- Test 34: install_claude_cli — guard-skip bez curl; weryfikacja po instalacji pada → fail ---
+test_install_claude_cli() {
+  # DI: run_as_claude podmienione (szew per-user jak w t.23) i logujące
+  # wywołania — guard-skip nie może pobierać instalatora.
+  local snippet="$SANDBOX/t-claude-cli.sh" log="$SANDBOX/rac.log" out rc
+  cat > "$snippet" <<EOF
+run_as_claude() { echo "RAC \$1" >> "$log"; return 0; }
+install_claude_cli
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"już zainstalowane"* ]] && ! grep -q "curl" "$log" 2>/dev/null; then
+    pass "install_claude_cli: claude obecny → guard-skip bez pobierania instalatora"
+  else
+    problem "install_claude_cli: guard-skip zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+  # Error: instalator (curl|bash) "przechodzi", ale binarka claude dalej
+  # nieobecna → weryfikacja po instalacji fail-fast z czytelną przyczyną.
+  local log2="$SANDBOX/rac-err.log" out2 rc2
+  cat > "$snippet" <<EOF
+run_as_claude() {
+  echo "RAC \$1" >> "$log2"
+  case "\$1" in *curl*) return 0 ;; *) return 1 ;; esac
+}
+install_claude_cli
+echo "NIEOSIAGALNE"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  if [ "$rc2" -ne 0 ] && [[ "$out2" == *"brak 'claude'"* ]] && [[ "$out2" != *"NIEOSIAGALNE"* ]] \
+    && grep -q "curl" "$log2" 2>/dev/null; then
+    pass "install_claude_cli: instalacja nie dała binarki → fail-fast"
+  else
+    problem "install_claude_cli: fail-fast zawiódł (rc=$rc2, output: $out2)"
+  fi
+}
+
+# --- Test 35: install_ob — guard-skip; rollback npm rm TYLKO gdy zainstalowano w tym runie; fail-fast ---
+test_install_ob() {
+  # Symetria z t.31 (userdel): ob obecny przed runem = cudza instalacja —
+  # zero npm i PUSTY stos (fail późniejszego kroku nie może jej skasować).
+  local snippet="$SANDBOX/t-ob.sh" bin="$SANDBOX/stub-bin-ob" log="$SANDBOX/npm.log" out rc
+  mkdir -p "$bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/ob"
+  chmod +x "$bin/ob"
+  cat > "$snippet" <<EOF
+export PATH="$bin:\$PATH"
+npm() { echo "NPM \$*" >> "$log"; }
+install_ob
+echo "STACK=[\${ROLLBACK_STACK[*]-}]"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -s "$log" ] && [[ "$out" == *"STACK=[]"* ]]; then
+    pass "install_ob: ob obecny przed runem → zero npm i pusty stos rollbacku"
+  else
+    problem "install_ob: guard-skip/rollback zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+  # Instalacja w TYM runie: ob nieobecny (restrykcyjny PATH), stub npm
+  # materializuje binarkę → rollback npm rm na stosie PO udanej weryfikacji.
+  local bin2="$SANDBOX/stub-bin-ob-run" out2 rc2
+  mkdir -p "$bin2"
+  ln -sf "$(command -v tail)" "$bin2/tail"
+  ln -sf "$(command -v chmod)" "$bin2/chmod"
+  cat > "$snippet" <<EOF
+export PATH="$bin2"
+npm() { printf '#!/usr/bin/env bash\nexit 0\n' > "$bin2/ob"; chmod +x "$bin2/ob"; }
+install_ob
+echo "STACK=[\${ROLLBACK_STACK[*]-}]"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  if [ "$rc2" -eq 0 ] && [[ "$out2" == *"STACK=[npm rm -g obsidian-headless]"* ]]; then
+    pass "install_ob: zainstalowany w tym runie → rollback npm rm na stosie"
+  else
+    problem "install_ob: brak rollbacku po instalacji w tym runie (rc=$rc2, output: $out2)"
+  fi
+  # Error: npm nic nie zainstalowało → weryfikacja po instalacji fail-fast.
+  local bin3="$SANDBOX/stub-bin-ob-err" out3 rc3
+  mkdir -p "$bin3"
+  ln -sf "$(command -v tail)" "$bin3/tail"
+  cat > "$snippet" <<EOF
+export PATH="$bin3"
+npm() { :; }
+install_ob
+echo "NIEOSIAGALNE"
+EOF
+  out3="$(run_snippet "$snippet")"
+  rc3=$?
+  if [ "$rc3" -ne 0 ] && [[ "$out3" == *"brak 'ob'"* ]] && [[ "$out3" != *"NIEOSIAGALNE"* ]]; then
+    pass "install_ob: instalacja nie dała binarki → fail-fast"
+  else
+    problem "install_ob: fail-fast zawiódł (rc=$rc3, output: $out3)"
+  fi
+}
+
+# --- Test 36: install_tailscale — guard-skip bez curl; brak binarki po instalacji → fail ---
+test_install_tailscale() {
+  local snippet="$SANDBOX/t-ts.sh" bin="$SANDBOX/stub-bin-ts" log="$SANDBOX/ts-curl.log" out rc
+  mkdir -p "$bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/tailscale"
+  chmod +x "$bin/tailscale"
+  cat > "$snippet" <<EOF
+export PATH="$bin:\$PATH"
+curl() { echo "CURL \$*" >> "$log"; }
+install_tailscale
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -s "$log" ] && [[ "$out" == *"już zainstalowany"* ]]; then
+    pass "install_tailscale: tailscale obecny → guard-skip bez pobierania instalatora"
+  else
+    problem "install_tailscale: guard-skip zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+  # Error: install.sh (stub curl|sh) nic nie zainstalowało → fail-fast.
+  # seq/sleep stubowane, żeby test nie czekał realnych ~12 s pętli daemona.
+  local bin2="$SANDBOX/stub-bin-ts-err" log2="$SANDBOX/ts-curl-err.log" out2 rc2
+  mkdir -p "$bin2"
+  cat > "$snippet" <<EOF
+export PATH="$bin2"
+curl() { echo "CURL \$*" >> "$log2"; }
+sh() { :; }
+seq() { :; }
+sleep() { :; }
+install_tailscale
+echo "NIEOSIAGALNE"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+  if [ "$rc2" -ne 0 ] && [[ "$out2" == *"brak 'tailscale'"* ]] && [[ "$out2" != *"NIEOSIAGALNE"* ]] \
+    && grep -q "CURL" "$log2" 2>/dev/null; then
+    pass "install_tailscale: instalacja nie dała binarki → fail-fast"
+  else
+    problem "install_tailscale: fail-fast zawiódł (rc=$rc2, output: $out2)"
+  fi
+}
+
+echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania) i fazy 3 (narzędzia/sekwencja/instalacje) =="
 test_syntax
 test_flags_port
 test_flags_unknown
@@ -705,6 +918,11 @@ test_ensure_workspace_chown_only_on_create
 test_main_installs_before_login_block
 test_main_only_puls_skips_ob
 test_userdel_rollback_conditional
+test_login_block_drops_userdel_rollback
+test_install_base_packages
+test_install_claude_cli
+test_install_ob
+test_install_tailscale
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

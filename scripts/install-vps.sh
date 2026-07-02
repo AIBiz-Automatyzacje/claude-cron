@@ -302,6 +302,20 @@ push_rollback()    { ROLLBACK_STACK+=("$1"); }
 disable_rollback() { ROLLBACK_ENABLED=0; }
 enable_rollback()  { ROLLBACK_ENABLED=1; }
 
+# drop_rollback <cmd> — zdejmuje ze stosu wcześniej zarejestrowaną akcję
+# (dokładne dopasowanie). Użycie: neutralizacja `userdel -r` na granicy bloku
+# loginów — od tej pauzy /home/$CLAUDE_USER przechowuje credentiale loginów
+# i cofnięcie usera niszczyłoby je (R6 leave-partial, decyzja 25).
+# Idiom ${arr[@]+...} — bezpieczna ekspansja pustej tablicy pod set -u (bash 3.2).
+drop_rollback() {
+  local cmd="$1" entry
+  local kept=()
+  for entry in ${ROLLBACK_STACK[@]+"${ROLLBACK_STACK[@]}"}; do
+    [ "$entry" = "$cmd" ] || kept+=("$entry")
+  done
+  ROLLBACK_STACK=(${kept[@]+"${kept[@]}"})
+}
+
 # Trap ERR: odwija stos w ODWROTNEJ kolejności (LIFO) i wypisuje każdy
 # cofnięty krok. Przy wyłączonym rollbacku (blok loginów) tylko kończy
 # z oryginalnym kodem błędu.
@@ -684,6 +698,13 @@ install_tailscale() {
 # zdjętym. Funkcja istnieje już od IU3, żeby test sekwencji w harnessie
 # pilnował granicy „wszystkie install_* PRZED login_block".
 login_block() {
+  # Granica leave-partial: od pierwszej pauzy interaktywnej /home/$CLAUDE_USER
+  # zaczyna przechowywać credentiale loginów (Claude OAuth ~/.claude/
+  # .credentials.json, docelowo gh/ob). ERR w późniejszych krokach
+  # automatycznych (clone_repo, npm install) odwija stos rollbacku —
+  # `userdel -r` skasowałby świeżo wykonany login wbrew R6/decyzji 25,
+  # więc wpis zdejmujemy na wejściu w blok.
+  drop_rollback "userdel -r $CLAUDE_USER"
   login_claude_cli
 }
 
