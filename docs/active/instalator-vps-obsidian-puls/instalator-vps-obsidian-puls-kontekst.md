@@ -1,14 +1,15 @@
 # Kontekst: Połączony instalator VPS (Obsidian + Puls)
 
 Branch: `feature/instalator-vps-obsidian-puls`
-Ostatnia aktualizacja: 2026-07-02 (Faza 3 ukończona)
+Ostatnia aktualizacja: 2026-07-02 (Faza 4 ukończona)
 
 ## Stan implementacji
 
 - **Faza 1 (IU1) — DONE**: `scripts/install-vps.sh` przebudowany na strukturę stałe → helpery → funkcje-komponenty → `main "$@"` za guardem `CLAUDE_CRON_LIB_ONLY`. Powstał harness `scripts/install-vps.test.sh` (14 asercji PASS). `bash -n` czysty, jedyny `read -r` w `ask_tty` (grep-strażnik zielony). Pełny suite projektu 163/163 PASS.
 - **Faza 2 (IU2) — DONE**: preflight (`run_preflight`: EUID=0, `is_supported_os` po `/etc/os-release`, `check_internet` na api.github.com), checklist 6 prerequisites z `ask_tty` „[Enter]", komplet guardów `has_*` (w tym rozdzielone `has_ob_auth`/`has_ob_sync`), blok 4 pytań (email/vault/repo/Discord) z walidacją + podsumowanie „Kontynuujemy? [T/n]", auto-wartości (`DEVICE_NAME=vps-$(hostname)`, PORT=7777/`--port`, `detect_timezone` z fallbackiem Europe/Warsaw), tryb `--only-puls` z pytaniem o workspace (`normalize_path`). Harness 25/25 PASS, `read -r` nadal tylko w `ask_tty`, `ask_tty` użyte 17×.
 - **Faza 3 (IU3) — DONE**: sekcja narzędzi jako funkcje `install_*` w `main()` PRZED `login_block` (`install_base_packages` z guard-first per binarka + fail-fast weryfikacja, `install_node` z nodesource bez zmian progów, `install_claude_cli` natywnie przez claude.ai/install.sh zamiast npm, `install_ob` pomijane przy `--only-puls` w `main()`, `install_tailscale` przeniesiony z końca skryptu — samo `tailscale up` zostaje do IU4). `push_rollback "userdel -r claude"` i `npm rm -g obsidian-headless` tylko dla stanu utworzonego w tym runie. Cienki `login_block()` (wrapper na `login_claude_cli`) wyznacza granicę FAZY 2/3 dla testu sekwencji. Harness 31/31 PASS (rejestrator wywołań `main()`), grep `@anthropic-ai/claude-code` → 0 linii, suite projektu 163/163 PASS.
-- Fazy 4–7: do zrobienia.
+- **Faza 4 (IU4) — DONE**: `login_block()` rozpięty na 5 pauz (`login_claude_cli` → `login_gh` → `login_ob` → `login_ob_sync` → `login_tailscale`), każda za swoim guardem `has_*` (resume wskakuje w brakujący login), pauzy 3–4 pomijane przy `--only-puls`. Na wejściu bloku `drop_rollback "userdel -r claude"` (fix P2-1 z review fazy 3) + `disable_rollback`, na wyjściu `enable_rollback`. PAUZA 2 po loginie robi `gh auth setup-git` + `validate_repo_access` (`gh repo view`, retry-in-place z ponownym pytaniem o repo, 3 próby) — także przy resume z guardem gh=zrobione. Wartości usera w komendach `su -c` przez `printf %q`. `setup_tailscale` zredukowany do odczytu TS_IP (interaktywne `tailscale up` = PAUZA 5). Dodane testy 32–46 (w tym testy jednostkowe `install_*` — fix P2-2). Harness 46/46 PASS, suite projektu 163/163 PASS.
+- Fazy 5–7: do zrobienia.
 
 ## Powiązane pliki
 
@@ -63,9 +64,17 @@ Ostatnia aktualizacja: 2026-07-02 (Faza 3 ukończona)
 24. **`login_block()` jako cienki wrapper już w IU3** — granica FAZY 2/3 musi istnieć dla testu sekwencji; pełne 5 pauz przez `run_login` wchodzi w IU4.
 25. **Rollback celowo BEZ apt/Claude-native/Tailscale** — odinstalowanie pakietów systemowych na rollbacku groźniejsze niż pozostawienie (re-run idempotentny); na stosie tylko `userdel -r claude` i `npm rm -g obsidian-headless`, oba wyłącznie gdy stan powstał w tym runie.
 
+### Decyzje z Fazy 4 (implementacja IU4)
+
+26. **Handoff `su` + `/dev/tty` jednopunktowy mimo otwartego spike-GATE**: forma `su - … -c` wyłącznie w helperze `login_cmd_as_claude`, redirect `< $TTY_DEVICE` wyłącznie w `run_login` — ewentualna zmiana na `runuser`/`sudo -u` po spike'u operatora jest zmianą w jednym miejscu (decyzja 17 zrealizowana).
+27. **Dispatcher `run_verify` zamiast `bash -c` dla wszystkich weryfikacji**: nazwa funkcji instalatora (guardy `has_*`) → wywołanie wprost (funkcje niewidoczne w child bashu), string → `bash -c`. `eval` odrzucony — bash 3.2 (macOS, harness) odpala trap ERR dla `eval` nawet w kontekście warunku `if`, co odwijałoby rollback-stos.
+28. **Weryfikacja PAUZY 1 = `has_claude_auth`** (niepusty `~/.claude/.credentials.json`), nie probe `claude -p` — probe kosztuje tokeny usera; rozstrzyga formę odroczoną w planie.
+29. **`gh auth setup-git` + `validate_repo_access` wykonywane także przy resume** (guard gh=zrobione) — poprzedni run mógł paść między loginem a tymi krokami; oba nieinteraktywne i idempotentne.
+30. **`drop_rollback "userdel -r claude"` na wejściu `login_block`** — po pierwszym loginie OAuth rollback nie ma prawa skasować `~/.claude/.credentials.json` (fix P2-1 review fazy 3, zgodnie z R6 leave-partial).
+
 ## Odroczone do implementacji
 
-- Forma przekazania `/dev/tty` przez granicę `su` (spike-gate przed Fazą 4; alternatywy `runuser`/`sudo -u`).
+- Spike operatora `su - claude -c "cmd" < /dev/tty` pod prawdziwym pipe (GATE fazy 4 pozostaje otwarty; implementacja jednopunktowa — patrz decyzja 26).
 - Dokładne stringi wyjść `ob sync-status`/`gh auth status` (guardy odpornie: exit code first).
 - Parsowanie URL z `tailscale funnel status` (fallback: zapytaj usera — zostaje).
 - Dokładne komendy sparse checkout (`--filter=blob:none --sparse` vs `--depth 1` + `sparse-checkout set`).
@@ -102,3 +111,13 @@ Kluczowe wnioski:
 - **Deklaracja planu „egzekwowane testem grep" musi mieć test w harnessie** — ręczne odhaczenie nie chroni faz 2–7 przed regresją gołego `read`.
 - **Komunikat resume musi działać w trybie R2** (`curl|bash` — brak lokalnego pliku): instruować ponowne wklejenie one-linera, nie `bash install-vps.sh`.
 - Konwencja na kolejne IU: wartości z inputu w komendach cron/rollback/`su -c` zawsze przez `printf %q` lub walidację białych znaków.
+
+## Review fazy 3 (2026-07-02)
+
+Raport: `docs/active/instalator-vps-obsidian-puls/review-faza-3.md`. Gate: ⚠️ ZASTRZEŻENIA — 0 × P1, 2 × P2, 17 × P3, 1 × OPERATOR (scalony z 4 zgłoszeń). Oba automatyzowalne checkboxy `Weryfikacja:` fazy 3 przeszły (harness 31/31 PASS, grep `@anthropic-ai/claude-code` → 0 linii); checkbox [Manual] Unit 3 przeniesiony do „Operator checklist faza 3".
+
+Kluczowe wnioski:
+- **Rollback-stos musi być świadomy granicy loginów**: `userdel -r` na stosie po udanym loginie OAuth Claude niszczy `~/.claude/.credentials.json` przy ERR w późniejszych automatach — wpisy rollbacku kasujące dane interaktywne trzeba neutralizować po wejściu w `login_block` (P2-1).
+- **Funkcje instalacyjne stubowane w testach sekwencji ≠ przetestowane**: guard-skip / fail-fast / warunkowy rollback `install_ob` wymagają testów jednostkowych z DI, wzorzec już jest w harnessie (P2-2).
+- Weryfikuj binarkę tą samą ścieżką co konsument (`run_as_claude`, nie PATH roota) i rejestruj rollback zaraz po akcji mutującej, przed weryfikacją.
+- Plan R7 („rollback dla apt") wymaga doprecyzowania zgodnie z decyzją 25, zanim IU5/IU6 zinterpretują go literalnie.

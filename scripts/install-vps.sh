@@ -350,6 +350,19 @@ halt_leave_partial() {
 
 # ============ HELPERY: LOGIN Z RETRY ============
 
+# run_verify <cmd> — weryfikacja pauzy: nazwa funkcji instalatora (guardy
+# has_*) wołana WPROST, bo child bash z `bash -c` nie widzi funkcji; pozostałe
+# komendy (stringi złożone) przez bash -c. eval odpada: bash 3.2 (macOS,
+# na którym biega harness) odpala trap ERR dla eval nawet w kontekście
+# warunku if — rollback odwijałby się mimo weryfikacji „w warunku".
+run_verify() {
+  if declare -F "$1" >/dev/null 2>&1; then
+    "$1"
+  else
+    bash -c "$1"
+  fi
+}
+
 # run_login "opis" login_cmd verify_cmd — pojedyncza pauza interaktywna:
 # handoff logowania przez /dev/tty → natychmiastowa weryfikacja → przy failu
 # pytanie o ponowienie. Po LOGIN_MAX_ATTEMPTS nieudanych próbach (lub
@@ -366,7 +379,7 @@ run_login() {
     else
       bash -c "$login_cmd" || true
     fi
-    if bash -c "$verify_cmd"; then
+    if run_verify "$verify_cmd"; then
       ok "$desc — zweryfikowano"
       return 0
     fi
@@ -380,6 +393,15 @@ run_login() {
     fi
   done
   halt_leave_partial "$desc"
+}
+
+# login_cmd_as_claude <cmd> — buduje komendę pauzy interaktywnej wykonywanej
+# jako user claude. JEDYNE miejsce z formą `su - … -c` dla loginów: spike
+# granicy su+/dev/tty (Operator gate IU4) jest wciąż otwarty, więc ewentualna
+# zmiana na runuser/sudo -u po spike'u jest jednopunktowa. Klawiaturę
+# (< $TTY_DEVICE) podpina run_login — forma redirectu też ma jeden punkt zmiany.
+login_cmd_as_claude() {
+  printf 'su - %s -c %q' "$CLAUDE_USER" "$1"
 }
 
 # ============ GUARDY DETEKCJI STANU (has_*) ============
@@ -691,52 +713,149 @@ install_tailscale() {
   ok "Tailscale zainstalowany"
 }
 
-# ============ FAZA 3: BLOK LOGINÓW (granica) ============
+# ============ FAZA 3: BLOK 5 LOGINÓW ============
 
-# Pierwsza pauza interaktywna instalacji. Docelowo (IU4): 5 pauz przez
-# run_login (Claude → gh → ob login → ob sync-setup → tailscale up) z trapem
-# zdjętym. Funkcja istnieje już od IU3, żeby test sekwencji w harnessie
-# pilnował granicy „wszystkie install_* PRZED login_block".
+# Jedyna strefa interaktywna instalacji (R6): 5 pauz pod rząd, każda przez
+# run_login (handoff klawiatury, natychmiastowa weryfikacja, 3 próby →
+# halt_leave_partial). Rollback zdjęty na czas bloku (R7) — pad loginu
+# zostawia stan częściowy do wznowienia, NIGDY nie cofa automatów.
+# Każda pauza za swoim guardem has_* → re-run wskakuje w brakujący login (R13).
+# Kolejność stała: Claude → gh → ob → sync → tailscale.
 login_block() {
   # Granica leave-partial: od pierwszej pauzy interaktywnej /home/$CLAUDE_USER
   # zaczyna przechowywać credentiale loginów (Claude OAuth ~/.claude/
-  # .credentials.json, docelowo gh/ob). ERR w późniejszych krokach
-  # automatycznych (clone_repo, npm install) odwija stos rollbacku —
-  # `userdel -r` skasowałby świeżo wykonany login wbrew R6/decyzji 25,
-  # więc wpis zdejmujemy na wejściu w blok.
+  # .credentials.json, gh, ob). ERR w późniejszych krokach automatycznych
+  # (clone_repo, npm install) odwija stos rollbacku — `userdel -r` skasowałby
+  # świeżo wykonany login wbrew R6/decyzji 25, więc wpis zdejmujemy na wejściu.
   drop_rollback "userdel -r $CLAUDE_USER"
-  login_claude_cli
+  disable_rollback
+
+  echo ""
+  echo -e "${CYAN}Logowania — jedyne kroki interaktywne${NC}"
+  echo "─────────────────────────────────────"
+
+  login_claude_cli                      # PAUZA 1
+  login_gh                              # PAUZA 2 (+ setup-git + walidacja repo)
+  if [ "$FLAG_ONLY_PULS" != 1 ]; then
+    login_ob                            # PAUZA 3
+    login_ob_sync                       # PAUZA 4
+  fi
+  login_tailscale                       # PAUZA 5
+
+  enable_rollback
 }
 
-login_claude_cli() {
+# Nagłówek pauzy interaktywnej — kursant widzi, który to krok i co ma zrobić.
+print_pause_header() {
+  local step="$1" hint="$2"
   echo ""
   echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-  echo -e "${YELLOW}  Claude CLI musi być zalogowane jako '$CLAUDE_USER'.${NC}"
-  echo -e "${YELLOW}  To krok interaktywny — dokończ logowanie w przeglądarce.${NC}"
+  echo -e "${YELLOW}  $step${NC}"
+  echo -e "${YELLOW}  $hint${NC}"
   echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   echo ""
-  local do_login=""
-  ask_tty do_login "Zalogować się do Claude CLI teraz? [T/n]: " "T"
+}
 
-  if [[ "$do_login" =~ ^[Nn]$ ]]; then
-    warn "Pomijam logowanie — joby nie ruszą, dopóki Claude CLI nie będzie zalogowane"
-    warn "Zaloguj później: su - $CLAUDE_USER -c 'claude'"
+# PAUZA 1: login Claude CLI (OAuth w przeglądarce). Weryfikacja nieinteraktywna
+# przez has_claude_auth (niepusty ~/.claude/.credentials.json) — probe
+# `claude -p` celowo NIE: kosztuje tokeny i czas, a o zalogowaniu mówi plik
+# credentiali (forma odroczona w planie — rozstrzygnięta tutaj).
+login_claude_cli() {
+  if has_claude_auth; then
+    ok "Claude CLI już zalogowany — pomijam"
     return 0
   fi
+  print_pause_header "KROK 1/5: Logowanie Claude CLI (użytkownik '$CLAUDE_USER')" \
+    "Dokończ logowanie w przeglądarce, potem wyjdź z Claude (Ctrl+C lub /exit)."
+  run_login "Claude CLI" "$(login_cmd_as_claude "claude")" "has_claude_auth"
+}
 
-  echo ""
-  echo "Uruchamiam Claude CLI jako '$CLAUDE_USER' — dokończ logowanie w przeglądarce."
-  echo "Po zalogowaniu wyjdź z Claude (Ctrl+C lub /exit), by kontynuować instalację."
-  echo ""
-  # Handoff klawiatury przez /dev/tty — pod curl|bash stdin to pipe.
-  # Probe otwarcia, nie [ -r ] — zob. komentarz w ask_tty (ENXIO bez ctty).
-  if { : < "$TTY_DEVICE"; } 2>/dev/null; then
-    su - "$CLAUDE_USER" -c "claude" < "$TTY_DEVICE" || true
+# PAUZA 2: gh device flow (R5 — zero PAT). Po loginie ZAWSZE (także przy
+# resume z guardem): `gh auth setup-git` (credential helper dla sparse
+# checkoutu i nocnego crona) + walidacja dostępu do repo — poprzedni run
+# mógł paść MIĘDZY loginem a tymi krokami, guard loginu by je pominął.
+login_gh() {
+  if has_gh_auth; then
+    ok "GitHub CLI (gh) już zalogowany — pomijam"
   else
-    su - "$CLAUDE_USER" -c "claude" || true
+    print_pause_header "KROK 2/5: Logowanie GitHub CLI (gh)" \
+      "Przepisz jednorazowy kod na stronie github.com/login/device."
+    run_login "GitHub CLI (gh)" \
+      "$(login_cmd_as_claude "gh auth login --hostname github.com --git-protocol https --web")" \
+      "has_gh_auth"
   fi
-  echo ""
-  ok "Krok logowania Claude CLI zakończony"
+  run_as_claude "gh auth setup-git" &>/dev/null \
+    || halt_leave_partial "gh auth setup-git (credential helper gita)"
+  ok "gh: credential helper gita skonfigurowany"
+  validate_repo_access
+}
+
+# Walidacja DOSTĘPU do repo .claude (FORMAT pilnowała FAZA 1): `gh repo view`
+# jako user claude — 404/brak uprawnień → ponowne pytanie o repo w pętli
+# 3 prób (retry-in-place, R5). Wartość idzie do komendy `su -c` → printf %q
+# (konwencja z review fazy 1). Sufiks .git zdjęty — gh repo view oczekuje
+# OWNER/REPO lub czystego URL-a.
+validate_repo_access() {
+  # --only-puls: brak repo .claude w konfiguracji — nic do walidacji.
+  [ -n "${VAULT_GIT_REPO:-}" ] || return 0
+  local attempt repo_input
+  for (( attempt=1; attempt<=LOGIN_MAX_ATTEMPTS; attempt++ )); do
+    if run_as_claude "gh repo view $(printf '%q' "${VAULT_GIT_REPO%.git}")" &>/dev/null; then
+      ok "Repo .claude dostępne: $VAULT_GIT_REPO"
+      return 0
+    fi
+    warn "Nie mam dostępu do repo: $VAULT_GIT_REPO (nie istnieje albo konto gh nie ma uprawnień)."
+    if [ "$attempt" -lt "$LOGIN_MAX_ATTEMPTS" ]; then
+      repo_input=""
+      ask_valid repo_input "Repo GitHub z katalogiem .claude (user/repo lub URL https): " \
+        is_valid_repo_format \
+        "Niepoprawny format — podaj user/repo albo https://github.com/user/repo."
+      VAULT_GIT_REPO="$(normalize_repo "$repo_input")"
+    fi
+  done
+  halt_leave_partial "walidacja dostępu do repo .claude"
+}
+
+# PAUZA 3: login Obsidian — email z FAZY 1 w komendzie, kursant podaje tylko
+# hasło konta (+ ewentualne 2FA). Email przez %q — walidacja FAZY 1 wyklucza
+# spacje, ale nie znaki specjalne shella.
+login_ob() {
+  if has_ob_auth; then
+    ok "Obsidian (ob) już zalogowany — pomijam"
+    return 0
+  fi
+  print_pause_header "KROK 3/5: Logowanie do konta Obsidian" \
+    "Podaj hasło konta Obsidian (i kod 2FA, jeśli masz włączone)."
+  run_login "Obsidian (ob login)" \
+    "$(login_cmd_as_claude "ob login --email $(printf '%q' "$OB_EMAIL")")" \
+    "has_ob_auth"
+}
+
+# PAUZA 4: podpięcie vaulta (Obsidian Sync) — kursant podaje hasło szyfrowania
+# end-to-end (INNE niż hasło konta). ~/vault celowo bez %q — ma się rozwinąć
+# w shellu usera claude (ścieżka spójna z has_ob_sync i WORKSPACE pełnego trybu).
+login_ob_sync() {
+  if has_ob_sync; then
+    ok "Obsidian Sync już skonfigurowany — pomijam"
+    return 0
+  fi
+  print_pause_header "KROK 4/5: Podpięcie vaulta (Obsidian Sync)" \
+    "Podaj hasło szyfrowania end-to-end vaulta (to INNE hasło niż do konta!)."
+  local inner
+  inner="ob sync-setup --vault $(printf '%q' "$VAULT_NAME") --path ~/vault --device-name $(printf '%q' "$DEVICE_NAME")"
+  run_login "Obsidian Sync (ob sync-setup)" "$(login_cmd_as_claude "$inner")" "has_ob_sync"
+}
+
+# PAUZA 5: połączenie Tailscale — jako root (bez su, więc bez helpera
+# login_cmd_as_claude); klawiaturę i tak podpina run_login.
+login_tailscale() {
+  if has_tailscale_ip; then
+    ok "Tailscale już połączony — pomijam"
+    return 0
+  fi
+  print_pause_header "KROK 5/5: Połączenie Tailscale" \
+    "Wejdź w link logowania, który wypisze tailscale."
+  run_login "Tailscale (tailscale up)" "tailscale up" "has_tailscale_ip"
 }
 
 clone_repo() {
@@ -996,36 +1115,10 @@ configure_firewall() {
   fi
 }
 
-# Połączenie Tailscale (`tailscale up`) — instalacja przeniesiona do
-# install_tailscale (FAZA 2); ten legacy krok łączenia zostaje na swoim
-# miejscu do IU4, gdzie wejdzie do bloku loginów jako ostatnia pauza.
+# Odczyt adresu Tailscale do podsumowania — samo łączenie (`tailscale up`)
+# to PAUZA 5 bloku loginów (login_tailscale), tu już tylko odczyt IP.
 setup_tailscale() {
-  echo ""
-  echo -e "${CYAN}Tailscale i webhooki${NC}"
-  echo "─────────────────────────────────────"
-  echo ""
-
-  if ! command -v tailscale &>/dev/null; then
-    warn "Tailscale niezainstalowany — pomijam łączenie"
-    TS_IP=""
-    return 0
-  fi
-
   TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
-  if [ -z "$TS_IP" ]; then
-    echo ""
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}  Tailscale musi zostać połączony.${NC}"
-    echo -e "${YELLOW}  Uruchom poniższą komendę i wejdź w link logowania.${NC}"
-    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    local do_ts=""
-    ask_tty do_ts "Połączyć Tailscale teraz? [T/n]: " "T"
-    if [[ ! "$do_ts" =~ ^[Nn]$ ]]; then
-      tailscale up
-    fi
-    TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
-  fi
   if [ -n "$TS_IP" ]; then
     ok "Tailscale IP: $TS_IP"
   else
@@ -1246,7 +1339,7 @@ main() {
   [ "$FLAG_ONLY_PULS" = 1 ] || install_ob
   install_tailscale
 
-  login_block            # FAZA 3: pauzy interaktywne (pełny blok 5 loginów — IU4)
+  login_block            # FAZA 3: blok 5 loginów — jedyna strefa interaktywna
 
   clone_repo
   setup_puls_dependencies

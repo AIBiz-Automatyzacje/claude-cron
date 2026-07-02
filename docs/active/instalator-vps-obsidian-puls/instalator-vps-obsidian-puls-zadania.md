@@ -90,18 +90,18 @@ Ostatnia aktualizacja: 2026-07-02
 
 ## Faza 4: Blok 5 loginów (IU4)
 
-- [ ] **GATE (Operator, przed implementacją):** spike `su - claude -c "cmd" < /dev/tty` pod prawdziwym pipe (Docker/multipass Ubuntu) — rozstrzyga formę redirectu (alternatywy: `runuser`/`sudo -u`)
-- [ ] `disable_rollback` na wejściu bloku, `enable_rollback` na wyjściu
-- [ ] PAUZA 1: login Claude (`su - claude -c "claude"` + `/dev/tty`) → nieinteraktywna weryfikacja
-- [ ] PAUZA 2: `gh auth login` (device flow) → `gh auth status`; po sukcesie `gh auth setup-git` + walidacja `gh repo view <REPO>` z retry-in-place (ponowne pytanie o repo przy 404)
-- [ ] PAUZA 3: `ob login --email '<EMAIL>'` → weryfikacja `has_ob_auth`
-- [ ] PAUZA 4: `ob sync-setup --vault … --path ~/vault --device-name …` → weryfikacja `has_ob_sync`
-- [ ] PAUZA 5: `tailscale up` → weryfikacja `tailscale ip -4` niepuste
-- [ ] Każda pauza za swoim guardem (resume); pauzy 3–4 pomijane przy `--only-puls`
-- [ ] Test: wszystkie guardy=zrobione → zero wywołań loginów (pełny resume)
-- [ ] Test: guard gh=brak, reszta=zrobione → wywołana tylko PAUZA 2 (+ setup-git + walidacja repo)
-- [ ] Test: walidacja repo — `gh repo view` fail → ponowne pytanie → drugie podejście z nowym repo (atrapy)
-- [ ] Test: rollback-stos nietknięty przy `halt_leave_partial` w środku bloku
+- [ ] **GATE (Operator, przed implementacją):** spike `su - claude -c "cmd" < /dev/tty` pod prawdziwym pipe (Docker/multipass Ubuntu) — rozstrzyga formę redirectu (alternatywy: `runuser`/`sudo -u`); zaimplementowano wg decyzji 17 (handoff w `run_login`, forma `su` w jednym helperze `login_cmd_as_claude` — zmiana po spike'u jednopunktowa)
+- [x] `disable_rollback` na wejściu bloku, `enable_rollback` na wyjściu (plus `drop_rollback "userdel -r claude"` z fazy 3 na wejściu)
+- [x] PAUZA 1: login Claude (`login_cmd_as_claude "claude"` przez `run_login` + `$TTY_DEVICE`) → nieinteraktywna weryfikacja `has_claude_auth` (plik credentiali; probe `claude -p` odrzucony — koszt tokenów)
+- [x] PAUZA 2: `gh auth login --web` (device flow) → weryfikacja `has_gh_auth`; po sukcesie (także przy resume z guardem) `gh auth setup-git` + walidacja `gh repo view` (`validate_repo_access`) z retry-in-place (ponowne pytanie o repo przy 404, pętla 3 prób)
+- [x] PAUZA 3: `ob login --email <EMAIL przez printf %q>` → weryfikacja `has_ob_auth`
+- [x] PAUZA 4: `ob sync-setup --vault … --path ~/vault --device-name …` (vault/device przez `%q`) → weryfikacja `has_ob_sync`
+- [x] PAUZA 5: `tailscale up` (root, bez `su`) → weryfikacja `has_tailscale_ip`
+- [x] Każda pauza za swoim guardem (resume); pauzy 3–4 pomijane przy `--only-puls`
+- [x] Test: wszystkie guardy=zrobione → zero wywołań loginów (pełny resume; test 37)
+- [x] Test: guard gh=brak, reszta=zrobione → wywołana tylko PAUZA 2 (+ setup-git + walidacja repo; test 38)
+- [x] Test: walidacja repo — `gh repo view` fail → ponowne pytanie → drugie podejście z nowym repo (atrapy; test 39)
+- [x] Test: rollback-stos nietknięty przy `halt_leave_partial` w środku bloku (test 40; bonus test 41: pauzy ob pomijane przy `--only-puls`)
 - [ ] Test: [Manual] pełny blok 5 loginów na czystym VPS przez prawdziwy pipe: pauzy czytają z klawiatury; literówka → retry; 3× fail → komunikat resume; re-run wskakuje w brakujący login
 - [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje sekwencji/guardów/retry PASS
 - [ ] Weryfikacja: `grep -n 'su - .*-c' scripts/install-vps.sh` — każda linia z interaktywnym CLI zawiera `/dev/tty`

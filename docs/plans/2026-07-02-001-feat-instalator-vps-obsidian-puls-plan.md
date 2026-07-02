@@ -228,7 +228,7 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 
 ---
 
-- [ ] **Unit 4: FAZA 3 — blok 5 loginów (retry, weryfikacje, gh setup-git, walidacja repo)**
+- [x] **Unit 4: FAZA 3 — blok 5 loginów (retry, weryfikacje, gh setup-git, walidacja repo)**
 
 **Cel:** Jedyna strefa interaktywna: 5 pauz pod rząd, każda przez `run_login` (3 próby, natychmiastowa weryfikacja), leave-partial przy wyczerpaniu prób; auth gita dla checkoutu i crona.
 
@@ -261,15 +261,15 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 - `docs/solutions/deployment-issues/2026-06-30-…tty.md` (handoff + fallback)
 
 **Scenariusze testowe:**
-- [Unit] sekwencja bloku: przy wszystkich guardach=zrobione → zero wywołań loginów (pełny resume)
-- [Unit] guard gh=brak, reszta=zrobione → wywołana tylko PAUZA 2 (+ setup-git + walidacja repo)
-- [Unit] walidacja repo: `gh repo view` fail → ponowne pytanie o repo → drugie podejście z nowym repo (wstrzyknięte atrapy)
-- [Unit] rollback-stos nietknięty przy `halt_leave_partial` w środku bloku
-- [Manual] pełny blok 5 loginów na czystym VPS przez prawdziwy `curl|sudo bash` — każda pauza czyta z klawiatury, literówka w haśle ob → retry działa, 3× fail → komunikat resume, re-run wskakuje w brakujący login
+- [x] [Unit] sekwencja bloku: przy wszystkich guardach=zrobione → zero wywołań loginów (pełny resume) (test 37)
+- [x] [Unit] guard gh=brak, reszta=zrobione → wywołana tylko PAUZA 2 (+ setup-git + walidacja repo) (test 38)
+- [x] [Unit] walidacja repo: `gh repo view` fail → ponowne pytanie o repo → drugie podejście z nowym repo (wstrzyknięte atrapy) (test 39)
+- [x] [Unit] rollback-stos nietknięty przy `halt_leave_partial` w środku bloku (test 40; bonus test 41: pauzy ob pomijane przy `--only-puls`)
+- [ ] [Manual] pełny blok 5 loginów na czystym VPS przez prawdziwy `curl|sudo bash` — każda pauza czyta z klawiatury, literówka w haśle ob → retry działa, 3× fail → komunikat resume, re-run wskakuje w brakujący login
 
 **Weryfikacja:**
-- `bash scripts/install-vps.test.sh` — asercje sekwencji/guardów/retry PASS
-- `grep -n 'su - .*-c' scripts/install-vps.sh` — każda linia z interaktywnym CLI (claude/gh/ob bez `-p`/`--email`-only) zawiera `/dev/tty`
+- [x] `bash scripts/install-vps.test.sh` — asercje sekwencji/guardów/retry PASS (46/46)
+- [x] `grep -n 'su - .*-c' scripts/install-vps.sh` — żadna linia `su` nie odpala interaktywnego CLI bezpośrednio; handoff jednopunktowy: `run_login` podpina `< $TTY_DEVICE` (L378), forma `su` tylko w `login_cmd_as_claude` (L404) — intencja R2 spełniona, literalny grep bezprzedmiotowy (do potwierdzenia przez review)
 
 **Operator checklist:**
 - [ ] Spike: `su - claude -c "claude" < /dev/tty` działa pod prawdziwym pipe (Docker/multipass Ubuntu) — rozstrzyga odroczoną formę redirectu

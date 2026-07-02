@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Skryptowe testy install-vps.sh — flagi, ask_tty, run_login, rollback (faza 1),
-# preflight, guardy has_*, walidacja bloku pytań (faza 2) oraz sekwencja
+# preflight, guardy has_*, walidacja bloku pytań (faza 2), sekwencja
 # narzędzi install_* przed login_block, warunkowy rollback userdel/npm rm,
 # neutralizacja userdel na granicy loginów i testy jednostkowe funkcji
-# install_* — guard-skip + fail-fast (faza 3).
+# install_* — guard-skip + fail-fast (faza 3) oraz blok 5 loginów: pełny
+# resume, wskok w brakującą pauzę, retry walidacji repo, leave-partial
+# bez rollbacku i pomijanie pauz ob przy --only-puls (faza 4).
 # Wzorzec z install.test.sh: lib-only source + sandbox mktemp + pass/problem.
 #
 # Każdy scenariusz działa w ŚWIEŻYM subshellu (bash -c + source lib-only):
@@ -680,12 +682,18 @@ test_login_block_drops_userdel_rollback() {
   # P2-1 review fazy 3: świeży user (userdel na stosie) + wejście w blok
   # loginów → wpis userdel zdjęty (ERR w clone/npm nie skasuje credentiali
   # OAuth w /home/claude). Inne wpisy stosu zostają nietknięte.
+  # Wszystkie pauzy stubowane (od IU4 blok ma ich 5) — test bada wyłącznie
+  # rollback-stos na granicy bloku, nie same loginy.
   local snippet="$SANDBOX/t-login-drop.sh" out
   cat > "$snippet" <<'EOF'
 useradd() { :; }
 resolve_install_paths() { :; }
 has_user_claude() { return 1; }
 login_claude_cli() { :; }
+login_gh() { :; }
+login_ob() { :; }
+login_ob_sync() { :; }
+login_tailscale() { :; }
 push_rollback "echo inne"
 ensure_claude_user
 echo "PRZED=[${ROLLBACK_STACK[*]-}]"
@@ -886,7 +894,160 @@ EOF
   fi
 }
 
-echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania) i fazy 3 (narzędzia/sekwencja/instalacje) =="
+# --- Test 37: login_block — wszystkie guardy=zrobione → zero wywołań loginów (pełny resume) ---
+test_login_block_full_resume() {
+  # R13: re-run po sukcesie przelatuje przez blok bez żadnej pauzy. setup-git
+  # i walidacja repo biegną też przy resume (poprzedni run mógł paść między
+  # loginem gh a nimi) — ale to automaty, nie loginy; run_login = 0 wywołań.
+  local snippet="$SANDBOX/t-lb-resume.sh" log="$SANDBOX/lb-resume.log" out rc
+  cat > "$snippet" <<EOF
+has_claude_auth() { return 0; }
+has_gh_auth() { return 0; }
+has_ob_auth() { return 0; }
+has_ob_sync() { return 0; }
+has_tailscale_ip() { return 0; }
+run_login() { echo "RUN_LOGIN \$1" >> "$log"; }
+run_as_claude() { echo "RAC \$1" >> "$log"; return 0; }
+VAULT_GIT_REPO="https://github.com/user/repo.git"
+login_block
+echo "PO_BLOKU"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"PO_BLOKU"* ]] \
+    && ! grep -q "RUN_LOGIN" "$log" 2>/dev/null \
+    && grep -q "RAC gh repo view" "$log" 2>/dev/null; then
+    pass "login_block: wszystkie guardy=zrobione → zero loginów, repo zwalidowane (resume)"
+  else
+    problem "login_block: pełny resume zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+}
+
+# --- Test 38: guard gh=brak, reszta=zrobione → tylko PAUZA 2 (+ setup-git + walidacja repo) ---
+test_login_block_resumes_into_gh() {
+  local snippet="$SANDBOX/t-lb-gh.sh" log="$SANDBOX/lb-gh.log" out rc
+  cat > "$snippet" <<EOF
+has_claude_auth() { return 0; }
+has_gh_auth() { return 1; }
+has_ob_auth() { return 0; }
+has_ob_sync() { return 0; }
+has_tailscale_ip() { return 0; }
+run_login() { echo "RUN_LOGIN \$1" >> "$log"; }
+run_as_claude() { echo "RAC \$1" >> "$log"; return 0; }
+VAULT_GIT_REPO="https://github.com/user/repo.git"
+login_block
+echo "PO_BLOKU"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"PO_BLOKU"* ]] \
+    && [ "$(grep -c '^RUN_LOGIN' "$log" 2>/dev/null)" = "1" ] \
+    && grep -q "RUN_LOGIN GitHub CLI" "$log" 2>/dev/null \
+    && grep -q "RAC gh auth setup-git" "$log" 2>/dev/null \
+    && grep -q "RAC gh repo view" "$log" 2>/dev/null; then
+    pass "login_block: guard gh=brak → tylko PAUZA 2 + setup-git + walidacja repo"
+  else
+    problem "login_block: resume w pauzę gh zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+}
+
+# --- Test 39: walidacja repo — gh repo view fail → ponowne pytanie → drugie podejście z nowym repo ---
+test_validate_repo_access_retry() {
+  # Retry-in-place (R5): 404 na pierwszym repo → ask_tty (stub jak w t.27)
+  # oddaje poprawkę user/dobre → drugi gh repo view przechodzi, VAULT_GIT_REPO
+  # znormalizowany do nowego URL-a.
+  local snippet="$SANDBOX/t-repo-retry.sh" log="$SANDBOX/repo-retry.log" out rc
+  cat > "$snippet" <<EOF
+run_as_claude() {
+  echo "RAC \$1" >> "$log"
+  case "\$1" in
+    *zle-repo*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+ask_tty() { printf -v "\$1" '%s' "user/dobre"; }
+VAULT_GIT_REPO="https://github.com/user/zle-repo.git"
+validate_repo_access
+echo "REPO=\$VAULT_GIT_REPO"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"REPO=https://github.com/user/dobre.git"* ]] \
+    && [ "$(grep -c '^RAC gh repo view' "$log" 2>/dev/null)" = "2" ] \
+    && grep -q "zle-repo" "$log" && grep -q "user/dobre" "$log"; then
+    pass "validate_repo_access: fail → ponowne pytanie → drugie podejście z nowym repo"
+  else
+    problem "validate_repo_access: retry zawiódł (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+}
+
+# --- Test 40: rollback-stos nietknięty przy halt_leave_partial w środku bloku ---
+test_login_block_halt_keeps_stack() {
+  # PAUZA 1 pada 3× (guard=brak, verify w kółko fail) → halt_leave_partial.
+  # Stos automatów sprzed bloku NIE może być odwinięty (R6/R7: leave-partial,
+  # nigdy rollback). login_cmd_as_claude stubowany — test nie odpala su.
+  local snippet="$SANDBOX/t-lb-halt.sh" log="$SANDBOX/lb-halt.log" out rc
+  cat > "$snippet" <<EOF
+trap on_err ERR
+push_rollback "echo cofniete >> '$log'"
+has_claude_auth() { return 1; }
+login_cmd_as_claude() { printf ':'; }
+login_block
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -ne 0 ] && [[ "$out" == *"ZATRZYMANA"* ]] && [[ "$out" != *"NIEOSIAGALNE"* ]] \
+    && [ ! -s "$log" ]; then
+    pass "login_block: halt_leave_partial w środku bloku → rollback-stos nietknięty"
+  else
+    problem "login_block: halt w bloku odwinął stos lub nie zatrzymał (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+}
+
+# --- Test 41: --only-puls → pauzy 3–4 (ob) pomijane; pełny tryb → wywoływane ---
+test_login_block_only_puls_skips_ob_pauses() {
+  # Guardy ob mówią "brak" w obu wariantach — różnicę robi WYŁĄCZNIE flaga.
+  local snippet="$SANDBOX/t-lb-onlypuls.sh" log="$SANDBOX/lb-op.log" log2="$SANDBOX/lb-full.log" out out2
+  cat > "$snippet" <<EOF
+has_claude_auth() { return 0; }
+has_gh_auth() { return 0; }
+has_ob_auth() { return 1; }
+has_ob_sync() { return 1; }
+has_tailscale_ip() { return 0; }
+run_login() { echo "RUN_LOGIN \$1" >> "$log"; }
+run_as_claude() { return 0; }
+OB_EMAIL="kursant@example.com"; VAULT_NAME="Moj Vault"; DEVICE_NAME="vps-test"
+FLAG_ONLY_PULS=1
+login_block
+echo "PO_BLOKU"
+EOF
+  out="$(run_snippet "$snippet")"
+  cat > "$snippet" <<EOF
+has_claude_auth() { return 0; }
+has_gh_auth() { return 0; }
+has_ob_auth() { return 1; }
+has_ob_sync() { return 1; }
+has_tailscale_ip() { return 0; }
+run_login() { echo "RUN_LOGIN \$1" >> "$log2"; }
+run_as_claude() { return 0; }
+OB_EMAIL="kursant@example.com"; VAULT_NAME="Moj Vault"; DEVICE_NAME="vps-test"
+FLAG_ONLY_PULS=0
+login_block
+echo "PO_BLOKU"
+EOF
+  out2="$(run_snippet "$snippet")"
+  if [[ "$out" == *"PO_BLOKU"* ]] && [ ! -s "$log" ] \
+    && [[ "$out2" == *"PO_BLOKU"* ]] \
+    && grep -q "RUN_LOGIN Obsidian (ob login)" "$log2" 2>/dev/null \
+    && grep -q "RUN_LOGIN Obsidian Sync" "$log2" 2>/dev/null; then
+    pass "login_block: --only-puls pomija pauzy ob; pełny tryb je wywołuje"
+  else
+    problem "login_block: pomijanie pauz ob zawiodło (log-op: $(cat "$log" 2>/dev/null), log-full: $(cat "$log2" 2>/dev/null))"
+  fi
+}
+
+echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje) i fazy 4 (blok 5 loginów) =="
 test_syntax
 test_flags_port
 test_flags_unknown
@@ -923,6 +1084,11 @@ test_install_base_packages
 test_install_claude_cli
 test_install_ob
 test_install_tailscale
+test_login_block_full_resume
+test_login_block_resumes_into_gh
+test_validate_repo_access_retry
+test_login_block_halt_keeps_stack
+test_login_block_only_puls_skips_ob_pauses
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"
