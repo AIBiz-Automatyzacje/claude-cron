@@ -532,7 +532,43 @@ is_node_supported() {
   return 1
 }
 
-ensure_node() {
+# ============ FAZA 2: NARZĘDZIA (install_*) ============
+
+# Wszystkie funkcje install_* MUSZĄ wykonać się w main() PRZED login_block —
+# po pierwszej pauzie interaktywnej nie instaluje się już żadne narzędzie
+# (egzekwowane testem sekwencji w harnessie). Guard-first: nic nie instalujemy
+# ponownie i nie rejestrujemy rollbacku dla stanu zastanego sprzed runa.
+
+# Pakiety bazowe jednym apt (git/curl/cron/gh; gh jest w Ubuntu universe).
+# ca-certificates dokładane przy każdej instalacji brakujących — nie ma
+# własnej binarki do prostego guardu, a apt i tak pominie zainstalowany pakiet.
+install_base_packages() {
+  local missing=()
+  command -v git &>/dev/null || missing+=(git)
+  command -v curl &>/dev/null || missing+=(curl)
+  command -v crontab &>/dev/null || missing+=(cron)
+  command -v gh &>/dev/null || missing+=(gh)
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    info "Instaluję pakiety bazowe: ${missing[*]}..."
+    apt-get update -qq
+    apt-get install -y -qq ca-certificates "${missing[@]}"
+  fi
+
+  # Weryfikacja po instalacji — gh jest twardym prerequisitem bloku loginów
+  # (R5: device flow zamiast PAT), więc brak = zatrzymanie tu, nie w Fazie 3.
+  local tool
+  for tool in git curl crontab gh; do
+    command -v "$tool" &>/dev/null \
+      || fail "Instalacja pakietów bazowych nie powiodła się — brak '$tool' w PATH."
+  done
+
+  systemctl enable cron 2>/dev/null || true
+  systemctl start cron 2>/dev/null || true
+  ok "Pakiety bazowe: git, curl, ca-certificates, cron, gh"
+}
+
+install_node() {
   info "Sprawdzam Node.js..."
 
   if command -v node &>/dev/null; then
@@ -555,24 +591,6 @@ ensure_node() {
   fi
 }
 
-ensure_git() {
-  if ! command -v git &>/dev/null; then
-    info "Instaluję git..."
-    apt-get update -qq && apt-get install -y -qq git
-  fi
-  ok "git $(git --version | awk '{print $3}')"
-}
-
-ensure_cron() {
-  if ! command -v crontab &>/dev/null; then
-    info "Instaluję cron..."
-    apt-get update -qq && apt-get install -y -qq cron
-  fi
-  systemctl enable cron 2>/dev/null || true
-  systemctl start cron 2>/dev/null || true
-  ok "cron"
-}
-
 # Uwaga: build-essential/python3 celowo NIE są instalowane — były potrzebne
 # wyłącznie pod natywną kompilację better-sqlite3. Projekt używa wbudowanego
 # node:sqlite (lib/db.js), koffi ma prebuilt binaries, pg to czysty JS.
@@ -592,6 +610,9 @@ ensure_claude_user() {
   else
     info "Tworzę dedykowanego użytkownika '$CLAUDE_USER'..."
     useradd -m -s /bin/bash "$CLAUDE_USER"
+    # Rollback TYLKO gdy user powstał w TYM runie — istniejącego wcześniej
+    # usera (z jego /home) nigdy nie cofamy, to cudzy stan.
+    push_rollback "userdel -r $CLAUDE_USER"
     ok "Użytkownik '$CLAUDE_USER' utworzony"
   fi
   # Realny home mógł odbiec od założenia z FAZY 1 (nietypowa konfiguracja
@@ -599,10 +620,71 @@ ensure_claude_user() {
   resolve_install_paths
 }
 
+# Claude Code NATYWNIE (nie przez npm): oficjalny instalator kładzie binarkę
+# w ~/.local/bin/claude usera claude — spójne z PATH w unicie systemd
+# (Environment=PATH=$CLAUDE_HOME/.local/bin:...) i z guardem has_claude_auth.
 install_claude_cli() {
-  info "Instaluję Claude CLI globalnie..."
-  npm install -g @anthropic-ai/claude-code 2>&1 | tail -1
-  ok "Claude CLI zainstalowane"
+  if run_as_claude "command -v claude" &>/dev/null; then
+    ok "Claude CLI już zainstalowane"
+    return 0
+  fi
+  info "Instaluję Claude CLI (natywnie, jako '$CLAUDE_USER')..."
+  run_as_claude "curl -fsSL https://claude.ai/install.sh | bash"
+  run_as_claude "command -v claude" &>/dev/null \
+    || fail "Instalacja Claude CLI nie powiodła się — brak 'claude' w PATH usera '$CLAUDE_USER'."
+  ok "Claude CLI zainstalowane (~/.local/bin/claude)"
+}
+
+# obsidian-headless (bin `ob`) — globalnie przez npm (root); user claude widzi
+# binarkę przez systemowy PATH. Pomijane w main() przy --only-puls.
+install_ob() {
+  if command -v ob &>/dev/null; then
+    ok "obsidian-headless (ob) już zainstalowany"
+    return 0
+  fi
+  info "Instaluję obsidian-headless (CLI 'ob')..."
+  npm install -g obsidian-headless 2>&1 | tail -1
+  command -v ob &>/dev/null \
+    || fail "Instalacja obsidian-headless nie powiodła się — brak 'ob' w PATH."
+  push_rollback "npm rm -g obsidian-headless"
+  ok "obsidian-headless (ob) zainstalowany"
+}
+
+# Instalacja Tailscale w fundamencie (FAZA 2) — samo połączenie (`tailscale up`)
+# to pauza interaktywna i idzie do bloku loginów (IU4). Czekanie na daemon
+# zostaje przy instalacji: świeżo postawiony tailscaled potrzebuje chwili,
+# zanim `tailscale up`/`tailscale ip` przestaną zwracać błąd połączenia.
+install_tailscale() {
+  if command -v tailscale &>/dev/null; then
+    ok "Tailscale już zainstalowany"
+    return 0
+  fi
+  info "Instaluję Tailscale..."
+  curl -fsSL https://tailscale.com/install.sh | sh
+
+  info "Czekam na daemon Tailscale..."
+  local i
+  for i in $(seq 1 10); do
+    if systemctl is-active --quiet tailscaled 2>/dev/null; then
+      break
+    fi
+    sleep 1
+  done
+  sleep 2
+
+  command -v tailscale &>/dev/null \
+    || fail "Instalacja Tailscale nie powiodła się — brak 'tailscale' w PATH."
+  ok "Tailscale zainstalowany"
+}
+
+# ============ FAZA 3: BLOK LOGINÓW (granica) ============
+
+# Pierwsza pauza interaktywna instalacji. Docelowo (IU4): 5 pauz przez
+# run_login (Claude → gh → ob login → ob sync-setup → tailscale up) z trapem
+# zdjętym. Funkcja istnieje już od IU3, żeby test sekwencji w harnessie
+# pilnował granicy „wszystkie install_* PRZED login_block".
+login_block() {
+  login_claude_cli
 }
 
 login_claude_cli() {
@@ -654,7 +736,10 @@ clone_repo() {
   ok "Repo: $INSTALL_DIR"
 }
 
-install_dependencies() {
+# Zależności npm aplikacji Puls (po clone) — celowo BEZ prefixu install_*:
+# ten prefix jest zarezerwowany dla narzędzi FAZY 2 (przed login_block),
+# a test sekwencji w harnessie pilnuje tego po nazwach.
+setup_puls_dependencies() {
   info "Instaluję zależności..."
   su - "$CLAUDE_USER" -c "cd $INSTALL_DIR && npm install --production" 2>&1 | tail -3
   mkdir -p "$INSTALL_DIR/data"
@@ -890,6 +975,9 @@ configure_firewall() {
   fi
 }
 
+# Połączenie Tailscale (`tailscale up`) — instalacja przeniesiona do
+# install_tailscale (FAZA 2); ten legacy krok łączenia zostaje na swoim
+# miejscu do IU4, gdzie wejdzie do bloku loginów jako ostatnia pauza.
 setup_tailscale() {
   echo ""
   echo -e "${CYAN}Tailscale i webhooki${NC}"
@@ -897,46 +985,30 @@ setup_tailscale() {
   echo ""
 
   if ! command -v tailscale &>/dev/null; then
-    info "Instaluję Tailscale..."
-    curl -fsSL https://tailscale.com/install.sh | sh
-
-    # Poczekaj, aż daemon tailscaled będzie w pełni gotowy
-    info "Czekam na daemon Tailscale..."
-    local i
-    for i in $(seq 1 10); do
-      if systemctl is-active --quiet tailscaled 2>/dev/null; then
-        break
-      fi
-      sleep 1
-    done
-    sleep 2
+    warn "Tailscale niezainstalowany — pomijam łączenie"
+    TS_IP=""
+    return 0
   fi
 
-  if command -v tailscale &>/dev/null; then
-    ok "Tailscale zainstalowany"
+  TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
+  if [ -z "$TS_IP" ]; then
+    echo ""
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}  Tailscale musi zostać połączony.${NC}"
+    echo -e "${YELLOW}  Uruchom poniższą komendę i wejdź w link logowania.${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    local do_ts=""
+    ask_tty do_ts "Połączyć Tailscale teraz? [T/n]: " "T"
+    if [[ ! "$do_ts" =~ ^[Nn]$ ]]; then
+      tailscale up
+    fi
     TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
-    if [ -z "$TS_IP" ]; then
-      echo ""
-      echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-      echo -e "${YELLOW}  Tailscale musi zostać połączony.${NC}"
-      echo -e "${YELLOW}  Uruchom poniższą komendę i wejdź w link logowania.${NC}"
-      echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-      echo ""
-      local do_ts=""
-      ask_tty do_ts "Połączyć Tailscale teraz? [T/n]: " "T"
-      if [[ ! "$do_ts" =~ ^[Nn]$ ]]; then
-        tailscale up
-      fi
-      TS_IP=$(tailscale ip -4 2>/dev/null || echo "")
-    fi
-    if [ -n "$TS_IP" ]; then
-      ok "Tailscale IP: $TS_IP"
-    else
-      warn "Tailscale niepołączony — uruchom 'tailscale up' później"
-    fi
+  fi
+  if [ -n "$TS_IP" ]; then
+    ok "Tailscale IP: $TS_IP"
   else
-    warn "Instalacja Tailscale nie powiodła się"
-    TS_IP=""
+    warn "Tailscale niepołączony — uruchom 'tailscale up' później"
   fi
 }
 
@@ -1139,15 +1211,24 @@ main() {
   resolve_install_paths
   collect_config         # FAZA 1: blok 4 pytań + auto-wartości + potwierdzenie
   apply_timezone
-  ensure_node
-  ensure_git
-  ensure_cron
+
+  # FAZA 2: WSZYSTKIE narzędzia przed pierwszą pauzą interaktywną — re-run po
+  # padzie loginu (leave-partial) wskakuje od razu w brakujący login, bez
+  # powrotu do instalacji pakietów. Decyzja o pominięciu kroków Obsidianowych
+  # zapada TUTAJ (nie wewnątrz install_ob) — rejestrator wywołań w testach
+  # widzi wtedy realny brak wywołania, nie early-return.
+  install_base_packages
+  install_node
   ensure_claude_user
   ensure_workspace
   install_claude_cli
-  login_claude_cli
+  [ "$FLAG_ONLY_PULS" = 1 ] || install_ob
+  install_tailscale
+
+  login_block            # FAZA 3: pauzy interaktywne (pełny blok 5 loginów — IU4)
+
   clone_repo
-  install_dependencies
+  setup_puls_dependencies
   create_systemd_service
   configure_firewall
   setup_tailscale

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Skryptowe testy install-vps.sh — flagi, ask_tty, run_login, rollback (faza 1)
-# oraz preflight, guardy has_*, walidacja bloku pytań (faza 2).
+# Skryptowe testy install-vps.sh — flagi, ask_tty, run_login, rollback (faza 1),
+# preflight, guardy has_*, walidacja bloku pytań (faza 2) oraz sekwencja
+# narzędzi install_* przed login_block i warunkowy rollback userdel (faza 3).
 # Wzorzec z install.test.sh: lib-only source + sandbox mktemp + pass/problem.
 #
 # Każdy scenariusz działa w ŚWIEŻYM subshellu (bash -c + source lib-only):
@@ -588,7 +589,91 @@ EOF
   fi
 }
 
-echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback) i fazy 2 (preflight/guardy/pytania) =="
+# Rejestrator wywołań dla testów sekwencji main() (faza 3): każda funkcja-
+# komponent podmieniona na stub echo "CALL <nazwa>" — main wykonuje się bez
+# side-effectów, a harness bada KOLEJNOŚĆ i OBECNOŚĆ wywołań (DI jak w t.23).
+MAIN_COMPONENT_FNS="print_banner run_preflight resolve_install_paths collect_config \
+apply_timezone install_base_packages install_node ensure_claude_user ensure_workspace \
+install_claude_cli install_ob install_tailscale login_block clone_repo \
+setup_puls_dependencies create_systemd_service configure_firewall setup_tailscale \
+setup_funnel setup_auto_update print_summary"
+
+write_recorder_snippet() {
+  local snippet="$1" main_args="$2"
+  cat > "$snippet" <<EOF
+for fn in $MAIN_COMPONENT_FNS; do
+  eval "\$fn() { echo \"CALL \$fn\"; }"
+done
+main $main_args
+EOF
+}
+
+# --- Test 29: sekwencja main() — wszystkie install_* PRZED login_block ---
+test_main_installs_before_login_block() {
+  # Żadne narzędzie nie może instalować się po pierwszej pauzie interaktywnej:
+  # re-run po padzie loginu (leave-partial) musi wskakiwać prosto w login.
+  local snippet="$SANDBOX/t-seq.sh" out calls before after
+  write_recorder_snippet "$snippet" ""
+  out="$(run_snippet "$snippet")"
+  calls="$(grep '^CALL ' <<<"$out" || true)"
+  if ! grep -q '^CALL login_block$' <<<"$calls"; then
+    problem "sekwencja main(): brak wywołania login_block (calls: $calls)"
+    return
+  fi
+  before="$(sed -n '1,/^CALL login_block$/p' <<<"$calls")"
+  after="$(sed -n '/^CALL login_block$/,$p' <<<"$calls" | tail -n +2)"
+  if grep -q '^CALL install_base_packages$' <<<"$before" \
+    && grep -q '^CALL install_node$' <<<"$before" \
+    && grep -q '^CALL install_claude_cli$' <<<"$before" \
+    && grep -q '^CALL install_ob$' <<<"$before" \
+    && grep -q '^CALL install_tailscale$' <<<"$before" \
+    && ! grep -q '^CALL install_' <<<"$after"; then
+    pass "main(): wszystkie install_* przed login_block, żadnego install_* po"
+  else
+    problem "main(): zła sekwencja install_*/login_block (calls: $calls)"
+  fi
+}
+
+# --- Test 30: --only-puls → install_ob NIE wywołane; bez flagi → wywołane ---
+test_main_only_puls_skips_ob() {
+  # Decyzja o pominięciu zapada w main() (nie wewnątrz install_ob) — rejestrator
+  # widzi realny brak wywołania, nie early-return wewnątrz stubowanej funkcji.
+  local snippet="$SANDBOX/t-onlypuls.sh" out
+  write_recorder_snippet "$snippet" "--only-puls"
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" != *"CALL install_ob"* ]] \
+    && [[ "$out" == *"CALL install_claude_cli"* ]] \
+    && [[ "$out" == *"CALL install_tailscale"* ]]; then
+    pass "main --only-puls: install_ob pominięte, reszta narzędzi instalowana"
+  else
+    problem "main --only-puls: zły zestaw wywołań (output: $out)"
+  fi
+}
+
+# --- Test 31: rollback userdel rejestrowany TYLKO gdy user powstał w tym runie ---
+test_userdel_rollback_conditional() {
+  # Istniejący user (has_user_claude=0) to cudzy stan sprzed runa — rollback
+  # NIE może go skasować. Stub useradd/resolve (DI granicy systemu jak w t.28).
+  local snippet="$SANDBOX/t-userdel.sh" out
+  cat > "$snippet" <<'EOF'
+useradd() { :; }
+resolve_install_paths() { :; }
+has_user_claude() { return 0; }
+ensure_claude_user
+echo "STACK_A=[${ROLLBACK_STACK[*]-}]"
+has_user_claude() { return 1; }
+ensure_claude_user
+echo "STACK_B=[${ROLLBACK_STACK[*]-}]"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"STACK_A=[]"* ]] && [[ "$out" == *"STACK_B=[userdel -r claude]"* ]]; then
+    pass "rollback: userdel na stosie TYLKO gdy user utworzony w tym runie"
+  else
+    problem "rollback userdel: zła rejestracja (output: $out)"
+  fi
+}
+
+echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania) i fazy 3 (narzędzia/sekwencja) =="
 test_syntax
 test_flags_port
 test_flags_unknown
@@ -617,6 +702,9 @@ test_normalize_path
 test_is_valid_workspace_path
 test_ask_workspace_flow
 test_ensure_workspace_chown_only_on_create
+test_main_installs_before_login_block
+test_main_only_puls_skips_ob
+test_userdel_rollback_conditional
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

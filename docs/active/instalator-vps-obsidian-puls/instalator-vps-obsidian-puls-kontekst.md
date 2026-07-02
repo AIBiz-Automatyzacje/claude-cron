@@ -1,13 +1,14 @@
 # Kontekst: Połączony instalator VPS (Obsidian + Puls)
 
 Branch: `feature/instalator-vps-obsidian-puls`
-Ostatnia aktualizacja: 2026-07-02 (Faza 2 ukończona)
+Ostatnia aktualizacja: 2026-07-02 (Faza 3 ukończona)
 
 ## Stan implementacji
 
 - **Faza 1 (IU1) — DONE**: `scripts/install-vps.sh` przebudowany na strukturę stałe → helpery → funkcje-komponenty → `main "$@"` za guardem `CLAUDE_CRON_LIB_ONLY`. Powstał harness `scripts/install-vps.test.sh` (14 asercji PASS). `bash -n` czysty, jedyny `read -r` w `ask_tty` (grep-strażnik zielony). Pełny suite projektu 163/163 PASS.
 - **Faza 2 (IU2) — DONE**: preflight (`run_preflight`: EUID=0, `is_supported_os` po `/etc/os-release`, `check_internet` na api.github.com), checklist 6 prerequisites z `ask_tty` „[Enter]", komplet guardów `has_*` (w tym rozdzielone `has_ob_auth`/`has_ob_sync`), blok 4 pytań (email/vault/repo/Discord) z walidacją + podsumowanie „Kontynuujemy? [T/n]", auto-wartości (`DEVICE_NAME=vps-$(hostname)`, PORT=7777/`--port`, `detect_timezone` z fallbackiem Europe/Warsaw), tryb `--only-puls` z pytaniem o workspace (`normalize_path`). Harness 25/25 PASS, `read -r` nadal tylko w `ask_tty`, `ask_tty` użyte 17×.
-- Fazy 3–7: do zrobienia.
+- **Faza 3 (IU3) — DONE**: sekcja narzędzi jako funkcje `install_*` w `main()` PRZED `login_block` (`install_base_packages` z guard-first per binarka + fail-fast weryfikacja, `install_node` z nodesource bez zmian progów, `install_claude_cli` natywnie przez claude.ai/install.sh zamiast npm, `install_ob` pomijane przy `--only-puls` w `main()`, `install_tailscale` przeniesiony z końca skryptu — samo `tailscale up` zostaje do IU4). `push_rollback "userdel -r claude"` i `npm rm -g obsidian-headless` tylko dla stanu utworzonego w tym runie. Cienki `login_block()` (wrapper na `login_claude_cli`) wyznacza granicę FAZY 2/3 dla testu sekwencji. Harness 31/31 PASS (rejestrator wywołań `main()`), grep `@anthropic-ai/claude-code` → 0 linii, suite projektu 163/163 PASS.
+- Fazy 4–7: do zrobienia.
 
 ## Powiązane pliki
 
@@ -54,6 +55,13 @@ Ostatnia aktualizacja: 2026-07-02 (Faza 2 ukończona)
 19. **Usunięte interaktywne pytania o port/TZ/workspace w pełnym trybie** (razem z `ask_port` i jego testem — usunięcie testu razem z usuwaną funkcjonalnością): spec R4/FAZA 1 robi z nich auto-wartości (`PORT=7777`/`--port`, TZ autodetekcja `timedatectl` → `Europe/Warsaw`, `WORKSPACE=$CLAUDE_HOME/vault`). `WORKSPACE` w pełnym trybie ustawiany już teraz (formalnie IU5) — po usunięciu pytania `create_systemd_service` nie miałby wartości.
 20. **`ask_workspace` (`--only-puls`) nie pyta o utworzenie folderu** — tworzenie przeniesione do automatu `ensure_workspace` PO `useradd` (w momencie pytań FAZY 1 `/home/claude` może nie istnieć); zgodę usera pokrywa podsumowanie + „Kontynuujemy? [T/n]".
 21. **`resolve_install_paths` przez `getent passwd` z fallbackiem `/home/claude`** zamiast `eval echo ~user` — konieczność strukturalna (pytania lecą przed `useradd`); efekt uboczny: znika anty-wzorzec `eval` (P3-16 z review), choć sekcja „Do poprawy po review" celowo nie była częścią tej fazy.
+
+### Decyzje z Fazy 3 (implementacja IU3)
+
+22. **`install_base_packages` zamiast jednego bezwarunkowego apt** — instaluje tylko BRAKUJĄCE pakiety (guard-first per binarka, konwencja idempotencji repo); ca-certificates dokładane przy każdym przebiegu apt (brak własnej binarki do guardu), fail-fast weryfikacja git/curl/crontab/gh po instalacji (gh = twardy prerequisit device flow).
+23. **Prefix `install_*` zarezerwowany dla narzędzi FAZY 2** — rename `install_dependencies` → `setup_puls_dependencies` (npm deps aplikacji po clone), żeby test sekwencji „wszystkie `install_*` przed `login_block`" był generyczny po nazwach i chronił fazy 4–7 przed regresją.
+24. **`login_block()` jako cienki wrapper już w IU3** — granica FAZY 2/3 musi istnieć dla testu sekwencji; pełne 5 pauz przez `run_login` wchodzi w IU4.
+25. **Rollback celowo BEZ apt/Claude-native/Tailscale** — odinstalowanie pakietów systemowych na rollbacku groźniejsze niż pozostawienie (re-run idempotentny); na stosie tylko `userdel -r claude` i `npm rm -g obsidian-headless`, oba wyłącznie gdy stan powstał w tym runie.
 
 ## Odroczone do implementacji
 

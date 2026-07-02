@@ -65,15 +65,15 @@ Ostatnia aktualizacja: 2026-07-02
 
 ## Faza 3: Narzędzia (IU3)
 
-- [ ] `apt-get install -y git curl ca-certificates cron gh` (guard `command -v gh`)
-- [ ] Node: sekcja nodesource przeniesiona do funkcji (progi `>=22.13 <25` bez zmian)
-- [ ] `useradd -m -s /bin/bash claude` za guardem; `push_rollback "userdel -r claude"` TYLKO gdy user powstał w tym runie
-- [ ] Claude Code NATYWNIE: `su - claude -c "curl -fsSL https://claude.ai/install.sh | bash"` → guard `command -v claude`
-- [ ] `npm i -g obsidian-headless` (pomijane przy `--only-puls`)
-- [ ] Instalacja Tailscale przeniesiona TU (install + czekanie na daemon; `tailscale up` w Fazie 4)
-- [ ] Test: kolejność w `main()` — wszystkie `install_*` PRZED `login_block` (rejestrator wywołań)
-- [ ] Test: `--only-puls` → kroki obsidianowe nie wywoływane (rejestrator)
-- [ ] Test: rollback warunkowy — `has_user_claude`=istnieje → brak `userdel` na stosie
+- [x] `apt-get install -y git curl ca-certificates cron gh` (guard `command -v gh`) — zaimplementowane jako `install_base_packages`: guard-first per binarka (instaluje tylko brakujące), ca-certificates przy każdym przebiegu apt, fail-fast weryfikacja git/curl/crontab/gh po instalacji
+- [x] Node: sekcja nodesource przeniesiona do funkcji `install_node` (progi `>=22.13 <25` bez zmian)
+- [x] `useradd -m -s /bin/bash claude` za guardem; `push_rollback "userdel -r claude"` TYLKO gdy user powstał w tym runie
+- [x] Claude Code NATYWNIE: `su - claude -c "curl -fsSL https://claude.ai/install.sh | bash"` → guard `command -v claude`
+- [x] `npm i -g obsidian-headless` (pomijane przy `--only-puls`; decyzja o pominięciu w `main()`, nie wewnątrz funkcji) + rollback `npm rm -g obsidian-headless` gdy zainstalowany w tym runie
+- [x] Instalacja Tailscale przeniesiona TU (`install_tailscale`: install + czekanie na daemon; `tailscale up` w Fazie 4)
+- [x] Test: kolejność w `main()` — wszystkie `install_*` PRZED `login_block` (rejestrator wywołań)
+- [x] Test: `--only-puls` → kroki obsidianowe nie wywoływane (rejestrator)
+- [x] Test: rollback warunkowy — `has_user_claude`=istnieje → brak `userdel` na stosie
 - [ ] Test: [Manual] czysty Ubuntu: `command -v node gh claude ob tailscale` po Fazie 2 spec-u
 - [ ] Weryfikacja: `bash scripts/install-vps.test.sh` — asercje sekwencji i guardów PASS
 - [ ] Weryfikacja: `grep -n '@anthropic-ai/claude-code' scripts/install-vps.sh` → 0 linii

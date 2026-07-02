@@ -187,7 +187,7 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 
 ---
 
-- [ ] **Unit 3: FAZA 2 — narzędzia (apt+gh, Node, user, Claude NATYWNIE, ob, Tailscale)**
+- [x] **Unit 3: FAZA 2 — narzędzia (apt+gh, Node, user, Claude NATYWNIE, ob, Tailscale)**
 
 **Cel:** Wszystkie narzędzia zainstalowane przed jakimkolwiek loginem; zmiana instalacji Claude z npm na natywną; Tailscale przeniesiony z końca skryptu do fundamentu.
 
@@ -217,14 +217,14 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 - Przewodnik headless sekcja 2b (natywna instalacja Claude)
 
 **Scenariusze testowe:**
-- [Unit] kolejność wywołań w `main()` (introspekcja listy funkcji / test sekwencji): wszystkie `install_*` PRZED `login_block` (żadne narzędzie nie instaluje się po pierwszej pauzie)
-- [Unit] `--only-puls` → funkcje `install_ob`/kroki obsidianowe nie wywoływane (wstrzyknięty rejestrator wywołań)
-- [Unit] rollback rejestrowany warunkowo: guard `has_user_claude`=0 (istnieje) → brak `userdel` na stosie
-- [Manual] czysty Ubuntu VPS: wszystkie narzędzia obecne po Fazie 2 (`command -v node gh claude ob tailscale`)
+- [x] [Unit] kolejność wywołań w `main()` (introspekcja listy funkcji / test sekwencji): wszystkie `install_*` PRZED `login_block` (żadne narzędzie nie instaluje się po pierwszej pauzie)
+- [x] [Unit] `--only-puls` → funkcje `install_ob`/kroki obsidianowe nie wywoływane (wstrzyknięty rejestrator wywołań)
+- [x] [Unit] rollback rejestrowany warunkowo: guard `has_user_claude`=0 (istnieje) → brak `userdel` na stosie
+- [ ] [Manual] czysty Ubuntu VPS: wszystkie narzędzia obecne po Fazie 2 (`command -v node gh claude ob tailscale`)
 
 **Weryfikacja:**
-- `bash scripts/install-vps.test.sh` — asercje sekwencji i guardów PASS
-- `grep -n '@anthropic-ai/claude-code' scripts/install-vps.sh` → 0 linii (npm-instalacja Claude usunięta)
+- [x] `bash scripts/install-vps.test.sh` — asercje sekwencji i guardów PASS (31/31)
+- [x] `grep -n '@anthropic-ai/claude-code' scripts/install-vps.sh` → 0 linii (npm-instalacja Claude usunięta)
 
 ---
 
