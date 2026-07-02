@@ -2274,6 +2274,76 @@ EOF
   fi
 }
 
+# --- Test 69: configure_firewall — 'Status: inactive' MUSI odpalić `ufw --force enable`
+# (realny pad z VPS 2026-07-02: goły grep "active" matchował "inactive" → reguły
+# w uśpionym firewallu, dashboard publicznie widoczny; granica R "tylko Tailscale") ---
+test_configure_firewall_enables_inactive() {
+  local snippet="$SANDBOX/t-ufw.sh" log="$SANDBOX/ufw.log" state="$SANDBOX/ufw-state" out rc
+  # Stateful stub: status czyta plik stanu; `--force enable` przełącza go na active.
+  echo "inactive" > "$state"
+  cat > "$snippet" <<EOF
+PORT=7777
+ufw() {
+  echo "ufw \$*" >> "$log"
+  if [ "\$1" = "status" ]; then echo "Status: \$(cat "$state")"; return 0; fi
+  if [ "\$1" = "--force" ] && [ "\$2" = "enable" ]; then echo "active" > "$state"; fi
+  return 0
+}
+apt-get() { :; }
+configure_firewall
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && grep -q '^ufw --force enable$' "$log" \
+    && grep -q '^ufw deny 7777/tcp$' "$log" \
+    && [[ "$out" == *"zablokowany w UFW"* ]] && [[ "$out" != *"WIDOCZNY"* ]]; then
+    pass "configure_firewall: 'Status: inactive' → --force enable + deny + potwierdzenie"
+  else
+    problem "configure_firewall: inactive NIE włączył UFW (rc=$rc, log: $(cat "$log" 2>/dev/null), out: $out)"
+  fi
+
+  # Już aktywny → bez ponownego enable (idempotencja).
+  local log2="$SANDBOX/ufw2.log" out2
+  echo "active" > "$state"
+  cat > "$snippet" <<EOF
+PORT=7777
+ufw() {
+  echo "ufw \$*" >> "$log2"
+  [ "\$1" = "status" ] && echo "Status: \$(cat "$state")"
+  return 0
+}
+apt-get() { :; }
+configure_firewall
+EOF
+  out2="$(run_snippet "$snippet")"
+  if [ "$?" -eq 0 ] && ! grep -q 'force enable' "$log2" && [[ "$out2" == *"zablokowany w UFW"* ]]; then
+    pass "configure_firewall: 'Status: active' → bez ponownego enable"
+  else
+    problem "configure_firewall: aktywny UFW włączany ponownie lub brak ok (out: $out2)"
+  fi
+
+  # Enable nie zadziałał (stan zostaje inactive) → GŁOŚNY warn o widoczności z internetu.
+  local log3="$SANDBOX/ufw3.log" out3
+  echo "inactive" > "$state"
+  cat > "$snippet" <<EOF
+PORT=7777
+ufw() {
+  echo "ufw \$*" >> "$log3"
+  [ "\$1" = "status" ] && echo "Status: \$(cat "$state")"
+  return 0
+}
+apt-get() { :; }
+configure_firewall
+echo "PO_UFW"
+EOF
+  out3="$(run_snippet "$snippet")"
+  if [ "$?" -eq 0 ] && [[ "$out3" == *"WIDOCZNY z publicznego internetu"* ]] && [[ "$out3" == *"PO_UFW"* ]]; then
+    pass "configure_firewall: UFW dalej nieaktywny → warn o ekspozycji, bez faila"
+  else
+    problem "configure_firewall: brak warn przy nieaktywnym UFW (out: $out3)"
+  fi
+}
+
 # --- Test 67: on_err z PUSTYM stosem rollbacku — komunikat + resume, nie cichy exit
 # (realny pad z VPS 2026-07-02: unattended-upgrades ubił apt w install_node PRZED
 # pierwszym push_rollback → user dostał goły błąd apt i prompt, zero instrukcji) ---
@@ -2414,6 +2484,7 @@ test_reset_full_flow_order
 test_disable_funnel
 test_on_err_empty_stack_message
 test_setup_apt_lock_wait
+test_configure_firewall_enables_inactive
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

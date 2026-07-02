@@ -1308,7 +1308,11 @@ configure_firewall() {
     # Najpierw ZAWSZE przepuść SSH — nigdy nie odcinaj sobie dostępu
     ufw allow 22/tcp 2>/dev/null || true
 
-    if ! ufw status | grep -q "active"; then
+    # Kotwica '^Status: active' obowiązkowa: goły grep "active" matchuje też
+    # "Status: inactive" (substring) — na świeżym VPS pomijał `ufw enable`,
+    # reguły lądowały w uśpionym firewallu i dashboard był widoczny
+    # z publicznego internetu (realny pad z przebiegu operatora 2026-07-02).
+    if ! ufw status | grep -q '^Status: active'; then
       info "Włączam UFW..."
       ufw --force enable
     fi
@@ -1320,7 +1324,16 @@ configure_firewall() {
       ufw delete allow "$PORT" 2>/dev/null || true
     fi
     ufw deny "$PORT/tcp" 2>/dev/null || true
-    ok "Port $PORT zablokowany w UFW (dostęp tylko przez Tailscale)"
+
+    # Granica bezpieczeństwa (dashboard tylko przez Tailscale) — potwierdzamy
+    # stan faktyczny, nie zamiar. Warn zamiast fail: ERR odwinąłby rollback
+    # działającej instalacji (konwencja verify_services).
+    if ufw status | grep -q '^Status: active'; then
+      ok "Port $PORT zablokowany w UFW (dostęp tylko przez Tailscale)"
+    else
+      warn "UFW NIE jest aktywny — dashboard na porcie $PORT jest WIDOCZNY z publicznego internetu!"
+      warn "Włącz ręcznie: ufw allow 22/tcp && ufw deny $PORT/tcp && ufw --force enable"
+    fi
   fi
 }
 
