@@ -453,15 +453,17 @@ EOF
 
 # --- Test 23: has_ob_auth vs has_ob_sync — DWA OSOBNE checki (zalogowany-bez-synca = 0,1) ---
 test_ob_guards_separate() {
-  # DI: run_as_claude podmienione na lokalny bash, atrapa `ob` przez PATH —
-  # login przechodzi (exit 0), sync-status pada (exit 1). Sklejenie checków
-  # w jeden dałoby (0,0) albo (1,1).
+  # DI: run_as_claude podmienione na lokalny bash, atrapa `ob` przez PATH.
+  # Realny kontrakt ob (cli.js 0.0.12): ZALOGOWANY login wypisuje
+  # "Logged in as <nazwa> (<email>)" i kończy 0; NIEZALOGOWANY pod </dev/null
+  # też kończy 0, ale BEZ tej frazy (zawieszony prompt hasła → pusty event
+  # loop → cichy exit 0). Guard musi rozróżniać po outputcie, nie kodzie.
   local snippet="$SANDBOX/t-ob-guards.sh" out
   mkdir -p "$SANDBOX/stub-bin"
   cat > "$SANDBOX/stub-bin/ob" <<'STUB'
 #!/usr/bin/env bash
 case "$1" in
-  login) exit 0 ;;
+  login) echo "Logged in as Test User (t@example.com)"; exit 0 ;;
   sync-status) exit 1 ;;
 esac
 exit 1
@@ -479,6 +481,32 @@ EOF
     pass "has_ob_auth vs has_ob_sync: zalogowany-bez-synca daje (0,1) — checki osobne"
   else
     problem "guardy ob sklejone lub błędne (output: $out)"
+  fi
+
+  # Adversarial (realny pad z VPS 2026-07-02): niezalogowany ob kończy się
+  # kodem 0 BEZ "Logged in as" — guard po samym kodzie wyjścia pominąłby
+  # KROK 3/5 (ob login) i sync-setup padłby na "No account logged in".
+  local snippet2="$SANDBOX/t-ob-guards-falsepos.sh" out2
+  mkdir -p "$SANDBOX/stub-bin-noauth"
+  cat > "$SANDBOX/stub-bin-noauth/ob" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  login) exit 0 ;;
+esac
+exit 1
+STUB
+  chmod +x "$SANDBOX/stub-bin-noauth/ob"
+  cat > "$snippet2" <<EOF
+export PATH="$SANDBOX/stub-bin-noauth:\$PATH"
+has_user_claude() { return 0; }
+run_as_claude() { bash -c "\$1"; }
+if has_ob_auth; then echo "AUTH=0"; else echo "AUTH=1"; fi
+EOF
+  out2="$(run_snippet "$snippet2")"
+  if [[ "$out2" == *"AUTH=1"* ]]; then
+    pass "has_ob_auth: exit 0 bez 'Logged in as' (niezalogowany ob pod EOF) → NIE zalogowany"
+  else
+    problem "has_ob_auth: fałszywy pozytyw na cichym exit 0 niezalogowanego ob (output: $out2)"
   fi
 }
 
@@ -1763,25 +1791,28 @@ EOF
 # --- Test 57: weryfikacja finału — is_sync_complete, pętla pierwszego synca, verify_services ---
 test_verify_services_and_sync_wait() {
   local snippet="$SANDBOX/t-sync.sh" cnt="$SANDBOX/sync-cnt" out rc out2 rc2 out3
+  # Ground truth z cli.js 0.0.12: `ob sync` loguje "Fully synced" po pełnym
+  # przebiegu; "not synced"/"syncing" NIE mogą matchować (fałszywy pozytyw
+  # bramki R11 — P3 review fazy 6, potwierdzone w źródłach pakietu).
   cat > "$snippet" <<'EOF'
-r_ing=0; is_sync_complete "Status: syncing 42%" || r_ing=$?
-r_ed=0;  is_sync_complete "Status: Fully synced" || r_ed=$?
-r_utd=0; is_sync_complete "vault up to date" || r_utd=$?
-echo "ING=$r_ing ED=$r_ed UTD=$r_utd"
+r_ing=0; is_sync_complete "Removing local-only file x.md" || r_ing=$?
+r_ed=0;  is_sync_complete "Fully synced" || r_ed=$?
+r_not=0; is_sync_complete "vault not synced" || r_not=$?
+echo "ING=$r_ing ED=$r_ed NOT=$r_not"
 EOF
   out="$(run_snippet "$snippet")"
-  if [[ "$out" == *"ING=1 ED=0 UTD=0"* ]]; then
-    pass "is_sync_complete: 'syncing' → jeszcze nie; 'synced'/'up to date' → gotowe"
+  if [[ "$out" == *"ING=1 ED=0 NOT=1"* ]]; then
+    pass "is_sync_complete: 'Fully synced' → gotowe; log postępu i 'not synced' → jeszcze nie"
   else
     problem "is_sync_complete: złe rozpoznanie (output: $out)"
   fi
-  # Pętla: 3. odpytanie zwraca synced → sukces bez wyczerpania okna.
+  # Pętla: 3. odczyt journala zwraca 'Fully synced' → sukces bez wyczerpania okna.
   echo 0 > "$cnt"
   cat > "$snippet" <<EOF
 sleep() { :; }
-run_as_claude() {
+journalctl() {
   local c; c=\$(cat "$cnt"); c=\$((c+1)); echo \$c > "$cnt"
-  if [ \$c -ge 3 ]; then echo "Status: fully synced"; else echo "Status: syncing"; fi
+  if [ \$c -ge 3 ]; then echo "Fully synced"; else echo "Starting sync:"; fi
 }
 wait_for_first_sync
 echo "PO_SYNC"
@@ -1790,7 +1821,7 @@ EOF
   rc2=$?
   if [ "$rc2" -eq 0 ] && [[ "$out2" == *"Pierwszy sync zakończony"* ]] \
     && [[ "$out2" == *"PO_SYNC"* ]] && [ "$(cat "$cnt")" = "3" ]; then
-    pass "wait_for_first_sync: sukces przy 3. odpytaniu sync-status"
+    pass "wait_for_first_sync: sukces przy 3. odczycie journala serwisu"
   else
     problem "wait_for_first_sync: happy path zawiódł (rc=$rc2, próby=$(cat "$cnt" 2>/dev/null), output: $out2)"
   fi
@@ -1798,12 +1829,12 @@ EOF
   # przy obu serwisach active raportuje oba.
   cat > "$snippet" <<'EOF'
 sleep() { :; }
-run_as_claude() { echo "Status: syncing"; }
+journalctl() { echo "Starting sync:"; }
 wait_for_first_sync
 echo "PO_TIMEOUT"
 FLAG_ONLY_PULS=0
 systemctl() { return 0; }
-run_as_claude() { echo "fully synced"; }
+journalctl() { echo "Fully synced"; }
 verify_services
 EOF
   out3="$(run_snippet "$snippet")"

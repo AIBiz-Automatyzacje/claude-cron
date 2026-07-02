@@ -468,12 +468,21 @@ has_gh_auth() {
 
 # DWA OSOBNE checki Obsidiana (spec FAZA 0): zgrubny pojedynczy check mógłby
 # pominąć niedokończony sync-setup i zostawić usera w half-configured stanie.
-# `ob login` bez argumentów: zalogowany → pokazuje konto (exit 0);
-# </dev/null — żeby niezalogowany ob nie zawisł na interaktywnym pytaniu.
+# Kod wyjścia `ob login </dev/null` NIE nadaje się na guard: niezalogowany ob
+# w trybie nie-TTY czeka na event 'end' stdin przy DRUGIM prompcie (hasło),
+# a 'end' odpalił się już przy pierwszym — promise nigdy się nie rozwiązuje,
+# event loop pustoszeje i Node wychodzi z kodem 0 bez logowania (potwierdzone
+# na obsidian-headless 0.0.12 i na żywym VPS: pominięty KROK 3/5, po czym
+# sync-setup padł na "No account logged in"). Zalogowany ob wypisuje
+# "Logged in as <nazwa> (<email>)" — rozpoznajemy po outputcie; komunikaty
+# błędów ("No account logged in.", "Login failed:") frazy nie zawierają.
+# </dev/null — żeby ob pod TTY nie zawisł na interaktywnym pytaniu.
 has_ob_auth() {
   has_user_claude || return 1
   run_as_claude "command -v ob" &>/dev/null || return 1
-  run_as_claude "ob login </dev/null" &>/dev/null
+  local out
+  out="$(run_as_claude "ob login </dev/null" 2>/dev/null || true)"
+  [[ "$out" == *"Logged in as"* ]]
 }
 
 has_ob_sync() {
@@ -1555,23 +1564,26 @@ check_service_active() {
   fi
 }
 
-# is_sync_complete <wyjście `ob sync-status`> — czysta heurystyka pierwszego
-# synca. Dokładne stringi wyjść ob odroczone (młody pakiet, format może się
-# zmieniać) — dopasowanie odporne, case-insensitive; potwierdzenie na żywym
-# narzędziu = Operator checklist. 'syncing' celowo NIE matchuje ('synced'
-# wymaga pełnego 'ed').
+# is_sync_complete <logi serwisu obsidian-sync> — czysta heurystyka pierwszego
+# synca. `ob sync-status` pokazuje wyłącznie STATYCZNĄ konfigurację
+# (Vault/Location/Sync mode — zweryfikowane w źródłach cli.js 0.0.12), więc
+# odpytywanie go NIGDY nie potwierdzi synca (każda instalacja płaciłaby pełne
+# okno + warn). Koniec pełnego przebiegu sygnalizuje samo `ob sync` logiem
+# "Fully synced" na stdout → journal serwisu. Case-insensitive na wypadek
+# zmiany kapitalizacji; wymagane 'fully' nie łapie "not synced"/"syncing".
 is_sync_complete() {
-  grep -qiE 'synced|up.to.date|complete' <<<"$1"
+  grep -qiE 'fully synced' <<<"$1"
 }
 
-# Pętla do SYNC_WAIT_MAX_SECONDS na pierwszy sync vaulta (R11). Timeout =
-# warn + instrukcja, nie fail — zob. komentarz przy stałych SYNC_*.
+# Pętla do SYNC_WAIT_MAX_SECONDS na pierwszy sync vaulta (R11) — czyta journal
+# serwisu obsidian-sync (stdout `ob sync --continuous`). Timeout = warn +
+# instrukcja, nie fail — zob. komentarz przy stałych SYNC_*.
 wait_for_first_sync() {
   info "Czekam na pierwszy sync vaulta (do ${SYNC_WAIT_MAX_SECONDS} s)..."
-  local waited=0 status_out=""
+  local waited=0 journal_out=""
   while [ "$waited" -lt "$SYNC_WAIT_MAX_SECONDS" ]; do
-    if status_out="$(run_as_claude "ob sync-status --path ~/vault" 2>&1)" \
-      && is_sync_complete "$status_out"; then
+    journal_out="$(journalctl -u "$OB_SYNC_SERVICE" -o cat --no-pager 2>/dev/null || true)"
+    if is_sync_complete "$journal_out"; then
       ok "Pierwszy sync zakończony"
       return 0
     fi
@@ -1579,7 +1591,7 @@ wait_for_first_sync() {
     waited=$((waited + SYNC_POLL_SECONDS))
   done
   warn "Sync jeszcze trwa po ${SYNC_WAIT_MAX_SECONDS} s — przy dużym vaulcie to normalne."
-  warn "Postęp sprawdzisz: su - $CLAUDE_USER -c 'ob sync-status --path ~/vault'"
+  warn "Postęp sprawdzisz: journalctl -u $OB_SYNC_SERVICE -n 30"
 }
 
 # Weryfikacja finału (R11): oba serwisy active + czekanie na pierwszy sync.
