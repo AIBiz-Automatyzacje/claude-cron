@@ -244,13 +244,6 @@ is_valid_email() { [[ "$1" =~ ^[^[:space:]@]+@[^[:space:]@]+$ ]]; }
 
 is_nonempty() { [ -n "$1" ]; }
 
-# Puste = pomiń (webhook jest opcjonalny). Niepuste: prefix Discorda + bez
-# białych znaków (wartość trafia do linii Environment= w unicie systemd).
-is_valid_discord_webhook() {
-  [ -z "$1" ] && return 0
-  [[ "$1" =~ ^https://discord\.com/api/webhooks/[^[:space:]]+$ ]]
-}
-
 # normalize_repo <input> — `user/repo` → https://github.com/user/repo.git;
 # pełny URL https → bez zmian; ssh/śmieci → exit 1. Tu tylko walidacja
 # FORMATU — walidacja DOSTĘPU (gh repo view) dopiero po gh login (Faza 4).
@@ -1146,11 +1139,6 @@ print_config_summary() {
   echo -e "  ${BOLD}Workspace:${NC}       $WORKSPACE"
   echo -e "  ${BOLD}Port Pulsa:${NC}      $PORT"
   echo -e "  ${BOLD}Strefa czasowa:${NC}  $TZ_VAL"
-  if [ -n "$DISCORD_URL" ]; then
-    echo -e "  ${BOLD}Discord:${NC}         powiadomienia włączone"
-  else
-    echo -e "  ${BOLD}Discord:${NC}         pominięty"
-  fi
   if [ "$FLAG_NO_AUTO_UPDATE" = 1 ]; then
     echo -e "  ${BOLD}Auto-update:${NC}     wyłączony (--no-auto-update)"
   else
@@ -1195,11 +1183,6 @@ collect_config() {
     WORKSPACE="$CLAUDE_HOME/vault"
   fi
 
-  ask_valid DISCORD_URL "Discord webhook URL do powiadomień (puste = pomiń): " \
-    is_valid_discord_webhook \
-    "Niepoprawny webhook — adres musi zaczynać się od https://discord.com/api/webhooks/." \
-    ""
-
   print_config_summary
   confirm_config
 }
@@ -1229,19 +1212,17 @@ ensure_workspace() {
   ok "Workspace: $WORKSPACE"
 }
 
-# build_puls_env_lines <workspace> <port> <home> <discord_url> — czysta funkcja
-# budująca blok Environment= unitu Pulsa. Nazwy zmiennych = kontrakt z
-# lib/config.js (CLAUDE_CRON_PORT / CLAUDE_CRON_WORKSPACE / DISCORD_WEBHOOK_URL).
+# build_puls_env_lines <workspace> <port> <home> — czysta funkcja budująca
+# blok Environment= unitu Pulsa. Nazwy zmiennych = kontrakt z lib/config.js
+# (CLAUDE_CRON_PORT / CLAUDE_CRON_WORKSPACE). Powiadomień celowo NIE tutaj —
+# VPS dostaje je pushem z lokalnego setupu/dashboardu, nie z instalatora.
 # WEBHOOK_BASE_URL celowo NIE tutaj — dopisuje go dopiero opcjonalny Funnel
 # (Faza 6). PATH z ~/.local/bin, bo tam żyje natywnie zainstalowany Claude CLI.
 build_puls_env_lines() {
-  local workspace="$1" port="$2" home="$3" discord_url="$4"
+  local workspace="$1" port="$2" home="$3"
   printf 'Environment=CLAUDE_CRON_PORT=%s\n' "$port"
   printf 'Environment=CLAUDE_CRON_WORKSPACE=%s\n' "$workspace"
   printf 'Environment=PATH=%s/.local/bin:%s/.npm-global/bin:/usr/local/bin:/usr/bin:/bin\n' "$home" "$home"
-  if [ -n "$discord_url" ]; then
-    printf 'Environment=DISCORD_WEBHOOK_URL=%s\n' "$discord_url"
-  fi
 }
 
 create_systemd_service() {
@@ -1251,7 +1232,7 @@ create_systemd_service() {
   SERVICE_FILE="$SYSTEMD_DIR/${SERVICE_NAME}.service"
   local node_path env_lines unit_existed=0
   node_path=$(which node)
-  env_lines="$(build_puls_env_lines "$WORKSPACE" "$PORT" "$CLAUDE_HOME" "$DISCORD_URL")"
+  env_lines="$(build_puls_env_lines "$WORKSPACE" "$PORT" "$CLAUDE_HOME")"
   # Rollback TYLKO dla unit-pliku utworzonego w TYM runie (jak obsidian-sync).
   [ -f "$SERVICE_FILE" ] && unit_existed=1
 
@@ -1675,9 +1656,7 @@ print_summary() {
   if [ -n "$WEBHOOK_BASE_URL" ]; then
     echo -e "  ${BOLD}Webhooki:${NC}   ${CYAN}$WEBHOOK_BASE_URL/webhook/<token>${NC}"
   fi
-  if [ -n "$DISCORD_URL" ]; then
-    echo -e "  ${BOLD}Discord:${NC}    powiadomienia włączone"
-  fi
+  echo -e "  ${BOLD}Powiadomienia:${NC} skonfigurujesz przy instalacji lokalnej — trafią tu automatycznie"
 
   echo ""
   echo -e "  ${BOLD}Przydatne komendy:${NC}"

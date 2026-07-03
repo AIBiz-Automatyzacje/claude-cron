@@ -4,7 +4,8 @@
 //  Jedna ścieżka konfiguracji uruchamiana przez portable Node z .node/
 //  (handoff z install.sh / install.ps1). Zadania:
 //   1. Warunek wstępny: Claude Code w PATH (handoff, NIE instaluje).
-//   2. Pytania konfiguracyjne (VPS, workspace, autostart, Discord).
+//   2. Pytania konfiguracyjne (VPS, workspace, autostart, powiadomienia
+//      Discord/Telegram, podstawowe taski).
 //   3. Generowanie hooka autostartu z ABSOLUTNĄ ścieżką portable Node
 //      (koniec gołego 'node' w detached procesie) + --disable-warning.
 //   4. Idempotentny merge wpisu hooka do {workspace}/.claude/settings.json.
@@ -203,6 +204,59 @@ export function buildVpsUrl(host, port) {
   }
   const resolvedPort = String(port || '').trim() || '7777';
   return `http://${trimmedHost}:${resolvedPort}`;
+}
+
+// === Pure helper: odpowiedzi setupu → payload state powiadomień ===
+// Klucze zgodne z NOTIFY_STATE_KEYS (lib/notify-config.js) i PUT /api/settings/notifications.
+// Tylko niepuste (po trim) wartości — setup nie czyści istniejącej konfiguracji.
+// Wszystko puste → null (caller pomija zapis do state i push na VPS).
+export function buildNotificationSettingsPayload(answers) {
+  const discord = String(answers?.discordWebhookUrl ?? '').trim();
+  const token = String(answers?.telegramBotToken ?? '').trim();
+  const chatId = String(answers?.telegramChatId ?? '').trim();
+
+  const payload = {};
+  if (discord) payload.discord_webhook_url = discord;
+  if (token) payload.telegram_bot_token = token;
+  if (chatId) payload.telegram_chat_id = chatId;
+  return Object.keys(payload).length > 0 ? payload : null;
+}
+
+// === Pure helper: odpowiedź getUpdates Telegrama → chat ID (string) albo null ===
+// Bot API zwraca result posortowany rosnąco po update_id, więc ostatni wpis z
+// message.chat.id to najświeższa rozmowa — przy wielu czatach wygrywa najnowszy.
+// ok !== true / brak update'ów z message → null (caller przechodzi na ręczne wpisanie).
+// Chat ID jako string: state trzyma stringi, a ID grup bywa ujemne (-100...).
+export function extractChatIdFromUpdates(json) {
+  if (!json || json.ok !== true || !Array.isArray(json.result)) {
+    return null;
+  }
+  let chatId = null;
+  for (const update of json.result) {
+    const id = update?.message?.chat?.id;
+    if (id !== undefined && id !== null) {
+      chatId = String(id);
+    }
+  }
+  return chatId;
+}
+
+// === Pure helper: odpowiedź na pytanie o kanał powiadomień → 'discord' | 'telegram' | null ===
+// Akceptuje numer z menu ([1]/[2]) i nazwę kanału (dowolna wielkość liter).
+// null = nierozpoznany wybór — caller pomija konfigurację powiadomień (dashboard później).
+export function parseNotifyChannelChoice(input) {
+  const choice = String(input ?? '').trim().toLowerCase();
+  if (choice === '1' || choice === 'discord') return 'discord';
+  if (choice === '2' || choice === 'telegram') return 'telegram';
+  return null;
+}
+
+// === Pure helper: rekurencyjne kopiowanie katalogu skilla (DI ścieżek źródło/cel) ===
+// Kopiowanie zamiast symlinku — symlink na Windows wymaga uprawnień administratora.
+// force nadpisuje istniejące pliki (re-run setupu aktualizuje skill), recursive tworzy
+// katalog docelowy razem z brakującymi rodzicami. Brak źródła → rzuca (ENOENT).
+export function copySkillDir(srcDir, destDir) {
+  fs.cpSync(srcDir, destDir, { recursive: true, force: true });
 }
 
 // === Pure helper: wykrycie Claude CLI w PATH (DI: funkcja sprawdzająca) ===
@@ -449,6 +503,244 @@ function persistEnvVar(varName, value, comment) {
   return rcFile;
 }
 
+// Timeout wywołań Bot API — setup nie może wisieć na sieci (spójny z lib/notify-push).
+const TELEGRAM_API_TIMEOUT_MS = 10_000;
+
+function telegramApiUrl(botToken, method) {
+  return `https://api.telegram.org/bot${botToken}/${method}`;
+}
+
+// === I/O shell: getUpdates Bot API → sparsowany JSON albo null (warn, bez przerywania) ===
+// Komunikaty błędów NIE zawierają URL-a — w path żyje token (jak w lib/telegram.js).
+async function fetchTelegramUpdates(botToken) {
+  try {
+    const res = await fetch(telegramApiUrl(botToken, 'getUpdates'), {
+      signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS),
+    });
+    return await res.json();
+  } catch (error) {
+    console.log(`[warn] Nie udało się pobrać getUpdates z api.telegram.org (${error.name}).`);
+    return null;
+  }
+}
+
+// === I/O shell: testowa wiadomość Telegram → true tylko przy ok:true w BODY odpowiedzi ===
+// Stan faktyczny, nie kod HTTP (learned pattern: fałszywe sygnały statusów) — Bot API
+// potrafi zwrócić 200 z ok:false. Pad wysyłki NIGDY nie przerywa setupu (warn u callera).
+async function sendTelegramTestMessage(botToken, chatId) {
+  try {
+    const res = await fetch(telegramApiUrl(botToken, 'sendMessage'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: '✅ Puls połączony z Telegramem' }),
+      signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS),
+    });
+    const json = await res.json();
+    return json?.ok === true;
+  } catch (error) {
+    console.log(`[warn] Wysyłka testowa do api.telegram.org nie doszła (${error.name}).`);
+    return false;
+  }
+}
+
+// === I/O shell: auto-detekcja chat ID przez getUpdates + potwierdzenie, ręczny fallback ===
+// Mechanizm ask obsługuje tty-handoff (curl|bash) — NIE czytamy stdin bezpośrednio.
+async function askTelegramChatId(rl, botToken) {
+  await ask(rl, 'Napisz teraz cokolwiek do swojego bota na Telegramie, potem wciśnij Enter: ');
+  const detected = extractChatIdFromUpdates(await fetchTelegramUpdates(botToken));
+  if (detected) {
+    const useDetected = (await ask(rl, `Wykryto chat ID: ${detected}. Użyć? [Y/n]: `, 'Y')).toLowerCase();
+    if (useDetected === 'y') {
+      return detected;
+    }
+  } else {
+    console.log('[info] Nie wykryto wiadomości do bota — podaj chat ID ręcznie.');
+  }
+  return ask(rl, 'Chat ID (puste = pomiń Telegram): ');
+}
+
+// === I/O shell: pełna konfiguracja kanału Telegram (token → chat ID → test-send) ===
+async function askTelegramSettings(rl) {
+  const token = await ask(rl, 'Telegram bot token (puste = pomiń): ');
+  if (!token) {
+    console.log('[info] Pominięto Telegram.');
+    return { token: '', chatId: '' };
+  }
+  const chatId = await askTelegramChatId(rl, token);
+  if (!chatId) {
+    console.log('[info] Pominięto Telegram (brak chat ID).');
+    return { token, chatId: '' };
+  }
+  const sent = await sendTelegramTestMessage(token, chatId);
+  console.log(
+    sent
+      ? '[ok] Wiadomość testowa wysłana — sprawdź Telegram.'
+      : '[warn] Wiadomość testowa nie doszła — sprawdź token i chat ID; poprawisz je w dashboardzie (Ustawienia powiadomień).',
+  );
+  return { token, chatId };
+}
+
+// === I/O shell: pytania o powiadomienia — opt-in, potem wybór JEDNEGO kanału ===
+// Feedback z testów operatora: nie pytamy o oba kanały po kolei — user wybiera
+// Discord ALBO Telegram; drugi kanał można dodać później w dashboardzie
+// (Ustawienia powiadomień), executor i tak obsługuje oba niezależnie per job.
+async function askNotificationSettings(rl) {
+  const answers = { discordWebhookUrl: '', telegramBotToken: '', telegramChatId: '' };
+  const want = (await ask(rl, 'Chcesz otrzymywać powiadomienia po zakończeniu zadań? [T/n]: ', 'T')).toLowerCase();
+  if (want !== 't') {
+    console.log('[info] Pominięto powiadomienia — skonfigurujesz je w dashboardzie (Ustawienia powiadomień).');
+    return answers;
+  }
+  const channel = parseNotifyChannelChoice(await ask(rl, 'Kanał powiadomień — [1] Discord, [2] Telegram: '));
+  if (channel === 'discord') {
+    answers.discordWebhookUrl = await ask(rl, 'Discord webhook URL (puste = pomiń): ');
+    if (!answers.discordWebhookUrl) {
+      console.log('[info] Pominięto Discord.');
+    }
+  } else if (channel === 'telegram') {
+    const { token, chatId } = await askTelegramSettings(rl);
+    answers.telegramBotToken = token;
+    answers.telegramChatId = chatId;
+  } else {
+    console.log('[info] Nierozpoznany wybór — pominięto powiadomienia (skonfigurujesz je w dashboardzie).');
+  }
+  return answers;
+}
+
+// === I/O shell: zapis payloadu powiadomień do state lokalnej DB ===
+// Wołany PO smoke-teście (baza zweryfikowana); getDb() otwiera połączenie lazy po
+// db.close() ze smoke-testu, migrate() jest idempotentny.
+function persistNotifySettings(payload) {
+  const db = require('./lib/db');
+  for (const [key, value] of Object.entries(payload)) {
+    db.setState(key, value);
+  }
+  db.close();
+}
+
+// === I/O shell: push konfiguracji na VPS przez współdzielony lib/notify-push ===
+// Kontrakt pushNotifySettings: nigdy nie rzuca — zawsze { ok, reason? }, zapis
+// potwierdzany GET-em po PUT. Pad pushu NIGDY nie przerywa setupu (warn + podpowiedź).
+async function pushNotifySettingsToVps(vpsUrl, payload) {
+  const { pushNotifySettings } = require('./lib/notify-push');
+  console.log('[info] Wysyłam konfigurację powiadomień na VPS...');
+  const result = await pushNotifySettings({ vpsUrl, settings: payload });
+  if (result.ok) {
+    console.log('[ok] VPS ma konfigurację powiadomień (potwierdzone odczytem po zapisie).');
+    return;
+  }
+  if (result.reason === 'endpoint_missing') {
+    console.log(
+      '[warn] VPS ma starszą wersję serwera (brak endpointu ustawień) — nocny auto-update (02:00) ją podniesie. '
+      + 'Potem wyślij konfigurację z dashboardu: Ustawienia powiadomień → „Wyślij na VPS".',
+    );
+    return;
+  }
+  console.log(
+    `[warn] Push na VPS nie powiódł się (${result.reason}) — wyślij później z dashboardu: `
+    + 'Ustawienia powiadomień → „Wyślij na VPS".',
+  );
+}
+
+// === I/O shell: seed podstawowych tasków + raport dodanych/pominiętych z powodem ===
+// Wołany PO udanym smoke-teście DB (wzorzec persistNotifySettings). Skanowanie skilli
+// (getAllSkills w lib/starter-jobs) czyta workspace z CLAUDE_CRON_WORKSPACE — ustawionego
+// wcześniej w tej sesji przez persistEnvVar. Idempotencja po nazwie joba: re-run nie duplikuje.
+// Zwraca nazwy dodanych jobów — caller synchronizuje ich harmonogramy z działającym serwerem.
+function seedStarterJobsWithReport() {
+  const { seedStarterJobs, SKIP_REASON } = require('./lib/starter-jobs');
+  const db = require('./lib/db');
+  const skipLabels = {
+    [SKIP_REASON.EXISTS]: 'job o tej nazwie już istnieje',
+    [SKIP_REASON.MISSING_SKILL]: 'brak dostępnego skilla',
+  };
+
+  const { added, skipped } = seedStarterJobs();
+  db.close();
+
+  for (const name of added) {
+    console.log(`[ok] Dodano task: ${name}`);
+  }
+  for (const entry of skipped) {
+    console.log(`[info] Pominięto „${entry.name}" — ${skipLabels[entry.reason] || entry.reason}.`);
+  }
+  if (added.length === 0) {
+    console.log('[info] Nie dodano nowych tasków.');
+  }
+  return added;
+}
+
+// Pure: id-ki jobów z listy API, których nazwa jest wśród seedowanych. Mapowanie po
+// nazwie, bo seed pisze do DB bez znajomości id, a serwer wymaga id w PUT /api/jobs/:id.
+export function matchJobIdsByName(jobs, names) {
+  const wanted = new Set(names);
+  return (Array.isArray(jobs) ? jobs : [])
+    .filter((job) => wanted.has(job?.name))
+    .map((job) => job.id);
+}
+
+// Timeout wywołań lokalnego API Pulsa — localhost odpowiada natychmiast albo wcale.
+const LOCAL_API_TIMEOUT_MS = 5_000;
+
+async function fetchLocalApi(pathname, options = {}) {
+  const res = await fetch(`${DASHBOARD_URL}${pathname}`, {
+    ...options,
+    signal: AbortSignal.timeout(LOCAL_API_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`${pathname} → HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// === I/O shell: rejestracja harmonogramów seedowanych tasków w JUŻ działającym serwerze ===
+// Re-run setupu: seed pisze joby wprost do DB, a croner rejestruje harmonogramy tylko przy
+// boocie (scheduleAll) i przez API — bez tego kroku taski byłyby widoczne w dashboardzie,
+// ale nie odpaliłyby się aż do restartu. PUT /api/jobs/:id z pustym body to celowy no-op
+// na danych (db.updateJob bez pól zwraca joba bez zmian), po którym serwer woła
+// scheduler.scheduleJob — gotowy prymityw "reschedule" bez nowego endpointu.
+// Pad NIGDY nie przerywa setupu (warn + instrukcja restartu, wzorzec installPulsSkill).
+async function syncSeededSchedulesOnRunningServer(addedNames) {
+  if (!(await pingDashboard())) {
+    return; // serwer nie działa — świeży boot zrobi scheduleAll i zobaczy seedowane joby
+  }
+  try {
+    const jobs = await fetchLocalApi('/api/jobs');
+    const ids = matchJobIdsByName(jobs, addedNames);
+    for (const id of ids) {
+      await fetchLocalApi(`/api/jobs/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+    }
+    console.log(`[ok] Harmonogramy ${ids.length} seedowanych tasków zarejestrowane w działającym serwerze.`);
+  } catch (error) {
+    console.log(
+      `[warn] Serwer Puls działa, ale rejestracja harmonogramów nie powiodła się (${error.message}) — `
+      + 'zrestartuj serwer, inaczej seedowane taski nie odpalą się z crona.',
+    );
+  }
+}
+
+// === I/O shell: instalacja skilla `puls` do globalnych skilli Claude Code ===
+// ~/.claude/skills/puls — dzięki temu agent w KAŻDEJ sesji zna REST API Pulsa
+// (tworzenie/edycja jobów, diagnoza runów). Pad kopiowania nie przerywa setupu
+// (warn + instrukcja ręczna) — skill to warstwa wygody, nie rdzeń instalacji.
+function installPulsSkill() {
+  const src = path.join(REPO_DIR, 'skills', 'puls');
+  const dest = path.join(os.homedir(), '.claude', 'skills', 'puls');
+  try {
+    copySkillDir(src, dest);
+    console.log(`[ok] Skill „puls" zainstalowany globalnie: ${dest}`);
+  } catch (error) {
+    console.log(
+      `[warn] Nie udało się zainstalować skilla „puls" (${error.message}) — `
+      + `skopiuj ręcznie: ${src} → ${dest}.`,
+    );
+  }
+}
+
 function registerHook(workspace, hookFile, nodeBin) {
   const settingsFile = path.join(workspace, '.claude', 'settings.json');
   let existing = {};
@@ -485,6 +777,12 @@ async function main() {
   const nodeBin = detectPortableNodeBin(process.execPath, process.platform, REPO_DIR, process.arch);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
+  // Hoisting poza try: odpowiedzi o powiadomieniach trzymamy w zmiennych, a zapis do
+  // state i push na VPS robimy dopiero PO smoke-teście DB (za blokiem try/finally).
+  let vpsUrl = null;
+  let notifyPayload = null;
+  let wantStarterJobs = false;
+
   try {
     const workspaceDefault = process.env.CLAUDE_CRON_WORKSPACE || os.homedir();
     let workspace;
@@ -511,7 +809,7 @@ async function main() {
 
     const vpsHost = await ask(rl, 'Tailscale IP VPS-a (puste = tryb tylko lokalny): ');
     const vpsPort = vpsHost ? await ask(rl, 'Port VPS [7777]: ', '7777') : '7777';
-    const vpsUrl = buildVpsUrl(vpsHost, vpsPort);
+    vpsUrl = buildVpsUrl(vpsHost, vpsPort);
     if (vpsUrl) {
       const vpsLoc = persistEnvVar('CLAUDE_CRON_VPS_URL', vpsUrl, 'Claude-Cron VPS connection');
       console.log(`[ok] VPS: ${vpsUrl} (zapisano w ${vpsLoc})`);
@@ -519,13 +817,9 @@ async function main() {
       console.log('[info] Tryb tylko lokalny — joby działają gdy komputer nie śpi.');
     }
 
-    const discordUrl = await ask(rl, 'Discord webhook URL (puste = pomiń): ');
-    if (discordUrl) {
-      const discordLoc = persistEnvVar('DISCORD_WEBHOOK_URL', discordUrl, 'Claude-Cron Discord notifications');
-      console.log(`[ok] Discord webhook zapisany w ${discordLoc}`);
-    } else {
-      console.log('[info] Pominięto Discord.');
-    }
+    // Powiadomienia idą do state DB (nie env) — zmiana z dashboardu działa bez restartu,
+    // a env DISCORD_WEBHOOK_URL/TELEGRAM_* pozostaje fallbackiem dla starych instalacji (R3).
+    notifyPayload = buildNotificationSettingsPayload(await askNotificationSettings(rl));
 
     const installHook = (await ask(rl, 'Zainstalować autostart? [Y/n]: ', 'Y')).toLowerCase();
     if (installHook === 'y') {
@@ -534,6 +828,16 @@ async function main() {
       console.log(added ? `[ok] Hook zarejestrowany: ${hookFile}` : '[ok] Hook już zarejestrowany.');
     } else {
       console.log('[info] Pominięto autostart.');
+    }
+
+    // Pytanie zbiorcze o podstawowe taski — sam seed dopiero PO smoke-teście DB
+    // (za blokiem try/finally), bo baza jest otwierana najwcześniej przy smoke-teście.
+    const starterAnswer = (
+      await ask(rl, 'Dodać zestaw podstawowych tasków (memory update, reflect, skill scout)? [T/n]: ', 'T')
+    ).toLowerCase();
+    wantStarterJobs = starterAnswer === 't';
+    if (!wantStarterJobs) {
+      console.log('[info] Pominięto podstawowe taski.');
     }
 
     const reloadHint =
@@ -548,6 +852,29 @@ async function main() {
   console.log('\n[info] Smoke-test bazy danych...');
   await runSmokeTest();
   console.log('[ok] Smoke-test DB przeszedł — typy zgodne.');
+
+  // Zapis powiadomień do state dopiero teraz — baza zweryfikowana smoke-testem.
+  if (notifyPayload) {
+    persistNotifySettings(notifyPayload);
+    console.log('[ok] Konfiguracja powiadomień zapisana lokalnie (state DB).');
+    if (vpsUrl) {
+      await pushNotifySettingsToVps(vpsUrl, notifyPayload);
+    }
+  }
+
+  // Seed podstawowych tasków — w setupie, NIE w migrate() (learned pattern: backfill
+  // w migrate() clobberowałby świadome decyzje usera przy każdym boocie).
+  if (wantStarterJobs) {
+    console.log('\n[info] Dodaję podstawowe taski...');
+    const addedNames = seedStarterJobsWithReport();
+    if (addedNames.length > 0) {
+      // Re-run przy działającym serwerze: bez tego croner nie zna nowych harmonogramów.
+      await syncSeededSchedulesOnRunningServer(addedNames);
+    }
+  }
+
+  // Skill `puls` do ~/.claude/skills — re-run nadpisuje (aktualizacja treści skilla).
+  installPulsSkill();
 
   // Auto-start serwera + auto-open przeglądarki (Mac/Win). Link wypisany ZAWSZE.
   await startServerAndOpen(nodeBin, REPO_DIR);

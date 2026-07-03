@@ -819,6 +819,7 @@ function openCreateModal() {
   document.getElementById('form-retries').value = '1';
   document.getElementById('form-wake').checked = true;
   document.getElementById('form-discord').checked = false;
+  document.getElementById('form-telegram').checked = false;
   document.getElementById('form-routine').checked = false;
   document.getElementById('form-job-type').value = 'claude';
   document.getElementById('form-command').value = '';
@@ -863,6 +864,7 @@ function openEditModal(id) {
   document.getElementById('form-retries').value = job.max_retries;
   document.getElementById('form-wake').checked = !!job.run_on_wake;
   document.getElementById('form-discord').checked = !!job.discord_notify;
+  document.getElementById('form-telegram').checked = !!job.telegram_notify;
   document.getElementById('form-routine').checked = !!job.routine;
   document.getElementById('form-job-type').value = job.job_type || 'claude';
   document.getElementById('form-command').value = job.command || '';
@@ -918,6 +920,7 @@ async function saveJob(e) {
     max_retries: parseInt(document.getElementById('form-retries').value, 10),
     run_on_wake: document.getElementById('form-wake').checked,
     discord_notify: document.getElementById('form-discord').checked,
+    telegram_notify: document.getElementById('form-telegram').checked,
     routine: document.getElementById('form-routine').checked,
   };
 
@@ -933,6 +936,144 @@ async function saveJob(e) {
     loadJobs();
   } catch {
     toast('Błąd zapisu joba', true);
+  }
+}
+
+// === Modal: Ustawienia powiadomień ===
+// Celowo goły fetch zamiast API.get/put: modal konfiguruje ZAWSZE lokalny state,
+// niezależnie od przełącznika LOKALNY/VPS — na VPS konfiguracja trafia wyłącznie
+// server-side pushem (R10: pełne sekrety nigdy nie przechodzą przez przeglądarkę).
+
+const NOTIFY_FIELD_IDS = {
+  discord_webhook_url: 'notify-discord-url',
+  telegram_bot_token: 'notify-telegram-token',
+  telegram_chat_id: 'notify-telegram-chat',
+};
+
+const NOTIFY_CHANNEL_KEYS = {
+  discord: ['discord_webhook_url'],
+  telegram: ['telegram_bot_token', 'telegram_chat_id'],
+};
+
+// Mapowanie reason z {ok:false, reason} (lib/notify-push.js) → czytelny komunikat.
+const PUSH_REASON_MESSAGES = {
+  vps_not_configured: 'VPS nie jest skonfigurowany (brak CLAUDE_CRON_VPS_URL)',
+  nothing_to_push: 'Brak konfiguracji do wysłania — najpierw zapisz ustawienia',
+  invalid_vps_url: 'Nieprawidłowy adres VPS w konfiguracji',
+  endpoint_missing: 'VPS ma starszą wersję Puls — zaktualizuje się nocą (02:00), spróbuj potem',
+  timeout: 'VPS nie odpowiada (timeout)',
+  confirm_mismatch: 'VPS nie potwierdził zapisu — spróbuj ponownie',
+};
+
+function pushReasonMessage(reason) {
+  return PUSH_REASON_MESSAGES[reason] || `Wysyłka na VPS nie powiodła się (${reason || 'nieznany błąd'})`;
+}
+
+// Placeholder pokazuje zamaskowany stan (GET nigdy nie zwraca pełnych sekretów),
+// pola startują puste — puste pole przy zapisie = nie nadpisuj.
+function notifyPlaceholder(maskedValue) {
+  return maskedValue ? `skonfigurowano (${maskedValue})` : 'nie skonfigurowano';
+}
+
+async function refreshNotifyModal() {
+  const res = await fetch('/api/settings/notifications');
+  if (!res.ok) throw new Error(`GET settings ${res.status}`);
+  const s = await res.json();
+  const placeholders = {
+    'notify-discord-url': notifyPlaceholder(s.discord.masked),
+    'notify-telegram-token': notifyPlaceholder(s.telegram.masked_token),
+    'notify-telegram-chat': notifyPlaceholder(s.telegram.chat_id),
+  };
+  for (const [id, text] of Object.entries(placeholders)) {
+    const input = document.getElementById(id);
+    input.placeholder = text;
+    input.value = '';
+  }
+}
+
+async function openNotifyModal() {
+  try {
+    await refreshNotifyModal();
+  } catch {
+    toast('Błąd pobierania ustawień powiadomień', true);
+    return;
+  }
+  document.getElementById('notify-push-vps').style.display = vpsConfigured ? '' : 'none';
+  document.getElementById('notify-modal-overlay').hidden = false;
+}
+
+function hideNotifyModal() {
+  document.getElementById('notify-modal-overlay').hidden = true;
+}
+
+function closeNotifyModal(e) {
+  if (e.target === document.getElementById('notify-modal-overlay')) hideNotifyModal();
+}
+
+async function putNotifySettings(body) {
+  const res = await fetch('/api/settings/notifications', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`PUT settings ${res.status}`);
+}
+
+async function saveNotifySettings(e) {
+  e.preventDefault();
+  // Tylko wypełnione pola trafiają do PUT — puste = zostaw obecną wartość.
+  const updates = {};
+  for (const [key, id] of Object.entries(NOTIFY_FIELD_IDS)) {
+    const value = document.getElementById(id).value.trim();
+    if (value !== '') updates[key] = value;
+  }
+  if (Object.keys(updates).length === 0) {
+    toast('Nic do zapisania — wszystkie pola puste');
+    return;
+  }
+  try {
+    await putNotifySettings(updates);
+    toast('Ustawienia powiadomień zapisane');
+    hideNotifyModal();
+  } catch {
+    toast('Błąd zapisu ustawień powiadomień', true);
+  }
+}
+
+async function clearNotifyChannel(channel) {
+  // Pusty string czyści klucz w state (fallback env wraca do gry) — semantyka PUT z Unit 2.
+  const body = {};
+  for (const key of NOTIFY_CHANNEL_KEYS[channel]) body[key] = '';
+  try {
+    await putNotifySettings(body);
+    toast(channel === 'discord' ? 'Wyczyszczono konfigurację Discord' : 'Wyczyszczono konfigurację Telegram');
+    await refreshNotifyModal(); // modal zostaje otwarty, placeholdery od razu odzwierciedlają stan
+  } catch {
+    toast('Błąd czyszczenia konfiguracji', true);
+  }
+}
+
+async function pushNotifyToVps() {
+  const btn = document.getElementById('notify-push-vps');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/settings/notifications/push-to-vps', { method: 'POST' });
+    // Stary/obcy serwer może zwrócić nie-JSON (np. HTML 404) — nie wywalaj UI.
+    let result;
+    try {
+      result = await res.json();
+    } catch {
+      result = { ok: false, reason: `http_${res.status}` };
+    }
+    if (result.ok) {
+      toast('Konfiguracja powiadomień wysłana na VPS');
+    } else {
+      toast(pushReasonMessage(result.reason), true);
+    }
+  } catch {
+    toast('Błąd sieci przy wysyłce na VPS', true);
+  } finally {
+    btn.disabled = false;
   }
 }
 

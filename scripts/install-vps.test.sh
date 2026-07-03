@@ -400,41 +400,6 @@ EOF
   fi
 }
 
-# --- Test 21: walidacja Discord URL — zły prefix → ponowne pytanie; puste = pomiń ---
-test_ask_valid_discord() {
-  local snippet="$SANDBOX/t-discord.sh" out rc out2 out3 warn_count
-  echo "https://zly.example.com/webhooks/1" > "$SANDBOX/tty-dc-bad"
-  cat > "$snippet" <<EOF
-TTY_DEVICE="$SANDBOX/tty-dc-bad"
-ask_valid OUT "Discord webhook (puste = pomiń): " is_valid_discord_webhook "Niepoprawny webhook" ""
-echo "NIEOSIAGALNE"
-EOF
-  out="$(run_snippet "$snippet")"
-  rc=$?
-  warn_count=$(grep -c "Niepoprawny webhook" <<<"$out" || true)
-  echo "https://discord.com/api/webhooks/123/abc" > "$SANDBOX/tty-dc-ok"
-  cat > "$snippet" <<EOF
-TTY_DEVICE="$SANDBOX/tty-dc-ok"
-ask_valid OUT "Discord webhook (puste = pomiń): " is_valid_discord_webhook "Niepoprawny webhook" ""
-echo "GOT=[\$OUT]"
-EOF
-  out2="$(run_snippet "$snippet")"
-  : > "$SANDBOX/tty-dc-empty"
-  cat > "$snippet" <<EOF
-TTY_DEVICE="$SANDBOX/tty-dc-empty"
-ask_valid OUT "Discord webhook (puste = pomiń): " is_valid_discord_webhook "Niepoprawny webhook" ""
-echo "GOT=[\$OUT]"
-EOF
-  out3="$(run_snippet "$snippet")"
-  if [ "$rc" -ne 0 ] && [ "$warn_count" -ge 2 ] && [[ "$out" != *"NIEOSIAGALNE"* ]] \
-    && [[ "$out2" == *"GOT=[https://discord.com/api/webhooks/123/abc]"* ]] \
-    && [[ "$out3" == *"GOT=[]"* ]]; then
-    pass "walidacja Discord: zły prefix → ponowne pytanie → fail; poprawny → OK; puste = pomiń"
-  else
-    problem "walidacja Discord zawiodła (rc=$rc, warny=$warn_count, out2: $out2, out3: $out3)"
-  fi
-}
-
 # --- Test 22: detect_timezone — pusty wynik timedatectl → Europe/Warsaw ---
 test_detect_timezone() {
   local snippet="$SANDBOX/t-tz.sh" out
@@ -603,6 +568,62 @@ EOF
     pass "ask_workspace: systemowa → retry → fail; odmowa utworzenia → retry; istniejący → OK"
   else
     problem "ask_workspace: zły przepływ (rc=$rc, warny=$warn_count, out: $out, out2: $out2)"
+  fi
+}
+
+# --- Test 70: collect_config REALNY przebieg — komplet pytań bez Discorda, bez wiszącego read ---
+test_collect_config_no_discord_question() {
+  # Unit 7 (faza 3): instalator NIE pyta o Discord. Harness main() mockuje
+  # collect_config (MAIN_COMPONENT_FNS), więc regresja przywracająca pytanie
+  # przeszłaby suite — a pod curl|bash wiszący `read` dostaje EOF i ciche
+  # domyślne (learned pattern). TEN test wykonuje REALNY collect_config ze
+  # stubem ask_tty na granicy tty (DI jak w t.27B): kolejka odpowiedzi o ZNANEJ
+  # długości — każde DODATKOWE pytanie sięga poza kolejkę i wywala test
+  # (guard :?), a licznik ASK_I przypina dokładną liczbę interakcji.
+  local snippet="$SANDBOX/t-collect-full.sh" out rc out2 rc2
+
+  # Część A: pełny tryb — dokładnie 4 pytania (email, vault, repo, potwierdzenie).
+  cat > "$snippet" <<EOF
+parse_flags
+CLAUDE_HOME="$SANDBOX/home-claude"
+ASK_QUEUE=("kursant@example.com" "MojVault" "user/repo" "T")
+ASK_I=0
+ask_tty() {
+  echo "PYTANIE: \$2"
+  printf -v "\$1" '%s' "\${ASK_QUEUE[\$ASK_I]:?za duzo pytan - wiszacy read}"
+  ASK_I=\$((ASK_I + 1))
+}
+collect_config
+echo "QUESTIONS=\$ASK_I REPO=\$VAULT_GIT_REPO"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+
+  # Część B: --only-puls — dokładnie 2 pytania (workspace, potwierdzenie).
+  mkdir -p "$WS_SANDBOX/ws-collect"
+  cat > "$snippet" <<EOF
+parse_flags --only-puls
+CLAUDE_HOME="$SANDBOX/home-claude"
+ASK_QUEUE=("$WS_SANDBOX/ws-collect" "T")
+ASK_I=0
+ask_tty() {
+  echo "PYTANIE: \$2"
+  printf -v "\$1" '%s' "\${ASK_QUEUE[\$ASK_I]:?za duzo pytan - wiszacy read}"
+  ASK_I=\$((ASK_I + 1))
+}
+collect_config
+echo "QUESTIONS=\$ASK_I WS=\$WORKSPACE"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"QUESTIONS=4 REPO=https://github.com/user/repo.git"* ]] \
+    && ! grep -qiE 'discord|webhook' <<<"$out" \
+    && [ "$rc2" -eq 0 ] && [[ "$out2" == *"QUESTIONS=2 WS=$WS_SANDBOX/ws-collect"* ]] \
+    && ! grep -qiE 'discord|webhook' <<<"$out2"; then
+    pass "collect_config: realny przebieg — 4 pytania (pełny) / 2 (--only-puls), zero Discorda, brak wiszącego read"
+  else
+    problem "collect_config: zły przebieg bloku pytań (rc=$rc, out: $out, rc2=$rc2, out2: $out2)"
   fi
 }
 
@@ -1188,27 +1209,25 @@ EOF
   fi
 }
 
-# --- Test 45: build_puls_env_lines — WORKSPACE/PORT/PATH; linia Discord warunkowo ---
+# --- Test 45: build_puls_env_lines — WORKSPACE/PORT/PATH; bez DISCORD_WEBHOOK_URL ---
 test_build_puls_env_lines() {
-  # Kontrakt z lib/config.js: CLAUDE_CRON_PORT / CLAUDE_CRON_WORKSPACE /
-  # DISCORD_WEBHOOK_URL; PATH musi zawierać ~/.local/bin (natywny Claude CLI).
+  # Kontrakt z lib/config.js: CLAUDE_CRON_PORT / CLAUDE_CRON_WORKSPACE;
+  # PATH musi zawierać ~/.local/bin (natywny Claude CLI).
+  # DISCORD_WEBHOOK_URL nie ma prawa się tu pojawić niezależnie od env —
+  # powiadomienia idą pushem z lokalnego setupu, nie z instalatora VPS.
   # WEBHOOK_BASE_URL nie ma prawa się tu pojawić (Funnel = Faza 6).
-  local snippet="$SANDBOX/t-env-lines.sh" out without
+  local snippet="$SANDBOX/t-env-lines.sh" out
   cat > "$snippet" <<'EOF'
-with="$(build_puls_env_lines "/home/claude/vault" "7777" "/home/claude" "https://discord.com/api/webhooks/1/a")"
-without="$(build_puls_env_lines "/home/claude/vault" "7777" "/home/claude" "")"
-echo "WITH<<<$with>>>"
-echo "WITHOUT<<<$without>>>"
+export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/1/a"
+build_puls_env_lines "/home/claude/vault" "7777" "/home/claude"
 EOF
   out="$(run_snippet "$snippet")"
-  without="${out#*WITHOUT<<<}"
   if [[ "$out" == *"Environment=CLAUDE_CRON_PORT=7777"* ]] \
     && [[ "$out" == *"Environment=CLAUDE_CRON_WORKSPACE=/home/claude/vault"* ]] \
     && [[ "$out" == *"Environment=PATH=/home/claude/.local/bin:/home/claude/.npm-global/bin:"* ]] \
-    && [[ "$out" == *"Environment=DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/1/a"* ]] \
-    && [[ "$without" != *"DISCORD_WEBHOOK_URL"* ]] \
+    && [[ "$out" != *"DISCORD_WEBHOOK_URL"* ]] \
     && [[ "$out" != *"WEBHOOK_BASE_URL"* ]]; then
-    pass "build_puls_env_lines: WORKSPACE/PORT/PATH zawsze; DISCORD tylko z webhookiem; bez WEBHOOK_BASE_URL"
+    pass "build_puls_env_lines: WORKSPACE/PORT/PATH zawsze; bez DISCORD_WEBHOOK_URL i WEBHOOK_BASE_URL"
   else
     problem "build_puls_env_lines: złe linie Environment (output: $out)"
   fi
@@ -1523,7 +1542,6 @@ SYSTEMD_DIR="$sysd2"
 CLAUDE_HOME="/home/claude"
 WORKSPACE="/home/claude/vault"
 PORT=7777
-DISCORD_URL=""
 INSTALL_DIR="/home/claude/claude-cron"
 systemctl() { :; }
 sleep() { :; }
@@ -1707,14 +1725,14 @@ test_print_summary_funnel_variants() {
   local snippet="$SANDBOX/t-summary.sh" out out2
   cat > "$snippet" <<'EOF'
 TS_IP="100.64.0.1"; PORT=7777; WORKSPACE="/home/claude/vault"
-INSTALL_DIR="/home/claude/claude-cron"; DISCORD_URL=""; WEBHOOK_BASE_URL=""
+INSTALL_DIR="/home/claude/claude-cron"; WEBHOOK_BASE_URL=""
 FLAG_ONLY_PULS=0
 print_summary
 EOF
   out="$(run_snippet "$snippet")"
   cat > "$snippet" <<'EOF'
 TS_IP="100.64.0.1"; PORT=7777; WORKSPACE="/home/claude/vault"
-INSTALL_DIR="/home/claude/claude-cron"; DISCORD_URL=""; WEBHOOK_BASE_URL="https://srv.ts.net"
+INSTALL_DIR="/home/claude/claude-cron"; WEBHOOK_BASE_URL="https://srv.ts.net"
 FLAG_ONLY_PULS=0
 print_summary
 EOF
@@ -2432,13 +2450,13 @@ test_normalize_repo
 test_ask_tty_unopenable_device
 test_halt_resume_message
 test_ask_valid_email
-test_ask_valid_discord
 test_detect_timezone
 test_ob_guards_separate
 test_is_supported_os
 test_normalize_path
 test_is_valid_workspace_path
 test_ask_workspace_flow
+test_collect_config_no_discord_question
 test_ensure_workspace_chown_only_on_create
 test_main_installs_before_login_block
 test_main_only_puls_skips_ob

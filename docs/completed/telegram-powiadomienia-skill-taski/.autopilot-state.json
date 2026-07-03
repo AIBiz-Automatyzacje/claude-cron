@@ -1,0 +1,51 @@
+{
+  "wersja": 1,
+  "zadanie": "telegram-powiadomienia-skill-taski",
+  "fazy": [
+    {
+      "numer": 1,
+      "nazwa": "Fundament powiadomień",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 2,
+      "nazwa": "Telegram",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 3,
+      "nazwa": "Konfiguracja raz-lokalnie",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 4,
+      "nazwa": "Onboarding: taski i skill",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 5,
+      "nazwa": "Dokumentacja",
+      "execute": "done",
+      "review": "done",
+      "fix": "none",
+      "otwarteFindingi": []
+    }
+  ],
+  "zakonczenie": {
+    "walidacja": "done",
+    "complete": "done",
+    "compound": "done"
+  }
+}

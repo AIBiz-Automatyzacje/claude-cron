@@ -21,6 +21,8 @@ Nie ma buildu, bundlera, lintera ani typecheckera. Backend to czysty CommonJS, f
 
 Instalatory (odpalane przez usera, nie w dev-loopie): `install.sh` (macOS), `install.ps1` (Windows), `scripts/install-vps.sh` (Linux/VPS — komponentowy, Obsidian+Puls+Tailscale, flagi `--only-puls`/`--reset`, guard lib-only `CLAUDE_CRON_LIB_ONLY`). Ich testy: `install.test.sh`, `install.ps1.Tests.ps1` (Pester), `scripts/install-vps.test.sh`, `setup.test.mjs`.
 
+Setup lokalny (`setup.mjs`) poza pytaniami o workspace/VPS/autostart: zbiera konfigurację powiadomień (Discord webhook, token Telegrama + auto-detekcja chat ID przez `getUpdates`, test-send) do **state DB** i pushuje ją na VPS przez `lib/notify-push.js` (warn przy padzie, nigdy fail setupu); seeduje podstawowe taski (`lib/starter-jobs.js`); instaluje skill **`puls`** z katalogu repo `skills/puls` globalnie do `~/.claude/skills/puls` (kopia, nie symlink — Windows; re-run nadpisuje). Skill uczy agenta Claude Code pracy z REST API Pulsa. Instalator VPS **nie pyta o Discord** i usuwa `DISCORD_WEBHOOK_URL` z unitu systemd — powiadomienia na VPS wymagają pusha z instalacji lokalnej.
+
 ## Runtime — twarde wymaganie Node
 
 Aplikacja stoi na wbudowanym `node:sqlite` (klasa `DatabaseSync`), stabilnym bez flagi dopiero od **Node 22.13**. `engines` wymusza `>=22.13 <25`.
@@ -31,22 +33,25 @@ Aplikacja stoi na wbudowanym `node:sqlite` (klasa `DatabaseSync`), stabilnym bez
 
 ## Architektura backendu (`lib/`)
 
-Przepływ joba: **cron/webhook/manual → kolejka runów w DB → executor (jeden na raz) → aktualizacja runu → opcjonalnie Discord.**
+Przepływ joba: **cron/webhook/manual → kolejka runów w DB → executor (jeden na raz) → aktualizacja runu → opcjonalnie powiadomienia (Discord/Telegram).**
 
-- **`config.js`** — jedyne źródło stałych i env-varów (`CLAUDE_CRON_PORT` 7777, `CLAUDE_CRON_VPS_URL`, `CLAUDE_CRON_WORKSPACE`, `DISCORD_WEBHOOK_URL`, `WEBHOOK_*`). `MIN/MAX_NODE_VERSION` żyją tu, żeby `runtime-guard` nie ciągnął `node:sqlite`.
+- **`config.js`** — jedyne źródło stałych i env-varów (`CLAUDE_CRON_PORT` 7777, `CLAUDE_CRON_VPS_URL`, `CLAUDE_CRON_WORKSPACE`, `DISCORD_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `WEBHOOK_*`). `MIN/MAX_NODE_VERSION` żyją tu, żeby `runtime-guard` nie ciągnął `node:sqlite`.
 - **`db.js`** — cała warstwa SQLite. `getDb()` leniwie otwiera połączenie i woła `migrate()` przy **każdym** starcie. Schemat: `jobs`, `runs`, `state` (key-value). Migracje przez `ALTER TABLE ... ` w try/catch (idempotentne). **Backfill danych owinięty sentinelem w `state`** (np. `wake_backfill_done`), bo `migrate()` leci co boot — gołe `UPDATE` clobberowałoby świadome opt-outy usera.
 - **`scheduler.js`** — `croner` planuje joby w **lokalnej strefie** (`Intl...timeZone`). Kolejka jest serializowana (`processQueue`, jeden run na raz — `executor.isRunning()`). Retry po failu przez `max_retries`. **Missed-job detection**: heartbeat zapisuje `last_active_at` co 60 s; po restarcie `computeMissedJobs()` (czysta, testowalna) sprawdza, które joby z `run_on_wake=1` przegapiono podczas downtime'u i kolejkuje je jako `wake`. Strefa w `computeMissedJobs` MUSI być ta sama co w `scheduleJob`. **Retention**: co godzinę kasuje udane runy jobów `routine=1` starsze niż 24 h (fail/timeout/killed zostają na zawsze).
 - **`executor.js`** — spawn CLI `claude --dangerously-skip-permissions --output-format stream-json -p <prompt>`. Prompt = `/skill` + `arguments` + `webhook_payload`. Czyści env `CLAUDE_CODE*`/`CLAUDECODE`, żeby spawnowany CLI nie myślał, że jest zagnieżdżony. Trzy warstwy timeoutów: total, idle (reset na każdym chunku stdout), watchdog wall-clock (przeżywa sen Maca). macOS: `caffeinate` blokuje idle-sleep na czas runu. Windows: `taskkill /T /F` (drzewo procesów). Drugi tryb: **`job_type: 'script'`** — odpala `node <command>` bez CLI Claude.
 - **`platform.js`** — autostart per-OS: macOS = plist launchd, Windows = Task Scheduler (`schtasks`). Zwraca `getStatus()` dla dashboardu.
 - **`skills.js`** — skanuje `SKILL.md` (frontmatter przez `gray-matter`) z trzech źródeł z priorytetem **project > user > plugin**: workspace `.claude/skills`, `~/.claude/skills`, oraz pluginy z `~/.claude/plugins/installed_plugins.json`.
-- **`webhook.js`** / **`discord.js`** — matching tokenu z URL `/webhook/:token`; powiadomienia Discord parsują `type:'result'` ze stream-json i dzielą na chunki ≤2000 znaków.
+- **`webhook.js`** — matching tokenu z URL `/webhook/:token`.
+- **Powiadomienia** (`discord.js`, `telegram.js`, `notify-format.js`, `notify-config.js`, `notify-push.js`) — dwa symetryczne kanały per-job (flagi `discord_notify`/`telegram_notify`). Wspólne formatowanie w `notify-format.js`: `extractResult` (wpis `type:'result'` ze stream-json) + `smartSplit` (chunki: Discord ≤2000, Telegram ≤4096, plain text bez parse_mode). Executor woła `notifyRunOutcome`: ✅ po sukcesie, ❌ po **ostatecznym** failu/timeoucie (po wyczerpaniu retry — okno liczone przez `db.countRecentFailedRuns`, TA SAMA definicja co retry w schedulerze), `killed` bez powiadomienia. `notify-config.js` rozwiązuje konfigurację w **czasie wysyłki** (nie przy require — zmiana z dashboardu działa bez restartu) z priorytetem **state (DB) > env** (env to fallback dla starych instalacji); pusty string w state = "brak", NIE nadpisuje env. `notify-push.js` wypycha pełną konfigurację na VPS (PUT + potwierdzenie GET-em; kontrakt `{ok, reason}`, nigdy nie rzuca). Sekrety w state leżą plaintext (świadoma decyzja — poziom zaufania jak shell RC); API zwraca wyłącznie maski (configured + ostatnie 4 znaki).
+- **`starter-jobs.js`** + **`templates/starter-jobs.json`** — seed 4 jobów startowych w setupie lokalnym (jedno pytanie `[T/n]`), NIE w `migrate()` (backfill w migrate clobberowałby decyzje usera co boot). Idempotencja po `name`, szablon bez dostępnego skilla pomijany z powodem; brak seedu na VPS.
 
 ## `server.js` — HTTP i granice bezpieczeństwa
 
-Ręczny router na czystym `node:http` (bez frameworka), match po `segments`/`method`. Serwuje `public/` (SPA fallback, ETag/no-cache dla kodu, 1 h cache dla logo/favicon). Dwie kluczowe reguły:
+Ręczny router na czystym `node:http` (bez frameworka), match po `segments`/`method`. Serwuje `public/` (SPA fallback, ETag/no-cache dla kodu, 1 h cache dla logo/favicon). Kluczowe reguły:
 
 - **Proxy `/api/vps/*` → instancja VPS** — dashboard lokalny przełącza widok między `local` a `vps` bez osobnego portu.
 - **Blokada zewnętrzna**: request z nagłówkiem `X-Forwarded-For` (czyli przez Tailscale Funnel) dostaje 403 na wszystkim poza `/webhook/*`. Dashboard jest dostępny **tylko** przez Tailscale (prywatnie); publiczny jest wyłącznie endpoint webhooków.
+- **Settings powiadomień**: `GET/PUT /api/settings/notifications` (GET zawsze zamaskowany; PUT whitelist 3 kluczy state, tylko stringi, pusty string czyści klucz → fallback env wraca) oraz `POST /api/settings/notifications/push-to-vps` — push robi **serwer** (czyta pełne wartości z własnego state/env), dashboard nigdy nie operuje pełnymi sekretami; statusy: 503 brak VPS, 400 nic do wysłania, 502 pad pusha.
 - Przy starcie `reapOrphanedRuns()` oznacza osierocone runy `running` (po crashu/restarcie) jako `killed` — inaczej kill-bar w UI wisiałby w nieskończoność.
 
 ## Frontend (`public/`)

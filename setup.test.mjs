@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  copySkillDir,
   resolveNodeBinPath,
   mergeHookIntoSettings,
   removeHookFromSettings,
@@ -15,6 +18,10 @@ import {
   parseFolderPickerResult,
   buildOpenBrowserCommand,
   buildSetUserEnvCommand,
+  buildNotificationSettingsPayload,
+  extractChatIdFromUpdates,
+  parseNotifyChannelChoice,
+  matchJobIdsByName,
   NODE_VERSION,
 } from './setup.mjs';
 
@@ -335,4 +342,146 @@ test('buildSetUserEnvCommand → powershell SetEnvironmentVariable w User scope 
 test('buildSetUserEnvCommand escapuje pojedynczy cudzysłów w wartości (error case: iniekcja)', () => {
   const { args } = buildSetUserEnvCommand('X', "a'b");
   assert.ok(args[2].includes("'a''b'"), "pojedynczy ' musi być podwojony na '' (literał PS)");
+});
+
+// === buildNotificationSettingsPayload — odpowiedzi setupu → payload state (Unit 6) ===
+
+test('buildNotificationSettingsPayload zawiera tylko wypełnione pola (klucze state)', () => {
+  const payload = buildNotificationSettingsPayload({
+    discordWebhookUrl: 'https://discord.com/api/webhooks/1/x',
+    telegramBotToken: '',
+    telegramChatId: '   ',
+  });
+  assert.deepEqual(payload, { discord_webhook_url: 'https://discord.com/api/webhooks/1/x' });
+});
+
+test('buildNotificationSettingsPayload trimuje wartości i mapuje na klucze snake_case', () => {
+  const payload = buildNotificationSettingsPayload({
+    discordWebhookUrl: '',
+    telegramBotToken: ' 123456:ABC-def ',
+    telegramChatId: ' 42 ',
+  });
+  assert.deepEqual(payload, { telegram_bot_token: '123456:ABC-def', telegram_chat_id: '42' });
+});
+
+test('buildNotificationSettingsPayload → null gdy wszystko puste (pomiń zapis i push)', () => {
+  assert.equal(
+    buildNotificationSettingsPayload({ discordWebhookUrl: '', telegramBotToken: '', telegramChatId: '' }),
+    null,
+  );
+  assert.equal(buildNotificationSettingsPayload({}), null);
+});
+
+// === extractChatIdFromUpdates — odpowiedź getUpdates → chat ID albo null (Unit 6) ===
+
+test('extractChatIdFromUpdates: jedna rozmowa → chat ID jako string', () => {
+  const json = { ok: true, result: [{ update_id: 10, message: { chat: { id: 123456 } } }] };
+  assert.equal(extractChatIdFromUpdates(json), '123456');
+});
+
+test('extractChatIdFromUpdates: brak update\'ów → null (przejście na ręczny fallback)', () => {
+  assert.equal(extractChatIdFromUpdates({ ok: true, result: [] }), null);
+});
+
+test('extractChatIdFromUpdates: wiele czatów → najnowszy (ostatni update, ujemne ID grupy)', () => {
+  const json = {
+    ok: true,
+    result: [
+      { update_id: 1, message: { chat: { id: 111 } } },
+      { update_id: 2, message: { chat: { id: 222 } } },
+      { update_id: 3, message: { chat: { id: -100333 } } },
+    ],
+  };
+  assert.equal(extractChatIdFromUpdates(json), '-100333');
+});
+
+test('extractChatIdFromUpdates: ok:false / malformed / update bez message → null', () => {
+  assert.equal(extractChatIdFromUpdates(null), null);
+  assert.equal(extractChatIdFromUpdates({ ok: false, result: [] }), null);
+  assert.equal(extractChatIdFromUpdates({ ok: true }), null);
+  assert.equal(extractChatIdFromUpdates({ ok: true, result: [{ update_id: 5 }] }), null);
+});
+
+// === parseNotifyChannelChoice — wybór kanału powiadomień w setupie ===
+
+test('parseNotifyChannelChoice: numer lub nazwa kanału → identyfikator kanału', () => {
+  assert.equal(parseNotifyChannelChoice('1'), 'discord');
+  assert.equal(parseNotifyChannelChoice('2'), 'telegram');
+  assert.equal(parseNotifyChannelChoice(' Discord '), 'discord');
+  assert.equal(parseNotifyChannelChoice('TELEGRAM'), 'telegram');
+});
+
+test('parseNotifyChannelChoice: puste / nierozpoznane → null (pomiń powiadomienia)', () => {
+  assert.equal(parseNotifyChannelChoice(''), null);
+  assert.equal(parseNotifyChannelChoice('3'), null);
+  assert.equal(parseNotifyChannelChoice('voice'), null);
+  assert.equal(parseNotifyChannelChoice(undefined), null);
+});
+
+// === copySkillDir — instalacja skilla puls do ~/.claude/skills (Unit 9) ===
+
+// Katalog roboczy per test w tmp — testy nie dotykają repo ani ~/.claude usera.
+function makeSkillFixture(t) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-skill-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const src = path.join(base, 'repo', 'skills', 'puls');
+  fs.mkdirSync(path.join(src, 'resources'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'SKILL.md'), '---\nname: puls\n---\ntreść', 'utf-8');
+  fs.writeFileSync(path.join(src, 'resources', 'extra.md'), 'extra', 'utf-8');
+  return { base, src };
+}
+
+test('copySkillDir kopiuje całe drzewo i tworzy nieistniejący katalog docelowy', (t) => {
+  const { base, src } = makeSkillFixture(t);
+  // Cel z brakującymi rodzicami (.claude/skills nie istnieje) — jak świeży home.
+  const dest = path.join(base, 'home', '.claude', 'skills', 'puls');
+
+  copySkillDir(src, dest);
+
+  assert.equal(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf-8'), '---\nname: puls\n---\ntreść');
+  assert.equal(fs.readFileSync(path.join(dest, 'resources', 'extra.md'), 'utf-8'), 'extra');
+});
+
+test('copySkillDir nadpisuje istniejące pliki przy re-run (aktualizacja skilla)', (t) => {
+  const { base, src } = makeSkillFixture(t);
+  const dest = path.join(base, 'home', '.claude', 'skills', 'puls');
+  fs.mkdirSync(dest, { recursive: true });
+  fs.writeFileSync(path.join(dest, 'SKILL.md'), 'stara wersja', 'utf-8');
+
+  copySkillDir(src, dest);
+
+  assert.equal(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf-8'), '---\nname: puls\n---\ntreść');
+});
+
+test('copySkillDir rzuca gdy katalog źródłowy nie istnieje (error case)', (t) => {
+  const { base } = makeSkillFixture(t);
+  const missingSrc = path.join(base, 'repo', 'skills', 'nie-ma');
+  const dest = path.join(base, 'home', '.claude', 'skills', 'puls');
+
+  assert.throws(() => copySkillDir(missingSrc, dest), /ENOENT/);
+});
+
+// === matchJobIdsByName — mapowanie seedowanych nazw na id-ki z GET /api/jobs ===
+// (sync harmonogramów seedu z działającym serwerem przy re-run setupu)
+
+test('matchJobIdsByName zwraca id-ki tylko jobów o seedowanych nazwach (happy path)', () => {
+  const jobs = [
+    { id: 1, name: 'Daily memory update' },
+    { id: 2, name: 'Własny job usera' },
+    { id: 3, name: 'Reflect tygodniowy' },
+  ];
+
+  const ids = matchJobIdsByName(jobs, ['Daily memory update', 'Reflect tygodniowy']);
+
+  assert.deepEqual(ids, [1, 3]);
+});
+
+test('matchJobIdsByName → [] gdy żadna nazwa nie pasuje albo lista jobów pusta', () => {
+  assert.deepEqual(matchJobIdsByName([{ id: 1, name: 'Inny' }], ['Nie ma']), []);
+  assert.deepEqual(matchJobIdsByName([], ['Daily memory update']), []);
+});
+
+test('matchJobIdsByName odporny na nie-tablicowy input z API (error case)', () => {
+  assert.deepEqual(matchJobIdsByName(null, ['Daily memory update']), []);
+  assert.deepEqual(matchJobIdsByName({ error: 'boom' }, ['Daily memory update']), []);
 });
