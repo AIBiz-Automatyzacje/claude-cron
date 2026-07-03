@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 9 -->
+<!-- rule-count: 10 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -30,3 +30,6 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **Po zapisie wyniku do DB decyduj na świeżym odczycie, nie na stale-owym obiekcie; założenie międzymodułowe = test szwu**: Obiekt JS pobrany przed operacją nie jest widokiem na wiersz bazy — `executeRun` pisał status tylko przez `db.updateRun`, a scheduler czytał `run.status` sprzed runu (retry martwe od zawsze, ❌/R9 cicho złamane). Po operacji re-read rekordu z DB; próg współdzielony przez moduły trzymaj w jednym helperze (`db.countRecentFailedRuns`); gdy moduł A wstrzymuje akcję zakładając że moduł B coś zrobi — napisz test integracyjny A+B, bo testy czystych funkcji obu stron przechodzą przy złamanym zachowaniu systemowym.
   Source: docs/solutions/runtime-errors/2026-07-03-stale-obiekt-w-pamieci-vs-stan-db-martwe-retry.md
+
+- **getUpdates świeżego bota Telegram bywa pusty mimo dostarczonych wiadomości — auto-detekcja zawsze z ręcznym fallbackiem**: Wiadomości wysłane w pierwszych minutach po `/newbot` mogą nie wejść do kolejki update'ów (`result:[]`, `pending:0`) i przepaść. Pusty `getUpdates` ≠ zły token ani konkurencyjny konsument — rozstrzygaj testem: świeża wiadomość + kilka polli (update bez `offset` nie jest konsumowany, więc powinien WISIEĆ; znika = realny konsument). Auto-detekcję stanu zewnętrznego API projektuj z ręcznym fallbackiem jako ścieżką pierwszej klasy.
+  Source: docs/solutions/deployment-issues/2026-07-03-telegram-getupdates-swiezy-bot-lag-kolejki.md
