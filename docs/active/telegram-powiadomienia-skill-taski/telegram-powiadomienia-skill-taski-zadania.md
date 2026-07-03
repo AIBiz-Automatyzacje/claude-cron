@@ -12,7 +12,7 @@ Ostatnia aktualizacja: 2026-07-03
 - [x] Modyfikuj `lib/discord.js` (import z notify-format; grep konsumentów eksportów `extractResult`/`smartSplit` przed usunięciem re-eksportu)
 - [x] Test: `extractResult` — stdout z wpisem `type:'result'` → treść; brak wpisu → fallback „Job completed…"; niepoprawny JSON w linii nie wywala parsowania
 - [x] Test: `smartSplit` — tekst < maxLen → 1 chunk; podział po `\n`, potem `. `; słowo > maxLen → twardy podział; każdy chunk ≤ maxLen
-- [ ] Weryfikacja: `npm test` przechodzi; `node --test lib/notify-format.test.js` zielony
+- [x] Weryfikacja: `npm test` przechodzi; `node --test lib/notify-format.test.js` zielony (review fazy 1: 202/202 i 10/10, exit 0)
 
 ### Unit 2: Konfiguracja powiadomień w `state` + endpointy settings i push-to-vps
 
@@ -27,7 +27,18 @@ Ostatnia aktualizacja: 2026-07-03
 - [x] Test: maskowanie — token 46-znakowy → `…ostatnie 4`; pusty → `configured:false`
 - [x] Test: sanityzacja PUT body — nieznane klucze odrzucone, nie-string odrzucony
 - [x] Test: `notify-push` z mock fetch — sukces potwierdzony GET-em po PUT; VPS bez endpointu (404) → `{ok:false, reason}` bez rzucania; timeout → `{ok:false}`
-- [ ] Weryfikacja: `npm test` zielony; `curl PUT` + `curl GET` na działającym serwerze zwracają zapisany (zamaskowany) stan
+- [x] Weryfikacja: `npm test` zielony; `curl PUT` + `curl GET` na działającym serwerze zwracają zapisany (zamaskowany) stan (review fazy 1: curl E2E S1–S5 passed na izolowanej instancji — maski, 400 na nieznany klucz, czyszczenie pustym stringiem, 503 push bez VPS; szczegóły w `review-faza-1.md`)
+
+## Do poprawy po review fazy 1
+
+- [x] 🟠 [P2] **lib/notify-push.js:38** — `new URL(SETTINGS_PATH, vpsUrl)` stoi PRZED blokiem try i łamie udokumentowany kontrakt "NIGDY nie rzuca — zawsze {ok, reason?}": `CLAUDE_CRON_VPS_URL` bez protokołu (np. `localhost:7777`) rzuca `TypeError: Invalid URL` → POST push-to-vps kończy się generycznym 500 zamiast zmapowanego statusu, a setup.mjs (Unit 6) dostanie goły wyjątek. Fix: guard/try na parsowanie URL → `{ok:false, reason:'invalid_vps_url'}` + test w `lib/notify-push.test.js`
+- [x] 🟠 [P2] **lib/discord.js:38** — zmienione zachowanie produkcyjne `sendNotification` (webhook URL rozwiązywany przy każdej wysyłce przez `resolveNotifyConfig(db.getState, process.env)` zamiast zamrożenia przy require) nie ma żadnego testu — `lib/discord.test.js` nie istnieje, a wysyłka jest fire-and-forget z `.catch(()=>{})`, więc regresja wiringowa (zły getter/klucz) przeszłaby niezauważona. Fix: minimalny `lib/discord.test.js` z mockiem `getState` (state wygrywa; env fallback; oba puste → early return bez sieci)
+- [ ] 🟡 [P3] **lib/notify-format.js:40** — off-by-one w `smartSplit`: gdy `'. '` zaczyna się dokładnie na indeksie maxLen, chunk ma maxLen+1 znaków (potwierdzone repro) — narusza kontrakt "każdy chunk ≤ maxLen"; w fazie 2 Telegram dostanie 4097 znaków → API 400, chunk cicho zgubiony. Naprawić przed fazą 2 + test brzegowy
+- [ ] 🟡 [P3] **lib/notify-format.js:42** — `smartSplit` może zwrócić pusty chunk (`smartSplit('\n'.repeat(30), 10)` → `[""]`): `trimEnd()` po podziale na granicy `\n` produkuje `''` pushowane bez guardu → pusty content do Discord/Telegram = 400. Naprawić przed fazą 2 + test brzegowy
+- [ ] 🟡 [P3] **lib/notify-push.js:63** — reason w catch to wolny tekst `error_${err.message}` zwracany w body 502 do przeglądarki: wyciek szczegółów sieci wewnętrznej, łamie enum-owy kontrakt reason, przy błędzie bez message daje `error_undefined`. Fix: stały kod `'network_error'` (+ ewentualnie osobne pole detail logowane server-side); skorygować test `notify-push.test.js` matchujący `/ECONNREFUSED/`
+- [ ] 🟡 [P3] **lib/notify-config.js:56** — `sanitizeNotifySettings` waliduje tylko whitelist kluczy i typ string: brak walidacji formatu (`discord_webhook_url` dowolny string, `telegram_chat_id` dowolny string) i limitu długości — nie-URL cicho zabija powiadomienia (`.catch(()=>{})` w executor), dowolny host = eksfiltracja outputów jobów, domyka też wektor stored-XSS przed Unit 5. Fix: walidacja URL (https + host discord.com/discordapp.com), chat_id `^-?\d+$|^@\w+$`, max length
+
+Pozostałe P3 (10 pozycji: martwe eksporty config.js, parseBody malformed JSON→200, maskSecret dla krótkich wartości, bind na wszystkich interfejsach [pre-existing, osobne zadanie], mapowanie reason→status bez testu, extractResult na pełnym stdout, 3 klucze zamiast 1 w discord.js, setState bez transakcji, drugi format błędu {ok,reason}, duplikacja PUSH_TIMEOUT_MS) — szczegóły i rekomendacje w `review-faza-1.md`; do rozważenia przy fazie 2, nie blokują.
 
 ## Faza 2 — Telegram
 
