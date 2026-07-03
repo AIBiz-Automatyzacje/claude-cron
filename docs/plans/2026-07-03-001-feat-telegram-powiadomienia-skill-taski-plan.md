@@ -330,7 +330,7 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 
 ### Faza 4 — onboarding: taski i skill
 
-- [ ] **Unit 8: Podstawowe taski — szablony + seed w setupie lokalnym**
+- [x] **Unit 8: Podstawowe taski — szablony + seed w setupie lokalnym** (2026-07-03: scenariusze [Unit] pokryte w `lib/starter-jobs.test.js` — 4 do seedu / `exists` / `missing_skill` / seed na `:memory:` z 4 jobami i idempotencją; weryfikacja `npm test` 264/264 PASS w tym starter-jobs 6/6)
 
 **Cel:** Jedno pytanie `[T/n]` w setupie dodaje zestaw sprawdzonych jobów; pomija te bez dostępnego skilla; re-run nie duplikuje.
 
@@ -363,7 +363,7 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 **Weryfikacja:**
 - `npm test` zielony (w tym `node --test lib/starter-jobs.test.js`).
 
-- [ ] **Unit 9: Skill `puls` + instalacja globalna w setupie**
+- [x] **Unit 9: Skill `puls` + instalacja globalna w setupie** (2026-07-03: scenariusz [Unit] helpera kopiowania pokryty w `setup.test.mjs` — kopiuje drzewo / nadpisuje / tworzy katalog / rzuca przy braku źródła; `node --test setup.test.mjs` 49/49 PASS; frontmatter `skills/puls/SKILL.md` parsowalny przez `gray-matter`; scenariusz [Manual] → Operator checklist)
 
 **Cel:** Agent Claude Code umie tworzyć/edytować joby i czytać logi Pulsa bez ręcznego projektowania promptów.
 

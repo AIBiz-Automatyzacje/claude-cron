@@ -4,7 +4,8 @@
 //  Jedna ścieżka konfiguracji uruchamiana przez portable Node z .node/
 //  (handoff z install.sh / install.ps1). Zadania:
 //   1. Warunek wstępny: Claude Code w PATH (handoff, NIE instaluje).
-//   2. Pytania konfiguracyjne (VPS, workspace, autostart, powiadomienia Discord/Telegram).
+//   2. Pytania konfiguracyjne (VPS, workspace, autostart, powiadomienia
+//      Discord/Telegram, podstawowe taski).
 //   3. Generowanie hooka autostartu z ABSOLUTNĄ ścieżką portable Node
 //      (koniec gołego 'node' w detached procesie) + --disable-warning.
 //   4. Idempotentny merge wpisu hooka do {workspace}/.claude/settings.json.
@@ -238,6 +239,14 @@ export function extractChatIdFromUpdates(json) {
     }
   }
   return chatId;
+}
+
+// === Pure helper: rekurencyjne kopiowanie katalogu skilla (DI ścieżek źródło/cel) ===
+// Kopiowanie zamiast symlinku — symlink na Windows wymaga uprawnień administratora.
+// force nadpisuje istniejące pliki (re-run setupu aktualizuje skill), recursive tworzy
+// katalog docelowy razem z brakującymi rodzicami. Brak źródła → rzuca (ENOENT).
+export function copySkillDir(srcDir, destDir) {
+  fs.cpSync(srcDir, destDir, { recursive: true, force: true });
 }
 
 // === Pure helper: wykrycie Claude CLI w PATH (DI: funkcja sprawdzająca) ===
@@ -575,6 +584,50 @@ async function pushNotifySettingsToVps(vpsUrl, payload) {
   );
 }
 
+// === I/O shell: seed podstawowych tasków + raport dodanych/pominiętych z powodem ===
+// Wołany PO udanym smoke-teście DB (wzorzec persistNotifySettings). Skanowanie skilli
+// (getAllSkills w lib/starter-jobs) czyta workspace z CLAUDE_CRON_WORKSPACE — ustawionego
+// wcześniej w tej sesji przez persistEnvVar. Idempotencja po nazwie joba: re-run nie duplikuje.
+function seedStarterJobsWithReport() {
+  const { seedStarterJobs, SKIP_REASON } = require('./lib/starter-jobs');
+  const db = require('./lib/db');
+  const skipLabels = {
+    [SKIP_REASON.EXISTS]: 'job o tej nazwie już istnieje',
+    [SKIP_REASON.MISSING_SKILL]: 'brak dostępnego skilla',
+  };
+
+  const { added, skipped } = seedStarterJobs();
+  db.close();
+
+  for (const name of added) {
+    console.log(`[ok] Dodano task: ${name}`);
+  }
+  for (const entry of skipped) {
+    console.log(`[info] Pominięto „${entry.name}" — ${skipLabels[entry.reason] || entry.reason}.`);
+  }
+  if (added.length === 0) {
+    console.log('[info] Nie dodano nowych tasków.');
+  }
+}
+
+// === I/O shell: instalacja skilla `puls` do globalnych skilli Claude Code ===
+// ~/.claude/skills/puls — dzięki temu agent w KAŻDEJ sesji zna REST API Pulsa
+// (tworzenie/edycja jobów, diagnoza runów). Pad kopiowania nie przerywa setupu
+// (warn + instrukcja ręczna) — skill to warstwa wygody, nie rdzeń instalacji.
+function installPulsSkill() {
+  const src = path.join(REPO_DIR, 'skills', 'puls');
+  const dest = path.join(os.homedir(), '.claude', 'skills', 'puls');
+  try {
+    copySkillDir(src, dest);
+    console.log(`[ok] Skill „puls" zainstalowany globalnie: ${dest}`);
+  } catch (error) {
+    console.log(
+      `[warn] Nie udało się zainstalować skilla „puls" (${error.message}) — `
+      + `skopiuj ręcznie: ${src} → ${dest}.`,
+    );
+  }
+}
+
 function registerHook(workspace, hookFile, nodeBin) {
   const settingsFile = path.join(workspace, '.claude', 'settings.json');
   let existing = {};
@@ -615,6 +668,7 @@ async function main() {
   // state i push na VPS robimy dopiero PO smoke-teście DB (za blokiem try/finally).
   let vpsUrl = null;
   let notifyPayload = null;
+  let wantStarterJobs = false;
 
   try {
     const workspaceDefault = process.env.CLAUDE_CRON_WORKSPACE || os.homedir();
@@ -690,6 +744,16 @@ async function main() {
       console.log('[info] Pominięto autostart.');
     }
 
+    // Pytanie zbiorcze o podstawowe taski — sam seed dopiero PO smoke-teście DB
+    // (za blokiem try/finally), bo baza jest otwierana najwcześniej przy smoke-teście.
+    const starterAnswer = (
+      await ask(rl, 'Dodać zestaw podstawowych tasków (memory update, reflect, skill scout)? [T/n]: ', 'T')
+    ).toLowerCase();
+    wantStarterJobs = starterAnswer === 't';
+    if (!wantStarterJobs) {
+      console.log('[info] Pominięto podstawowe taski.');
+    }
+
     const reloadHint =
       process.platform === 'win32'
         ? '\n[info] Zmienne zapisane w środowisku użytkownika — otwórz NOWY terminal, by je załadować.'
@@ -711,6 +775,16 @@ async function main() {
       await pushNotifySettingsToVps(vpsUrl, notifyPayload);
     }
   }
+
+  // Seed podstawowych tasków — w setupie, NIE w migrate() (learned pattern: backfill
+  // w migrate() clobberowałby świadome decyzje usera przy każdym boocie).
+  if (wantStarterJobs) {
+    console.log('\n[info] Dodaję podstawowe taski...');
+    seedStarterJobsWithReport();
+  }
+
+  // Skill `puls` do ~/.claude/skills — re-run nadpisuje (aktualizacja treści skilla).
+  installPulsSkill();
 
   // Auto-start serwera + auto-open przeglądarki (Mac/Win). Link wypisany ZAWSZE.
   await startServerAndOpen(nodeBin, REPO_DIR);

@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  copySkillDir,
   resolveNodeBinPath,
   mergeHookIntoSettings,
   removeHookFromSettings,
@@ -395,4 +398,47 @@ test('extractChatIdFromUpdates: ok:false / malformed / update bez message → nu
   assert.equal(extractChatIdFromUpdates({ ok: false, result: [] }), null);
   assert.equal(extractChatIdFromUpdates({ ok: true }), null);
   assert.equal(extractChatIdFromUpdates({ ok: true, result: [{ update_id: 5 }] }), null);
+});
+
+// === copySkillDir — instalacja skilla puls do ~/.claude/skills (Unit 9) ===
+
+// Katalog roboczy per test w tmp — testy nie dotykają repo ani ~/.claude usera.
+function makeSkillFixture(t) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-skill-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const src = path.join(base, 'repo', 'skills', 'puls');
+  fs.mkdirSync(path.join(src, 'resources'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'SKILL.md'), '---\nname: puls\n---\ntreść', 'utf-8');
+  fs.writeFileSync(path.join(src, 'resources', 'extra.md'), 'extra', 'utf-8');
+  return { base, src };
+}
+
+test('copySkillDir kopiuje całe drzewo i tworzy nieistniejący katalog docelowy', (t) => {
+  const { base, src } = makeSkillFixture(t);
+  // Cel z brakującymi rodzicami (.claude/skills nie istnieje) — jak świeży home.
+  const dest = path.join(base, 'home', '.claude', 'skills', 'puls');
+
+  copySkillDir(src, dest);
+
+  assert.equal(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf-8'), '---\nname: puls\n---\ntreść');
+  assert.equal(fs.readFileSync(path.join(dest, 'resources', 'extra.md'), 'utf-8'), 'extra');
+});
+
+test('copySkillDir nadpisuje istniejące pliki przy re-run (aktualizacja skilla)', (t) => {
+  const { base, src } = makeSkillFixture(t);
+  const dest = path.join(base, 'home', '.claude', 'skills', 'puls');
+  fs.mkdirSync(dest, { recursive: true });
+  fs.writeFileSync(path.join(dest, 'SKILL.md'), 'stara wersja', 'utf-8');
+
+  copySkillDir(src, dest);
+
+  assert.equal(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf-8'), '---\nname: puls\n---\ntreść');
+});
+
+test('copySkillDir rzuca gdy katalog źródłowy nie istnieje (error case)', (t) => {
+  const { base } = makeSkillFixture(t);
+  const missingSrc = path.join(base, 'repo', 'skills', 'nie-ma');
+  const dest = path.join(base, 'home', '.claude', 'skills', 'puls');
+
+  assert.throws(() => copySkillDir(missingSrc, dest), /ENOENT/);
 });

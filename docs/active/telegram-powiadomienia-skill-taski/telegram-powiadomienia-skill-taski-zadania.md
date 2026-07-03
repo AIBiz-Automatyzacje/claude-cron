@@ -129,20 +129,20 @@ Pozostałe P3 (13 pozycji: auto-detekcja chat ID bez tożsamości nadawcy, `extr
 
 ### Unit 8: Podstawowe taski — szablony + seed w setupie lokalnym
 
-- [ ] Stwórz `templates/starter-jobs.json` (Daily memory update `0 6 * * *`/1800000, Weekly memory update `0 8 * * 1`/600000, Reflect tygodniowy `0 8 * * 1`/1200000, Poszukiwanie nowych skillów `0 9 * * 5`/600000; wspólnie `enabled=1`, `run_on_wake=1`, `job_type:'claude'`, `discord_notify=0`, `telegram_notify=0`)
-- [ ] Stwórz `lib/starter-jobs.js` (czysta `computeStarterJobsToSeed(defs, existingJobs, availableSkillNames)` → `{toSeed, skipped:[{name, reason}]}`; skorupa `seedStarterJobs()` — JSON + `getAllSkills()` + `db.createJob`)
-- [ ] Stwórz `lib/starter-jobs.test.js`
-- [ ] Modyfikuj `setup.mjs` (po smoke-teście DB: pytanie zbiorcze `[T/n]` → seed → raport dodanych/pominiętych z powodem)
-- [ ] Test: pusty stan + wszystkie skille dostępne → 4 do seedu; job o tej samej nazwie → pominięty (`reason:'exists'`); skill niedostępny → pominięty (`reason:'missing_skill'`)
-- [ ] Test: seed na DB `:memory:` → `getAllJobs()` zawiera 4 joby z poprawnymi cronami i `enabled=1`; drugi seed → 0 nowych
+- [x] Stwórz `templates/starter-jobs.json` (Daily memory update `0 6 * * *`/1800000, Weekly memory update `0 8 * * 1`/600000, Reflect tygodniowy `0 8 * * 1`/1200000, Poszukiwanie nowych skillów `0 9 * * 5`/600000; wspólnie `enabled=1`, `run_on_wake=1`, `job_type:'claude'`, `discord_notify=0`, `telegram_notify=0`)
+- [x] Stwórz `lib/starter-jobs.js` (czysta `computeStarterJobsToSeed(defs, existingJobs, availableSkillNames)` → `{toSeed, skipped:[{name, reason}]}`; skorupa `seedStarterJobs()` — JSON + `getAllSkills()` + `db.createJob`)
+- [x] Stwórz `lib/starter-jobs.test.js`
+- [x] Modyfikuj `setup.mjs` (po smoke-teście DB: pytanie zbiorcze `[T/n]` → seed → raport dodanych/pominiętych z powodem)
+- [x] Test: pusty stan + wszystkie skille dostępne → 4 do seedu; job o tej samej nazwie → pominięty (`reason:'exists'`); skill niedostępny → pominięty (`reason:'missing_skill'`)
+- [x] Test: seed na DB `:memory:` → `getAllJobs()` zawiera 4 joby z poprawnymi cronami i `enabled=1`; drugi seed → 0 nowych
 - [ ] Weryfikacja: `npm test` zielony (w tym `node --test lib/starter-jobs.test.js`)
 
 ### Unit 9: Skill `puls` + instalacja globalna w setupie
 
-- [ ] Stwórz `skills/puls/SKILL.md` (frontmatter: `name: puls`, `description` z frazami-triggerami PL, `allowed-tools: ["Bash", "Read"]`; treść: baza `http://localhost:7777` + `/api/vps/*`; tabela endpointów — jobs CRUD, trigger, toggle, webhook token, runs, runs/current + kill, skills, status, settings/notifications + push-to-vps; whitelist pól joba + defaulty + walidacja; czytanie logów stream-json; przykłady curl; wskazanie `templates/starter-jobs.json`)
-- [ ] Modyfikuj `setup.mjs` (kopiowanie rekurencyjne `skills/puls` → `~/.claude/skills/puls`, nadpisanie przy re-run; helper czysty z DI ścieżek)
-- [ ] Modyfikuj `setup.test.mjs` (test helpera kopiowania)
-- [ ] Test: helper kopiowania — kopiuje drzewo, nadpisuje istniejące, tworzy katalog docelowy
+- [x] Stwórz `skills/puls/SKILL.md` (frontmatter: `name: puls`, `description` z frazami-triggerami PL, `allowed-tools: ["Bash", "Read"]`; treść: baza `http://localhost:7777` + `/api/vps/*`; tabela endpointów — jobs CRUD, trigger, toggle, webhook token, runs, runs/current + kill, skills, status, settings/notifications + push-to-vps; whitelist pól joba + defaulty + walidacja; czytanie logów stream-json; przykłady curl; wskazanie `templates/starter-jobs.json`)
+- [x] Modyfikuj `setup.mjs` (kopiowanie rekurencyjne `skills/puls` → `~/.claude/skills/puls`, nadpisanie przy re-run; helper czysty z DI ścieżek)
+- [x] Modyfikuj `setup.test.mjs` (test helpera kopiowania)
+- [x] Test: helper kopiowania — kopiuje drzewo, nadpisuje istniejące, tworzy katalog docelowy
 - [ ] Weryfikacja: `node --test setup.test.mjs` zielony; `~/.claude/skills/puls/SKILL.md` istnieje po przebiegu helpera; frontmatter parsowalny przez `gray-matter` (skaner `lib/skills.js` widzi skill)
 - [ ] Weryfikacja (operator): test skilla w żywej sesji Claude Code (utworzenie + diagnoza joba przez rozmowę)
 

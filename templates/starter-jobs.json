@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Daily memory update",
+    "skill_name": "memory-update",
+    "cron_expr": "0 6 * * *",
+    "arguments": "",
+    "timeout_ms": 1800000,
+    "enabled": 1,
+    "run_on_wake": 1,
+    "job_type": "claude",
+    "discord_notify": 0,
+    "telegram_notify": 0
+  },
+  {
+    "name": "Weekly memory update",
+    "skill_name": "memory-update",
+    "cron_expr": "0 8 * * 1",
+    "arguments": "weekly",
+    "timeout_ms": 600000,
+    "enabled": 1,
+    "run_on_wake": 1,
+    "job_type": "claude",
+    "discord_notify": 0,
+    "telegram_notify": 0
+  },
+  {
+    "name": "Reflect tygodniowy",
+    "skill_name": "reflect",
+    "cron_expr": "0 8 * * 1",
+    "arguments": "weekly",
+    "timeout_ms": 1200000,
+    "enabled": 1,
+    "run_on_wake": 1,
+    "job_type": "claude",
+    "discord_notify": 0,
+    "telegram_notify": 0
+  },
+  {
+    "name": "Poszukiwanie nowych skillów",
+    "skill_name": "skill-scout",
+    "cron_expr": "0 9 * * 5",
+    "arguments": "",
+    "timeout_ms": 600000,
+    "enabled": 1,
+    "run_on_wake": 1,
+    "job_type": "claude",
+    "discord_notify": 0,
+    "telegram_notify": 0
+  }
+]
