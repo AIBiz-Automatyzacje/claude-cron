@@ -172,7 +172,7 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 
 ### Faza 2 — Telegram
 
-- [ ] **Unit 3: Kanał Telegram end-to-end (moduł + kolumna DB + executor)**
+- [x] **Unit 3: Kanał Telegram end-to-end (moduł + kolumna DB + executor)**
 
 **Cel:** Działające powiadomienia Telegram po udanym runie joba z flagą `telegram_notify` oraz powiadomienia o failach na obu kanałach (R9).
 
@@ -208,7 +208,7 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 **Weryfikacja:**
 - `npm test` zielony (w tym `node --test lib/telegram.test.js`, `lib/db.test.js`).
 
-- [ ] **Unit 4: Checkbox „Powiadomienie Telegram" per job w dashboardzie**
+- [x] **Unit 4: Checkbox „Powiadomienie Telegram" per job w dashboardzie**
 
 **Cel:** Flaga `telegram_notify` ustawialna z formularza joba.
 

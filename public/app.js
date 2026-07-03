@@ -819,6 +819,7 @@ function openCreateModal() {
   document.getElementById('form-retries').value = '1';
   document.getElementById('form-wake').checked = true;
   document.getElementById('form-discord').checked = false;
+  document.getElementById('form-telegram').checked = false;
   document.getElementById('form-routine').checked = false;
   document.getElementById('form-job-type').value = 'claude';
   document.getElementById('form-command').value = '';
@@ -863,6 +864,7 @@ function openEditModal(id) {
   document.getElementById('form-retries').value = job.max_retries;
   document.getElementById('form-wake').checked = !!job.run_on_wake;
   document.getElementById('form-discord').checked = !!job.discord_notify;
+  document.getElementById('form-telegram').checked = !!job.telegram_notify;
   document.getElementById('form-routine').checked = !!job.routine;
   document.getElementById('form-job-type').value = job.job_type || 'claude';
   document.getElementById('form-command').value = job.command || '';
@@ -918,6 +920,7 @@ async function saveJob(e) {
     max_retries: parseInt(document.getElementById('form-retries').value, 10),
     run_on_wake: document.getElementById('form-wake').checked,
     discord_notify: document.getElementById('form-discord').checked,
+    telegram_notify: document.getElementById('form-telegram').checked,
     routine: document.getElementById('form-routine').checked,
   };
 
