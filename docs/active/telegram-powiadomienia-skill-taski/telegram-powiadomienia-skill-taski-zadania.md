@@ -86,8 +86,8 @@ Pozostałe P3 (16 pozycji: ekspozycja promptu/webhook_payload w diagLog → powi
 
 ### Unit 5: Modal ustawień powiadomień w dashboardzie (+ push na VPS + Wyczyść)
 
-- [ ] Modyfikuj `public/index.html` (przycisk + modal: 3 pola — Discord webhook URL, Telegram token, Telegram chat ID; przycisk „Wyczyść" per kanał)
-- [ ] Modyfikuj `public/app.js` (otwarcie modala z `GET /api/settings/notifications` — placeholdery z maskami; zapis `PUT` lokalny, puste pole = nie nadpisuj; „Wyślij na VPS" → `POST /api/settings/notifications/push-to-vps` gdy `vps_configured`; „Wyczyść" → `PUT` z pustymi stringami kluczy kanału)
+- [x] Modyfikuj `public/index.html` (przycisk + modal: 3 pola — Discord webhook URL, Telegram token, Telegram chat ID; przycisk „Wyczyść" per kanał)
+- [x] Modyfikuj `public/app.js` (otwarcie modala z `GET /api/settings/notifications` — placeholdery z maskami; zapis `PUT` lokalny, puste pole = nie nadpisuj; „Wyślij na VPS" → `POST /api/settings/notifications/push-to-vps` gdy `vps_configured`; „Wyczyść" → `PUT` z pustymi stringami kluczy kanału)
 - [ ] Test: [E2E] otwórz modal → placeholdery „skonfigurowano/…4242"; wpisz wartość → Zapisz → ponowne otwarcie pokazuje nową maskę
 - [ ] Test: [E2E] „Wyczyść" przy kanale → GET pokazuje `configured:false` (przy pustym env)
 - [ ] Weryfikacja: scenariusz E2E lokalny przez agent-browser przechodzi (zapis + odczyt maski)
@@ -95,20 +95,20 @@ Pozostałe P3 (16 pozycji: ekspozycja promptu/webhook_payload w diagLog → powi
 
 ### Unit 6: Setup lokalny — pytania do state, auto-detect chat ID, test-send, push na VPS
 
-- [ ] Modyfikuj `setup.mjs` (Discord do state zamiast `persistEnvVar`; pytanie o token Telegrama; auto-detekcja chat ID: „napisz cokolwiek do bota i wciśnij Enter" → `getUpdates` → potwierdzenie, ręczny fallback; test-send „✅ Puls połączony z Telegramem" z warn przy padzie; push przez `lib/notify-push.js` z timeoutem, warn przy padzie z podpowiedzią o dashboardzie i aktualizacji VPS)
-- [ ] Modyfikuj `setup.test.mjs` (czyste funkcje z DI: `buildNotificationSettingsPayload`, `extractChatIdFromUpdates`)
-- [ ] Rozstrzygnij moment zapisu `setState` (DB otwierana przy smoke-teście PO pytaniach — odpowiedzi w zmiennych, zapis przy smoke-teście)
-- [ ] Test: `buildNotificationSettingsPayload` — tylko wypełnione pola w payloadzie; wszystkie puste → `null` (pomiń push)
-- [ ] Test: `extractChatIdFromUpdates(json)` — jedna rozmowa → chat ID; brak update'ów → `null` (ręczny fallback); wiele czatów → najnowszy
+- [x] Modyfikuj `setup.mjs` (Discord do state zamiast `persistEnvVar`; pytanie o token Telegrama; auto-detekcja chat ID: „napisz cokolwiek do bota i wciśnij Enter" → `getUpdates` → potwierdzenie, ręczny fallback; test-send „✅ Puls połączony z Telegramem" z warn przy padzie; push przez `lib/notify-push.js` z timeoutem, warn przy padzie z podpowiedzią o dashboardzie i aktualizacji VPS)
+- [x] Modyfikuj `setup.test.mjs` (czyste funkcje z DI: `buildNotificationSettingsPayload`, `extractChatIdFromUpdates`)
+- [x] Rozstrzygnij moment zapisu `setState` (DB otwierana przy smoke-teście PO pytaniach — odpowiedzi w zmiennych, zapis przy smoke-teście) — rozstrzygnięte: odpowiedzi hoistowane przed `try`, `persistNotifySettings` woła `db.setState` bezpośrednio PO udanym smoke-teście, push na VPS zaraz potem
+- [x] Test: `buildNotificationSettingsPayload` — tylko wypełnione pola w payloadzie; wszystkie puste → `null` (pomiń push)
+- [x] Test: `extractChatIdFromUpdates(json)` — jedna rozmowa → chat ID; brak update'ów → `null` (ręczny fallback); wiele czatów → najnowszy
 - [ ] Weryfikacja: `node --test setup.test.mjs` zielony
 - [ ] Weryfikacja (operator): pełny setup na żywo (prawdziwy bot) — chat ID wykryty, testowa wiadomość dochodzi, po setupie VPS ma konfigurację
 
 ### Unit 7: Instalator VPS przestaje pytać o Discord
 
-- [ ] Modyfikuj `scripts/install-vps.sh` (usuń pytanie `ask_valid DISCORD_URL` ~1198-1200; linię `DISCORD_WEBHOOK_URL` z `build_puls_env_lines` ~1237-1245; wpisy w podsumowaniach ~1143-1152 i ~1678-1679; `is_valid_discord_webhook` 249-251 jeśli bez innych konsumentów — grep; dodaj w podsumowaniu: „Powiadomienia skonfigurujesz przy instalacji lokalnej — trafią tu automatycznie")
-- [ ] Modyfikuj `scripts/install-vps.test.sh` (test 21 usunięty — testował usuwaną funkcjonalność; test 45: asercja, że unit NIE zawiera `DISCORD_WEBHOOK_URL`; asercje `WEBHOOK_BASE_URL` zostają)
-- [ ] Test: `build_puls_env_lines` nie emituje `DISCORD_WEBHOOK_URL` niezależnie od env
-- [ ] Test: harness instalatora przechodzi bez pytania o Discord (brak wiszącego `read`)
+- [x] Modyfikuj `scripts/install-vps.sh` (usuń pytanie `ask_valid DISCORD_URL` ~1198-1200; linię `DISCORD_WEBHOOK_URL` z `build_puls_env_lines` ~1237-1245; wpisy w podsumowaniach ~1143-1152 i ~1678-1679; `is_valid_discord_webhook` 249-251 jeśli bez innych konsumentów — grep; dodaj w podsumowaniu: „Powiadomienia skonfigurujesz przy instalacji lokalnej — trafią tu automatycznie")
+- [x] Modyfikuj `scripts/install-vps.test.sh` (test 21 usunięty — testował usuwaną funkcjonalność; test 45: asercja, że unit NIE zawiera `DISCORD_WEBHOOK_URL`; asercje `WEBHOOK_BASE_URL` zostają)
+- [x] Test: `build_puls_env_lines` nie emituje `DISCORD_WEBHOOK_URL` niezależnie od env
+- [x] Test: harness instalatora przechodzi bez pytania o Discord (brak wiszącego `read`)
 - [ ] Weryfikacja: `bash scripts/install-vps.test.sh` zielony; `grep -c DISCORD scripts/install-vps.sh` → 0 (lub wyłącznie komentarz historyczny)
 
 ## Faza 4 — onboarding: taski i skill

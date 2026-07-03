@@ -4,7 +4,7 @@
 //  Jedna ścieżka konfiguracji uruchamiana przez portable Node z .node/
 //  (handoff z install.sh / install.ps1). Zadania:
 //   1. Warunek wstępny: Claude Code w PATH (handoff, NIE instaluje).
-//   2. Pytania konfiguracyjne (VPS, workspace, autostart, Discord).
+//   2. Pytania konfiguracyjne (VPS, workspace, autostart, powiadomienia Discord/Telegram).
 //   3. Generowanie hooka autostartu z ABSOLUTNĄ ścieżką portable Node
 //      (koniec gołego 'node' w detached procesie) + --disable-warning.
 //   4. Idempotentny merge wpisu hooka do {workspace}/.claude/settings.json.
@@ -203,6 +203,41 @@ export function buildVpsUrl(host, port) {
   }
   const resolvedPort = String(port || '').trim() || '7777';
   return `http://${trimmedHost}:${resolvedPort}`;
+}
+
+// === Pure helper: odpowiedzi setupu → payload state powiadomień ===
+// Klucze zgodne z NOTIFY_STATE_KEYS (lib/notify-config.js) i PUT /api/settings/notifications.
+// Tylko niepuste (po trim) wartości — setup nie czyści istniejącej konfiguracji.
+// Wszystko puste → null (caller pomija zapis do state i push na VPS).
+export function buildNotificationSettingsPayload(answers) {
+  const discord = String(answers?.discordWebhookUrl ?? '').trim();
+  const token = String(answers?.telegramBotToken ?? '').trim();
+  const chatId = String(answers?.telegramChatId ?? '').trim();
+
+  const payload = {};
+  if (discord) payload.discord_webhook_url = discord;
+  if (token) payload.telegram_bot_token = token;
+  if (chatId) payload.telegram_chat_id = chatId;
+  return Object.keys(payload).length > 0 ? payload : null;
+}
+
+// === Pure helper: odpowiedź getUpdates Telegrama → chat ID (string) albo null ===
+// Bot API zwraca result posortowany rosnąco po update_id, więc ostatni wpis z
+// message.chat.id to najświeższa rozmowa — przy wielu czatach wygrywa najnowszy.
+// ok !== true / brak update'ów z message → null (caller przechodzi na ręczne wpisanie).
+// Chat ID jako string: state trzyma stringi, a ID grup bywa ujemne (-100...).
+export function extractChatIdFromUpdates(json) {
+  if (!json || json.ok !== true || !Array.isArray(json.result)) {
+    return null;
+  }
+  let chatId = null;
+  for (const update of json.result) {
+    const id = update?.message?.chat?.id;
+    if (id !== undefined && id !== null) {
+      chatId = String(id);
+    }
+  }
+  return chatId;
 }
 
 // === Pure helper: wykrycie Claude CLI w PATH (DI: funkcja sprawdzająca) ===
@@ -449,6 +484,97 @@ function persistEnvVar(varName, value, comment) {
   return rcFile;
 }
 
+// Timeout wywołań Bot API — setup nie może wisieć na sieci (spójny z lib/notify-push).
+const TELEGRAM_API_TIMEOUT_MS = 10_000;
+
+function telegramApiUrl(botToken, method) {
+  return `https://api.telegram.org/bot${botToken}/${method}`;
+}
+
+// === I/O shell: getUpdates Bot API → sparsowany JSON albo null (warn, bez przerywania) ===
+// Komunikaty błędów NIE zawierają URL-a — w path żyje token (jak w lib/telegram.js).
+async function fetchTelegramUpdates(botToken) {
+  try {
+    const res = await fetch(telegramApiUrl(botToken, 'getUpdates'), {
+      signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS),
+    });
+    return await res.json();
+  } catch (error) {
+    console.log(`[warn] Nie udało się pobrać getUpdates z api.telegram.org (${error.name}).`);
+    return null;
+  }
+}
+
+// === I/O shell: testowa wiadomość Telegram → true tylko przy ok:true w BODY odpowiedzi ===
+// Stan faktyczny, nie kod HTTP (learned pattern: fałszywe sygnały statusów) — Bot API
+// potrafi zwrócić 200 z ok:false. Pad wysyłki NIGDY nie przerywa setupu (warn u callera).
+async function sendTelegramTestMessage(botToken, chatId) {
+  try {
+    const res = await fetch(telegramApiUrl(botToken, 'sendMessage'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: '✅ Puls połączony z Telegramem' }),
+      signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS),
+    });
+    const json = await res.json();
+    return json?.ok === true;
+  } catch (error) {
+    console.log(`[warn] Wysyłka testowa do api.telegram.org nie doszła (${error.name}).`);
+    return false;
+  }
+}
+
+// === I/O shell: auto-detekcja chat ID przez getUpdates + potwierdzenie, ręczny fallback ===
+// Mechanizm ask obsługuje tty-handoff (curl|bash) — NIE czytamy stdin bezpośrednio.
+async function askTelegramChatId(rl, botToken) {
+  await ask(rl, 'Napisz teraz cokolwiek do swojego bota na Telegramie, potem wciśnij Enter: ');
+  const detected = extractChatIdFromUpdates(await fetchTelegramUpdates(botToken));
+  if (detected) {
+    const useDetected = (await ask(rl, `Wykryto chat ID: ${detected}. Użyć? [Y/n]: `, 'Y')).toLowerCase();
+    if (useDetected === 'y') {
+      return detected;
+    }
+  } else {
+    console.log('[info] Nie wykryto wiadomości do bota — podaj chat ID ręcznie.');
+  }
+  return ask(rl, 'Chat ID (puste = pomiń Telegram): ');
+}
+
+// === I/O shell: zapis payloadu powiadomień do state lokalnej DB ===
+// Wołany PO smoke-teście (baza zweryfikowana); getDb() otwiera połączenie lazy po
+// db.close() ze smoke-testu, migrate() jest idempotentny.
+function persistNotifySettings(payload) {
+  const db = require('./lib/db');
+  for (const [key, value] of Object.entries(payload)) {
+    db.setState(key, value);
+  }
+  db.close();
+}
+
+// === I/O shell: push konfiguracji na VPS przez współdzielony lib/notify-push ===
+// Kontrakt pushNotifySettings: nigdy nie rzuca — zawsze { ok, reason? }, zapis
+// potwierdzany GET-em po PUT. Pad pushu NIGDY nie przerywa setupu (warn + podpowiedź).
+async function pushNotifySettingsToVps(vpsUrl, payload) {
+  const { pushNotifySettings } = require('./lib/notify-push');
+  console.log('[info] Wysyłam konfigurację powiadomień na VPS...');
+  const result = await pushNotifySettings({ vpsUrl, settings: payload });
+  if (result.ok) {
+    console.log('[ok] VPS ma konfigurację powiadomień (potwierdzone odczytem po zapisie).');
+    return;
+  }
+  if (result.reason === 'endpoint_missing') {
+    console.log(
+      '[warn] VPS ma starszą wersję serwera (brak endpointu ustawień) — nocny auto-update (02:00) ją podniesie. '
+      + 'Potem wyślij konfigurację z dashboardu: Ustawienia powiadomień → „Wyślij na VPS".',
+    );
+    return;
+  }
+  console.log(
+    `[warn] Push na VPS nie powiódł się (${result.reason}) — wyślij później z dashboardu: `
+    + 'Ustawienia powiadomień → „Wyślij na VPS".',
+  );
+}
+
 function registerHook(workspace, hookFile, nodeBin) {
   const settingsFile = path.join(workspace, '.claude', 'settings.json');
   let existing = {};
@@ -485,6 +611,11 @@ async function main() {
   const nodeBin = detectPortableNodeBin(process.execPath, process.platform, REPO_DIR, process.arch);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
+  // Hoisting poza try: odpowiedzi o powiadomieniach trzymamy w zmiennych, a zapis do
+  // state i push na VPS robimy dopiero PO smoke-teście DB (za blokiem try/finally).
+  let vpsUrl = null;
+  let notifyPayload = null;
+
   try {
     const workspaceDefault = process.env.CLAUDE_CRON_WORKSPACE || os.homedir();
     let workspace;
@@ -511,7 +642,7 @@ async function main() {
 
     const vpsHost = await ask(rl, 'Tailscale IP VPS-a (puste = tryb tylko lokalny): ');
     const vpsPort = vpsHost ? await ask(rl, 'Port VPS [7777]: ', '7777') : '7777';
-    const vpsUrl = buildVpsUrl(vpsHost, vpsPort);
+    vpsUrl = buildVpsUrl(vpsHost, vpsPort);
     if (vpsUrl) {
       const vpsLoc = persistEnvVar('CLAUDE_CRON_VPS_URL', vpsUrl, 'Claude-Cron VPS connection');
       console.log(`[ok] VPS: ${vpsUrl} (zapisano w ${vpsLoc})`);
@@ -519,13 +650,36 @@ async function main() {
       console.log('[info] Tryb tylko lokalny — joby działają gdy komputer nie śpi.');
     }
 
+    // Powiadomienia idą do state DB (nie env) — zmiana z dashboardu działa bez restartu,
+    // a env DISCORD_WEBHOOK_URL/TELEGRAM_* pozostaje fallbackiem dla starych instalacji (R3).
     const discordUrl = await ask(rl, 'Discord webhook URL (puste = pomiń): ');
-    if (discordUrl) {
-      const discordLoc = persistEnvVar('DISCORD_WEBHOOK_URL', discordUrl, 'Claude-Cron Discord notifications');
-      console.log(`[ok] Discord webhook zapisany w ${discordLoc}`);
-    } else {
+    if (!discordUrl) {
       console.log('[info] Pominięto Discord.');
     }
+
+    const telegramToken = await ask(rl, 'Telegram bot token (puste = pomiń): ');
+    let telegramChatId = '';
+    if (telegramToken) {
+      telegramChatId = await askTelegramChatId(rl, telegramToken);
+      if (telegramChatId) {
+        const sent = await sendTelegramTestMessage(telegramToken, telegramChatId);
+        console.log(
+          sent
+            ? '[ok] Wiadomość testowa wysłana — sprawdź Telegram.'
+            : '[warn] Wiadomość testowa nie doszła — sprawdź token i chat ID; poprawisz je w dashboardzie (Ustawienia powiadomień).',
+        );
+      } else {
+        console.log('[info] Pominięto Telegram (brak chat ID).');
+      }
+    } else {
+      console.log('[info] Pominięto Telegram.');
+    }
+
+    notifyPayload = buildNotificationSettingsPayload({
+      discordWebhookUrl: discordUrl,
+      telegramBotToken: telegramToken,
+      telegramChatId,
+    });
 
     const installHook = (await ask(rl, 'Zainstalować autostart? [Y/n]: ', 'Y')).toLowerCase();
     if (installHook === 'y') {
@@ -548,6 +702,15 @@ async function main() {
   console.log('\n[info] Smoke-test bazy danych...');
   await runSmokeTest();
   console.log('[ok] Smoke-test DB przeszedł — typy zgodne.');
+
+  // Zapis powiadomień do state dopiero teraz — baza zweryfikowana smoke-testem.
+  if (notifyPayload) {
+    persistNotifySettings(notifyPayload);
+    console.log('[ok] Konfiguracja powiadomień zapisana lokalnie (state DB).');
+    if (vpsUrl) {
+      await pushNotifySettingsToVps(vpsUrl, notifyPayload);
+    }
+  }
 
   // Auto-start serwera + auto-open przeglądarki (Mac/Win). Link wypisany ZAWSZE.
   await startServerAndOpen(nodeBin, REPO_DIR);

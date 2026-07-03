@@ -236,7 +236,7 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 
 ### Faza 3 — konfiguracja raz-lokalnie
 
-- [ ] **Unit 5: Modal ustawień powiadomień w dashboardzie (+ push na VPS)**
+- [x] **Unit 5: Modal ustawień powiadomień w dashboardzie (+ push na VPS)**
 
 **Cel:** Zmiana konfiguracji powiadomień z UI po instalacji: zapis lokalny + przycisk „Wyślij też na VPS".
 
@@ -267,7 +267,7 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 **Operator checklist:**
 - [ ] Push na żywy VPS zweryfikowany (`GET /api/vps/settings/notifications` po pushu pokazuje `configured:true`).
 
-- [ ] **Unit 6: Setup lokalny — pytania o Discord/Telegram do state, test-send, push na VPS**
+- [x] **Unit 6: Setup lokalny — pytania o Discord/Telegram do state, test-send, push na VPS**
 
 **Cel:** Konfiguracja powiadomień podawana RAZ w `setup.mjs`: zapis do state lokalnej bazy, testowa wiadomość Telegram, automatyczny push na VPS gdy skonfigurowany.
 
@@ -301,7 +301,7 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 **Operator checklist:**
 - [ ] Przebieg setupu na żywo (prawdziwy bot): testowa wiadomość dochodzi; po setupie VPS ma konfigurację.
 
-- [ ] **Unit 7: Instalator VPS przestaje pytać o Discord**
+- [x] **Unit 7: Instalator VPS przestaje pytać o Discord**
 
 **Cel:** VPS nie konfiguruje powiadomień — dostaje je pushem z lokalnego setupu/dashboardu.
 

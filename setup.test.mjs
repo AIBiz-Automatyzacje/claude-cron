@@ -15,6 +15,8 @@ import {
   parseFolderPickerResult,
   buildOpenBrowserCommand,
   buildSetUserEnvCommand,
+  buildNotificationSettingsPayload,
+  extractChatIdFromUpdates,
   NODE_VERSION,
 } from './setup.mjs';
 
@@ -335,4 +337,62 @@ test('buildSetUserEnvCommand → powershell SetEnvironmentVariable w User scope 
 test('buildSetUserEnvCommand escapuje pojedynczy cudzysłów w wartości (error case: iniekcja)', () => {
   const { args } = buildSetUserEnvCommand('X', "a'b");
   assert.ok(args[2].includes("'a''b'"), "pojedynczy ' musi być podwojony na '' (literał PS)");
+});
+
+// === buildNotificationSettingsPayload — odpowiedzi setupu → payload state (Unit 6) ===
+
+test('buildNotificationSettingsPayload zawiera tylko wypełnione pola (klucze state)', () => {
+  const payload = buildNotificationSettingsPayload({
+    discordWebhookUrl: 'https://discord.com/api/webhooks/1/x',
+    telegramBotToken: '',
+    telegramChatId: '   ',
+  });
+  assert.deepEqual(payload, { discord_webhook_url: 'https://discord.com/api/webhooks/1/x' });
+});
+
+test('buildNotificationSettingsPayload trimuje wartości i mapuje na klucze snake_case', () => {
+  const payload = buildNotificationSettingsPayload({
+    discordWebhookUrl: '',
+    telegramBotToken: ' 123456:ABC-def ',
+    telegramChatId: ' 42 ',
+  });
+  assert.deepEqual(payload, { telegram_bot_token: '123456:ABC-def', telegram_chat_id: '42' });
+});
+
+test('buildNotificationSettingsPayload → null gdy wszystko puste (pomiń zapis i push)', () => {
+  assert.equal(
+    buildNotificationSettingsPayload({ discordWebhookUrl: '', telegramBotToken: '', telegramChatId: '' }),
+    null,
+  );
+  assert.equal(buildNotificationSettingsPayload({}), null);
+});
+
+// === extractChatIdFromUpdates — odpowiedź getUpdates → chat ID albo null (Unit 6) ===
+
+test('extractChatIdFromUpdates: jedna rozmowa → chat ID jako string', () => {
+  const json = { ok: true, result: [{ update_id: 10, message: { chat: { id: 123456 } } }] };
+  assert.equal(extractChatIdFromUpdates(json), '123456');
+});
+
+test('extractChatIdFromUpdates: brak update\'ów → null (przejście na ręczny fallback)', () => {
+  assert.equal(extractChatIdFromUpdates({ ok: true, result: [] }), null);
+});
+
+test('extractChatIdFromUpdates: wiele czatów → najnowszy (ostatni update, ujemne ID grupy)', () => {
+  const json = {
+    ok: true,
+    result: [
+      { update_id: 1, message: { chat: { id: 111 } } },
+      { update_id: 2, message: { chat: { id: 222 } } },
+      { update_id: 3, message: { chat: { id: -100333 } } },
+    ],
+  };
+  assert.equal(extractChatIdFromUpdates(json), '-100333');
+});
+
+test('extractChatIdFromUpdates: ok:false / malformed / update bez message → null', () => {
+  assert.equal(extractChatIdFromUpdates(null), null);
+  assert.equal(extractChatIdFromUpdates({ ok: false, result: [] }), null);
+  assert.equal(extractChatIdFromUpdates({ ok: true }), null);
+  assert.equal(extractChatIdFromUpdates({ ok: true, result: [{ update_id: 5 }] }), null);
 });

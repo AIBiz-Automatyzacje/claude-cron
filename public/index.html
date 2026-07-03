@@ -21,9 +21,12 @@
           <span class="brand-tag">Zadania dla Twojego Asystenta AI</span>
         </span>
       </div>
-      <div class="env-toggle" id="env-toggle" style="display:none">
-        <button class="env-opt env-btn active" data-env="local" onclick="switchEnv('local')">LOKALNY</button>
-        <button class="env-opt env-btn" data-env="vps" onclick="switchEnv('vps')">VPS</button>
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="env-toggle" id="env-toggle" style="display:none">
+          <button class="env-opt env-btn active" data-env="local" onclick="switchEnv('local')">LOKALNY</button>
+          <button class="env-opt env-btn" data-env="vps" onclick="switchEnv('vps')">VPS</button>
+        </div>
+        <button class="btn btn-ghost" onclick="openNotifyModal()" aria-haspopup="dialog">🔔 Powiadomienia</button>
       </div>
     </header>
 
@@ -267,6 +270,42 @@
         <div class="modal-foot">
           <button type="button" class="btn btn-ghost" onclick="hideModal()">Anuluj</button>
           <button type="submit" class="btn btn-primary">Zapisz zadanie</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Modal: Ustawienia powiadomień ── -->
+  <div class="modal-overlay" id="notify-modal-overlay" onclick="closeNotifyModal(event)" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="notify-modal-title" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <div class="modal-title-wrap"><span class="modal-ico">🔔</span><h3 id="notify-modal-title">Powiadomienia</h3></div>
+        <button class="modal-close" onclick="hideNotifyModal()" aria-label="Zamknij">✕</button>
+      </div>
+      <form id="notify-form" onsubmit="saveNotifySettings(event)">
+        <div class="modal-body">
+          <div class="hint">Puste pole = wartość bez zmian. Konfigurację usuwa wyłącznie przycisk „Wyczyść".</div>
+
+          <label class="field-label" for="notify-discord-url">DISCORD — WEBHOOK URL</label>
+          <input type="text" class="input mono" id="notify-discord-url" autocomplete="off" placeholder="nie skonfigurowano" />
+          <div class="webhook-actions">
+            <button type="button" class="btn btn-small btn-danger" onclick="clearNotifyChannel('discord')">Wyczyść Discord</button>
+          </div>
+
+          <div class="webhook-section">
+            <label class="field-label" for="notify-telegram-token">TELEGRAM — BOT TOKEN</label>
+            <input type="text" class="input mono" id="notify-telegram-token" autocomplete="off" placeholder="nie skonfigurowano" />
+            <label class="field-label" for="notify-telegram-chat">TELEGRAM — CHAT ID</label>
+            <input type="text" class="input mono" id="notify-telegram-chat" autocomplete="off" placeholder="nie skonfigurowano" />
+            <div class="webhook-actions">
+              <button type="button" class="btn btn-small btn-danger" onclick="clearNotifyChannel('telegram')">Wyczyść Telegram</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn btn-ghost" onclick="hideNotifyModal()">Anuluj</button>
+          <button type="button" class="btn btn-ghost" id="notify-push-vps" onclick="pushNotifyToVps()" style="display:none">Wyślij na VPS</button>
+          <button type="submit" class="btn btn-primary">Zapisz</button>
         </div>
       </form>
     </div>
