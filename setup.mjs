@@ -588,6 +588,7 @@ async function pushNotifySettingsToVps(vpsUrl, payload) {
 // Wołany PO udanym smoke-teście DB (wzorzec persistNotifySettings). Skanowanie skilli
 // (getAllSkills w lib/starter-jobs) czyta workspace z CLAUDE_CRON_WORKSPACE — ustawionego
 // wcześniej w tej sesji przez persistEnvVar. Idempotencja po nazwie joba: re-run nie duplikuje.
+// Zwraca nazwy dodanych jobów — caller synchronizuje ich harmonogramy z działającym serwerem.
 function seedStarterJobsWithReport() {
   const { seedStarterJobs, SKIP_REASON } = require('./lib/starter-jobs');
   const db = require('./lib/db');
@@ -607,6 +608,60 @@ function seedStarterJobsWithReport() {
   }
   if (added.length === 0) {
     console.log('[info] Nie dodano nowych tasków.');
+  }
+  return added;
+}
+
+// Pure: id-ki jobów z listy API, których nazwa jest wśród seedowanych. Mapowanie po
+// nazwie, bo seed pisze do DB bez znajomości id, a serwer wymaga id w PUT /api/jobs/:id.
+export function matchJobIdsByName(jobs, names) {
+  const wanted = new Set(names);
+  return (Array.isArray(jobs) ? jobs : [])
+    .filter((job) => wanted.has(job?.name))
+    .map((job) => job.id);
+}
+
+// Timeout wywołań lokalnego API Pulsa — localhost odpowiada natychmiast albo wcale.
+const LOCAL_API_TIMEOUT_MS = 5_000;
+
+async function fetchLocalApi(pathname, options = {}) {
+  const res = await fetch(`${DASHBOARD_URL}${pathname}`, {
+    ...options,
+    signal: AbortSignal.timeout(LOCAL_API_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`${pathname} → HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// === I/O shell: rejestracja harmonogramów seedowanych tasków w JUŻ działającym serwerze ===
+// Re-run setupu: seed pisze joby wprost do DB, a croner rejestruje harmonogramy tylko przy
+// boocie (scheduleAll) i przez API — bez tego kroku taski byłyby widoczne w dashboardzie,
+// ale nie odpaliłyby się aż do restartu. PUT /api/jobs/:id z pustym body to celowy no-op
+// na danych (db.updateJob bez pól zwraca joba bez zmian), po którym serwer woła
+// scheduler.scheduleJob — gotowy prymityw "reschedule" bez nowego endpointu.
+// Pad NIGDY nie przerywa setupu (warn + instrukcja restartu, wzorzec installPulsSkill).
+async function syncSeededSchedulesOnRunningServer(addedNames) {
+  if (!(await pingDashboard())) {
+    return; // serwer nie działa — świeży boot zrobi scheduleAll i zobaczy seedowane joby
+  }
+  try {
+    const jobs = await fetchLocalApi('/api/jobs');
+    const ids = matchJobIdsByName(jobs, addedNames);
+    for (const id of ids) {
+      await fetchLocalApi(`/api/jobs/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+    }
+    console.log(`[ok] Harmonogramy ${ids.length} seedowanych tasków zarejestrowane w działającym serwerze.`);
+  } catch (error) {
+    console.log(
+      `[warn] Serwer Puls działa, ale rejestracja harmonogramów nie powiodła się (${error.message}) — `
+      + 'zrestartuj serwer, inaczej seedowane taski nie odpalą się z crona.',
+    );
   }
 }
 
@@ -780,7 +835,11 @@ async function main() {
   // w migrate() clobberowałby świadome decyzje usera przy każdym boocie).
   if (wantStarterJobs) {
     console.log('\n[info] Dodaję podstawowe taski...');
-    seedStarterJobsWithReport();
+    const addedNames = seedStarterJobsWithReport();
+    if (addedNames.length > 0) {
+      // Re-run przy działającym serwerze: bez tego croner nie zna nowych harmonogramów.
+      await syncSeededSchedulesOnRunningServer(addedNames);
+    }
   }
 
   // Skill `puls` do ~/.claude/skills — re-run nadpisuje (aktualizacja treści skilla).

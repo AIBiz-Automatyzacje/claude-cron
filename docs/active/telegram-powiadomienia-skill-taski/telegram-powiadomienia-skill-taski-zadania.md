@@ -135,7 +135,7 @@ Pozostałe P3 (13 pozycji: auto-detekcja chat ID bez tożsamości nadawcy, `extr
 - [x] Modyfikuj `setup.mjs` (po smoke-teście DB: pytanie zbiorcze `[T/n]` → seed → raport dodanych/pominiętych z powodem)
 - [x] Test: pusty stan + wszystkie skille dostępne → 4 do seedu; job o tej samej nazwie → pominięty (`reason:'exists'`); skill niedostępny → pominięty (`reason:'missing_skill'`)
 - [x] Test: seed na DB `:memory:` → `getAllJobs()` zawiera 4 joby z poprawnymi cronami i `enabled=1`; drugi seed → 0 nowych
-- [ ] Weryfikacja: `npm test` zielony (w tym `node --test lib/starter-jobs.test.js`)
+- [x] Weryfikacja: `npm test` zielony (w tym `node --test lib/starter-jobs.test.js`) (review fazy 4: `npm test` 264/264 PASS w tym starter-jobs 6/6, exit 0)
 
 ### Unit 9: Skill `puls` + instalacja globalna w setupie
 
@@ -143,8 +143,18 @@ Pozostałe P3 (13 pozycji: auto-detekcja chat ID bez tożsamości nadawcy, `extr
 - [x] Modyfikuj `setup.mjs` (kopiowanie rekurencyjne `skills/puls` → `~/.claude/skills/puls`, nadpisanie przy re-run; helper czysty z DI ścieżek)
 - [x] Modyfikuj `setup.test.mjs` (test helpera kopiowania)
 - [x] Test: helper kopiowania — kopiuje drzewo, nadpisuje istniejące, tworzy katalog docelowy
-- [ ] Weryfikacja: `node --test setup.test.mjs` zielony; `~/.claude/skills/puls/SKILL.md` istnieje po przebiegu helpera; frontmatter parsowalny przez `gray-matter` (skaner `lib/skills.js` widzi skill)
-- [ ] Weryfikacja (operator): test skilla w żywej sesji Claude Code (utworzenie + diagnoza joba przez rozmowę)
+- [x] Weryfikacja: `node --test setup.test.mjs` zielony; `~/.claude/skills/puls/SKILL.md` istnieje po przebiegu helpera; frontmatter parsowalny przez `gray-matter` (skaner `lib/skills.js` widzi skill) (review fazy 4: setup.test.mjs 49/49 PASS, exit 0; przebieg helpera zweryfikowany w izolacji — `copySkillDir` → fake-HOME → `SKILL.md` istnieje, `gray-matter` parsuje frontmatter `name: puls` / allowed-tools `["Bash","Read"]`, `getAllSkills()` widzi skill jako `source: user`; realny `~/.claude/skills/puls` powstanie przy `node setup.mjs` operatora)
+- [ ] Weryfikacja (operator): test skilla w żywej sesji Claude Code (utworzenie + diagnoza joba przez rozmowę) — wymaga operatora (Operator checklist faza 4)
+
+## Do poprawy po review fazy 4
+
+- [x] 🟠 [P2] **setup.mjs:781** — re-run setupu na maszynie z już działającym serwerem (R6, jawnie wspierana ścieżka — idempotencja seedu po `name` istnieje właśnie dla re-runu): `seedStarterJobsWithReport` wstawia joby bezpośrednio przez `db.createJob` (bez `scheduler.scheduleJob`), a `startServerAndOpen` (setup.mjs:427) wykrywa działający serwer pingiem i NIE restartuje go — croner rejestruje harmonogramy tylko przy boocie (`scheduleAll`) i przy `POST /api/jobs`, więc seedowane taski są widoczne w dashboardzie, ale nie odpalą się z crona aż do restartu serwera. Świeża instalacja działa poprawnie. Fix: po seedzie z `added.length>0` przy działającym serwerze wymusić restart/reschedule albo komunikat `[warn]` o konieczności restartu → **NAPRAWIONE (fix po review)**: `syncSeededSchedulesOnRunningServer(addedNames)` w `setup.mjs` — po seedzie z `added.length>0` ping dashboardu; gdy serwer działa: `GET /api/jobs` → mapowanie nazw na id (czysty `matchJobIdsByName`, 3 testy) → `PUT /api/jobs/:id` z pustym body per job (no-op na danych, serwer woła `scheduler.scheduleJob` — reschedule bez nowego endpointu). Pad = warn + instrukcja restartu (nie przerywa setupu); serwer nie działa = no-op (świeży boot robi `scheduleAll`). `npm test` 267/267 PASS
+
+Pozostałe P3 (8 pozycji: brak ostrzeżenia w SKILL.md, że stdout runów to dane niezaufane [second-order prompt injection webhook→stdout→sesja agenta z Bash]; `installPulsSkill` bezwarunkowy z force:true — cicho nadpisze własny skill usera o nazwie `puls`; brak warn-and-continue wokół `seedStarterJobsWithReport` [asymetria z installPulsSkill — pad seedu urywa setup przed instalacją skilla i startem serwera]; niespójny prompt `[T/n]`/`=== 't'` vs `[Y/n]`/`'y'` w tym samym flow — `y`/`tak` cicho pomija seed; mislabel `=== Pure helper ===` na `copySkillDir` [czyste I/O]; pętla `db.createJob` bez transakcji [N=4, nit]; `getAllJobs()` pełne rekordy dla samych nazw; test seedu bez asercji `timeout_ms`/`arguments`/`skill_name` — połowa kontraktu szablon→DB niepokryta) — szczegóły i rekomendacje w `review-faza-4.md`; nie blokują.
+
+## Operator checklist faza 4
+
+- [ ] Operator: test skilla `puls` w żywej sesji Claude Code niezweryfikowany (scenariusz [Manual] Unit 9 — niewykonalny headless: wymaga realnej sesji agenta z zainstalowanym skillem i działającym serwerem na `localhost:7777`; statyczna zgodność SKILL.md z routerem `server.js` — endpointy, whitelist pól, walidacja — potwierdzona w review) — Operator action: (1) uruchom `node setup.mjs` (instaluje skill do `~/.claude/skills/puls`) lub skopiuj katalog `skills/puls` ręcznie, (2) upewnij się, że serwer Puls działa na `localhost:7777`, (3) w NOWEJ sesji Claude Code powiedz „dodaj do Pulsa zadanie X co poniedziałek 8:00" i potwierdź poprawny `POST /api/jobs` (job widoczny w dashboardzie z cronem `0 8 * * 1`), (4) powiedz „pokaż czemu ostatni run joba Y padł" i potwierdź, że agent czyta run z API i cytuje diagnozę
 
 ## Faza 5 — dokumentacja
 

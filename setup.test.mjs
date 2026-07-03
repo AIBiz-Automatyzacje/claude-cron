@@ -20,6 +20,7 @@ import {
   buildSetUserEnvCommand,
   buildNotificationSettingsPayload,
   extractChatIdFromUpdates,
+  matchJobIdsByName,
   NODE_VERSION,
 } from './setup.mjs';
 
@@ -441,4 +442,29 @@ test('copySkillDir rzuca gdy katalog źródłowy nie istnieje (error case)', (t)
   const dest = path.join(base, 'home', '.claude', 'skills', 'puls');
 
   assert.throws(() => copySkillDir(missingSrc, dest), /ENOENT/);
+});
+
+// === matchJobIdsByName — mapowanie seedowanych nazw na id-ki z GET /api/jobs ===
+// (sync harmonogramów seedu z działającym serwerem przy re-run setupu)
+
+test('matchJobIdsByName zwraca id-ki tylko jobów o seedowanych nazwach (happy path)', () => {
+  const jobs = [
+    { id: 1, name: 'Daily memory update' },
+    { id: 2, name: 'Własny job usera' },
+    { id: 3, name: 'Reflect tygodniowy' },
+  ];
+
+  const ids = matchJobIdsByName(jobs, ['Daily memory update', 'Reflect tygodniowy']);
+
+  assert.deepEqual(ids, [1, 3]);
+});
+
+test('matchJobIdsByName → [] gdy żadna nazwa nie pasuje albo lista jobów pusta', () => {
+  assert.deepEqual(matchJobIdsByName([{ id: 1, name: 'Inny' }], ['Nie ma']), []);
+  assert.deepEqual(matchJobIdsByName([], ['Daily memory update']), []);
+});
+
+test('matchJobIdsByName odporny na nie-tablicowy input z API (error case)', () => {
+  assert.deepEqual(matchJobIdsByName(null, ['Daily memory update']), []);
+  assert.deepEqual(matchJobIdsByName({ error: 'boom' }, ['Daily memory update']), []);
 });
