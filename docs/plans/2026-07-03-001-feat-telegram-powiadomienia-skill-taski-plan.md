@@ -399,7 +399,7 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 
 ### Faza 5 — dokumentacja
 
-- [ ] **Unit 10: Dokumentacja (README, CLAUDE.md, szablon e2e-env)**
+- [x] **Unit 10: Dokumentacja (README, CLAUDE.md, szablon e2e-env)** (2026-07-03: README — sekcje Powiadomienia/Podstawowe taski/Skill puls + tabele setupu 6 pytań; CLAUDE.md — moduły notify-*, telegram, starter-jobs, endpointy settings; `.env.e2e.example` z `TELEGRAM_*` [plik gitignorowany `.env.*` — zmiana lokalna]; weryfikacja: `grep -q TELEGRAM_BOT_TOKEN README.md CLAUDE.md` PASS, `npm test` 267/267 PASS)
 
 **Cel:** Użytkownik i przyszłe sesje agenta znają nowe mechanizmy.
 

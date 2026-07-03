@@ -10,7 +10,8 @@
 - **Webhoki** — zewnętrzne serwisy (Make, n8n, Zapier) mogą triggerować joby przez link
 - **Dashboard** — przeglądarka, `localhost:7777`, zarządzasz jobami, widzisz historię, przeglądasz skille
 - **VPS 24/7** — joby lecą non-stop na serwerze, nawet gdy śpisz
-- **Powiadomienia Discord** — wynik joba ląduje na Twojego Discorda
+- **Powiadomienia Discord i Telegram** — wynik joba (✅) albo ostateczny fail (❌) ląduje na Twoim kanale; konfigurujesz raz — lokalnie ([szczegóły](#-powiadomienia-discord--telegram))
+- **Podstawowe taski + skill `puls`** — setup proponuje gotowy zestaw jobów startowych i instaluje skill, dzięki któremu zarządzasz Pulsem rozmową z Claude Code
 
 ---
 
@@ -74,7 +75,7 @@ wget -qO- https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main
 Instalator prowadzi Cię przez cały przebieg i jest **bezpieczny do ponownego uruchomienia** — re-run wykrywa, co już jest zrobione, i wskakuje w brakujący krok:
 
 1. checklist + detekcja stanu (co już jest zainstalowane)
-2. wszystkie pytania naraz: email Obsidian, nazwa vaulta, repo `.claude`, Discord webhook (opcjonalny)
+2. wszystkie pytania naraz: email Obsidian, nazwa vaulta, repo `.claude` (o powiadomienia instalator VPS **nie pyta** — konfigurujesz je raz przy instalacji lokalnej, a Puls sam wypycha je na VPS)
 3. automatyczna instalacja narzędzi: Node 22, Claude CLI, `gh`, `obsidian-headless`, Tailscale
 4. blok 5 logowań (jedyne kroki interaktywne): Claude → GitHub → Obsidian → Obsidian Sync → Tailscale
 5. serwisy systemd (`claude-cron`, `obsidian-sync`), firewall, auto-update o 02:00 i notatka-dowód **„Witaj z VPS"**, która za chwilę pojawi się w Obsidianie na Twoim telefonie
@@ -186,14 +187,16 @@ To wszystko. Ta jedna komenda:
 
 1. Pobiera repo do `~/claude-cron` (bez `git` — przez tarball, więc nie odpala instalacji Xcode CLT),
 2. Stawia przenośny Node w `.node/` (weryfikując sumę `SHASUMS256` z nodejs.org),
-3. Przekazuje sterowanie do `setup.mjs`, który **pyta o 4 rzeczy** (odpowiadasz w terminalu):
+3. Przekazuje sterowanie do `setup.mjs`, który **pyta o 6 rzeczy** (odpowiadasz w terminalu):
 
 | Pytanie | Co wpisać |
 |---------|-----------|
 | **1. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). Otworzy się **natywne okno wyboru folderu** (macOS `osascript` „choose folder" w Finderze) — zaznacz folder i kliknij OK. Jeśli okno się nie pojawi, wpisz ścieżkę w terminalu |
 | **2. VPS** | Tailscale IP VPS-a z kroku 1.7 (np. `100.86.100.113`) albo Enter, jeśli używasz Pulsa tylko lokalnie |
 | **3. Discord** | URL webhooka Discord do powiadomień albo Enter, żeby pominąć |
-| **4. Autostart** | `Y` — serwer startuje automatycznie z każdą sesją Claude Code |
+| **4. Telegram** | Token bota z [@BotFather](#telegram--bot-krok-po-kroku) albo Enter, żeby pominąć. Chat ID setup **wykryje sam** — napisz cokolwiek do swojego bota, gdy poprosi, i wciśnij Enter. Na koniec dostaniesz wiadomość testową „✅ Puls połączony z Telegramem" |
+| **5. Autostart** | `Y` — serwer startuje automatycznie z każdą sesją Claude Code |
+| **6. Podstawowe taski** | `T` — dodaje [gotowy zestaw jobów startowych](#-podstawowe-taski-onboarding) (memory update, reflect, skill scout) |
 
 #### Gotowe 🎉
 
@@ -254,14 +257,16 @@ To wszystko. Ta jedna komenda:
 
 1. Pobiera repo do `$HOME\claude-cron` (bez `git` — przez zip + `Expand-Archive`),
 2. Stawia przenośny Node w `.node\` (weryfikując sumę `SHASUMS256` z nodejs.org),
-3. Przekazuje sterowanie do `setup.mjs`, który **pyta o 4 rzeczy** (odpowiadasz w terminalu):
+3. Przekazuje sterowanie do `setup.mjs`, który **pyta o 6 rzeczy** (odpowiadasz w terminalu):
 
 | Pytanie | Co wpisać |
 |---------|-----------|
 | **1. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). Otworzy się **natywne okno wyboru folderu** (Windows `FolderBrowserDialog`) — zaznacz folder i kliknij OK. Jeśli okno się nie pojawi, wklej pełną ścieżkę w terminalu, np. `C:\Users\kacpe\OneDrive\Obsidian\Vault` |
 | **2. VPS** | Tailscale IP VPS-a z kroku 1.7 (np. `100.86.100.113`) albo Enter, jeśli używasz Pulsa tylko lokalnie |
 | **3. Discord** | URL webhooka Discord do powiadomień albo Enter, żeby pominąć |
-| **4. Autostart** | `Y` — serwer startuje automatycznie z Claude Code |
+| **4. Telegram** | Token bota z [@BotFather](#telegram--bot-krok-po-kroku) albo Enter, żeby pominąć. Chat ID setup **wykryje sam** — napisz cokolwiek do swojego bota, gdy poprosi, i wciśnij Enter. Na koniec dostaniesz wiadomość testową „✅ Puls połączony z Telegramem" |
+| **5. Autostart** | `Y` — serwer startuje automatycznie z Claude Code |
+| **6. Podstawowe taski** | `T` — dodaje [gotowy zestaw jobów startowych](#-podstawowe-taski-onboarding) (memory update, reflect, skill scout) |
 
 #### Gotowe 🎉
 
@@ -285,7 +290,7 @@ Tu tworzysz i zarządzasz jobami. Kliknij **+ NEW JOB** i ustaw:
 - **Skill** — wybierz z listy (pogrupowane: Project, User, Plugin)
 - **Harmonogram** — codziennie, dni robocze, co X godzin, itp.
 - **Prompt** — dodatkowe instrukcje dla Claude'a (opcjonalne)
-- **Discord** — zaznacz jeśli chcesz powiadomienie na Discorda
+- **Powiadomienia** — zaznacz Discord i/lub Telegram, jeśli chcesz dostać wynik joba na kanał (kanały konfigurujesz w modalu 🔔 — patrz [Powiadomienia](#-powiadomienia-discord--telegram))
 
 Każdy job ma przyciski: ▶ (uruchom teraz), ⏻ (włącz/wyłącz), ✎ (edytuj), ✕ (usuń).
 
@@ -299,6 +304,76 @@ Przeglądaj wszystkie skille z filtrami:
 - **📁 Project** — skille z Twojego workspace'u
 - **👤 User** — Twoje globalne skille
 - **🔌 Plugin** — skille z zainstalowanych pluginów
+
+---
+
+## 🔔 Powiadomienia (Discord + Telegram)
+
+Puls wysyła powiadomienie po runie joba, jeśli zaznaczysz kanał w formularzu joba:
+
+- **✅ sukces** — wynik joba (odpowiedź agenta), długie wyniki dzielone na kilka wiadomości (Discord ≤2000 znaków, Telegram ≤4096)
+- **❌ ostateczny fail** — gdy job padnie (`failed`/`timeout`) i **wyczerpie wszystkie retry**, dostajesz wiadomość ze skrótem przyczyny (komunikat błędu albo końcówka stderr). Pojedynczy fail, po którym Puls jeszcze ponawia, nie spamuje
+- **zabicie ręczne (`killed`)** — bez powiadomienia (sam to zrobiłeś, wiesz)
+
+Oba kanały działają symetrycznie i niezależnie — możesz mieć jeden, drugi albo oba.
+
+### Konfigurujesz raz — lokalnie
+
+Dane kanałów (webhook Discorda, token i chat ID Telegrama) podajesz **jeden raz, w setupie lokalnym** (`node setup.mjs` — pytania 3 i 4 z instalacji). Setup:
+
+1. zapisuje konfigurację w lokalnej bazie Pulsa (state DB),
+2. wysyła wiadomość testową „✅ Puls połączony z Telegramem",
+3. **sam wypycha konfigurację na VPS** (jeśli masz VPS skonfigurowany) — na serwerze nic nie ustawiasz.
+
+Później wszystko zmienisz w dashboardzie: przycisk **🔔 Powiadomienia** otwiera modal z trzema polami (webhook Discord, token Telegrama, chat ID). Masz tam **Zapisz** (lokalnie), **Wyślij na VPS** i **Wyczyść** per kanał. Zmiany działają od razu — bez restartu serwera.
+
+> **Skąd Puls bierze konfigurację?** Najpierw z bazy (state DB), a gdy tam pusto — ze zmiennych środowiskowych `DISCORD_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (fallback dla starszych instalacji — jeśli masz je w `.zshrc`, nadal działają). Wartość zapisana w dashboardzie/setupie **wygrywa** z env.
+
+> **⚠️ Re-run instalatora VPS a Discord.** Instalator VPS **nie pyta już** o webhook Discorda i przy ponownym uruchomieniu **usuwa `DISCORD_WEBHOOK_URL` z konfiguracji serwisu** na serwerze. Jeśli po re-runie instalatora VPS powiadomienia z VPS-a zamilkły — wypchnij konfigurację z lokalnej instalacji: dashboard → 🔔 Powiadomienia → **Wyślij na VPS** (albo przejdź jeszcze raz `node setup.mjs`).
+
+> **🔒 Sekrety w bazie.** Token bota i webhook są zapisane w pliku bazy `data/claude-cron.db` **czystym tekstem** (ten sam poziom zaufania co zmienne w `.zshrc`). Nie udostępniaj nikomu pliku bazy ani folderu `data/`. Dashboard i API nigdy nie pokazują pełnych wartości — tylko maskę (ostatnie 4 znaki).
+
+### Telegram — bot krok po kroku
+
+1. **Załóż bota**: otwórz w Telegramie czat z [@BotFather](https://t.me/BotFather) → wyślij `/newbot` → podaj nazwę (np. `Puls`) i unikalny username (musi kończyć się na `bot`, np. `moj_puls_bot`)
+2. **Skopiuj token** — BotFather odpisze tokenem w formacie `123456789:AAH...` — to jest wartość, którą wklejasz w setupie / modalu 🔔
+3. **Chat ID wykryje setup**: gdy setup poprosi, **napisz cokolwiek do swojego bota** (otwórz z nim czat i wyślij np. „hej"), wróć do terminala i wciśnij Enter — Puls odczyta chat ID sam (przez `getUpdates`) i poprosi o potwierdzenie. Jeśli auto-detekcja się nie uda, wpiszesz chat ID ręcznie
+4. **Sprawdź telefon** — powinna przyjść wiadomość „✅ Puls połączony z Telegramem"
+
+Potem w każdym jobie zaznacz checkbox **Telegram** — i wyniki lecą na Twój czat.
+
+---
+
+## 🧰 Podstawowe taski (onboarding)
+
+Na końcu setupu lokalnego Puls proponuje (jedno pytanie `[T/n]`) gotowy zestaw czterech jobów startowych z `templates/starter-jobs.json`:
+
+| Job | Harmonogram | Skill |
+|-----|-------------|-------|
+| Daily memory update | codziennie 6:00 | `memory-update` |
+| Weekly memory update | poniedziałek 8:00 | `memory-update` (tryb weekly) |
+| Reflect tygodniowy | poniedziałek 8:00 | `reflect` |
+| Poszukiwanie nowych skillów | piątek 9:00 | `skill-scout` |
+
+Zasady:
+
+- **Idempotencja po nazwie** — job o tej samej nazwie już istnieje? Zostanie pominięty (re-run setupu niczego nie zdubluje). Jeśli świadomie usunąłeś taska, ponowny setup z odpowiedzią `T` przywróci go
+- **Brak skilla = pominięcie z powodem** — jeśli nie masz danego skilla (np. `skill-scout`), setup pominie ten szablon i powie dlaczego
+- Joby startują z **wyłączonymi powiadomieniami** — włączysz je per job w dashboardzie
+- Seed działa **tylko lokalnie** — na VPS taski trafiają tak, jak wszystkie inne (tworzysz je przez dashboard w widoku VPS)
+
+---
+
+## 🤖 Skill `puls` — zarządzaj Pulsem rozmową
+
+Setup instaluje globalnie skill `puls` (kopiuje `skills/puls` z repo do `~/.claude/skills/puls`), dzięki któremu **każda sesja Claude Code umie obsługiwać Pulsa przez REST API**. Zamiast klikać w dashboard, mówisz:
+
+- „dodaj do Pulsa zadanie: raport tygodniowy co poniedziałek 8:00"
+- „dlaczego ostatni run joba X padł?"
+- „zmień harmonogram joba Y na dni robocze o 7:00"
+- „zabij bieżący run"
+
+Skill zna endpointy, pola jobów i format logów — tworzy, edytuje i diagnozuje joby sam. Re-run setupu nadpisuje skill najnowszą wersją z repo.
 
 ---
 

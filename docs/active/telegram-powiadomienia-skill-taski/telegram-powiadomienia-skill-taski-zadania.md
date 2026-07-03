@@ -160,7 +160,7 @@ Pozostałe P3 (8 pozycji: brak ostrzeżenia w SKILL.md, że stdout runów to dan
 
 ### Unit 10: Dokumentacja (README, CLAUDE.md, szablon e2e-env)
 
-- [ ] Modyfikuj `README.md` (sekcja Telegram: BotFather krok po kroku, auto-detect chat ID w setupie; „Powiadomienia konfigurujesz raz — lokalnie" + priorytet state>env + nota o re-runie VPS usuwającym env Discorda; powiadomienia o failach; podstawowe taski; skill puls)
-- [ ] Modyfikuj `CLAUDE.md` (wzmianki: `lib/telegram.js`/`notify-format.js`/`notify-config.js`/`notify-push.js`, priorytet state>env, endpointy settings + push-to-vps, `templates/starter-jobs.json`, katalog `skills/`)
-- [ ] Modyfikuj `.claude/templates/e2e-env/.env.e2e.example` (`TELEGRAM_*`)
+- [x] Modyfikuj `README.md` (sekcja Telegram: BotFather krok po kroku, auto-detect chat ID w setupie; „Powiadomienia konfigurujesz raz — lokalnie" + priorytet state>env + nota o re-runie VPS usuwającym env Discorda; powiadomienia o failach; podstawowe taski; skill puls)
+- [x] Modyfikuj `CLAUDE.md` (wzmianki: `lib/telegram.js`/`notify-format.js`/`notify-config.js`/`notify-push.js`, priorytet state>env, endpointy settings + push-to-vps, `templates/starter-jobs.json`, katalog `skills/`)
+- [x] Modyfikuj `.claude/templates/e2e-env/.env.e2e.example` (`TELEGRAM_*`) — uwaga: plik matchuje wzorzec `.env.*` w `.gitignore`, zmiana żyje tylko lokalnie (jak dotąd — plik nigdy nie był trackowany; w repo jest `README.md` szablonu)
 - [ ] Weryfikacja: `grep -q TELEGRAM_BOT_TOKEN README.md CLAUDE.md` przechodzi; `npm test` zielony (regresja całości)
