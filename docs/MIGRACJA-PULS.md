@@ -330,7 +330,7 @@ Kurs łączy dwie lekcje VPS w jedną („B1 — Asystent w chmurze"), bo dziś 
 
 Konsekwencje:
 - Dziś `install-vps.sh` NIE klonuje vaulta ani nie konfiguruje Obsidian Sync — zakłada gotowe repo `~/vault-git` (tylko `git pull` w auto-update cronie). Po merge'u ma to ogarnąć sam (login Obsidian + `sync-setup` + `sync-config`).
-- ⚠️ **Pamiętać o `--file-types …,unsupported`** — bez tego raporty HTML/JSON ze skilli zostają na VPS i nie docierają na komputer (zweryfikowane 27.06; przewodnik `Zasoby/Tech/obsidian-headless-vps-guide.md` sekcja 3).
+- ⚠️ **Pamiętać o `--file-types …,unsupported`** — bez tego raporty HTML/JSON ze skilli zostają na VPS i nie docierają na komputer (zweryfikowane 27.06; przewodnik `Zasoby/Archiwum/Tech/obsidian-headless-vps-guide.md` sekcja 3).
 - Login do Claude ma lecieć **raz** (dziś jest dublowany między dwoma instalatorami).
 - Audyt kursu z pełnym kontekstem lekcji B1/B4: `…/asystent_obsidian/Aktualizacja/Co poprawić?.md` (sekcje „B1", „B4").
 

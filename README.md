@@ -27,12 +27,22 @@ Kolejność:
 
 ## ☁️ Krok 1 — Instalacja na VPS (opcjonalne)
 
-Jeśli chcesz harmonogram lecący 24/7 — postaw Puls na VPS-ie i podłącz dashboard przez Tailscale.
+Jeśli chcesz harmonogram lecący 24/7 — postaw Puls na VPS-ie i podłącz dashboard przez Tailscale. Instalator stawia też **Obsidian Sync w trybie headless** (vault na serwerze — Claude pracuje na Twoich notatkach, wyniki lądują na telefonie). Nie używasz Obsidiana? Dodaj flagę `--only-puls`.
 
-### Wymagania
-- Serwer VPS z Linuxem (Hostinger, DigitalOcean, Hetzner, etc.) — installer instaluje Tailscale automatycznie
+### 1.1 — Prerequisites (zanim zaczniesz)
 
-### 1.1 — SSH na VPS
+Instalator poprosi Cię o zalogowanie do każdej z tych usług — przygotuj je wcześniej:
+
+- [ ] świeży VPS z Ubuntu/Debianem i dostępem root przez SSH (Hostinger, DigitalOcean, Hetzner, etc.)
+- [ ] konto Obsidian + vault lokalny + remote vault (Obsidian Sync)
+- [ ] hasło szyfrowania end-to-end remote vaulta (to **INNE** hasło niż do konta!)
+- [ ] prywatne repo GitHub z katalogiem `.claude` (skille)
+- [ ] konto GitHub (logowanie `gh` przez przeglądarkę)
+- [ ] konto Tailscale
+
+> Przy `--only-puls` wystarczą: VPS, konto GitHub i konto Tailscale.
+
+### 1.2 — SSH na VPS
 
 ```bash
 ssh root@TWOJE_IP_SERWERA
@@ -40,18 +50,18 @@ ssh root@TWOJE_IP_SERWERA
 
 > **Gdzie znaleźć IP serwera?** W panelu hostingu (np. Hostinger → VPS → IPv4).
 
-### 1.2 — Zainstaluj prereqs
+### 1.3 — Odpal instalator (one-liner)
 
-```bash
-apt update && apt install -y git curl
-```
-
-### 1.3 — Odpal installer
-
-Jedna komenda — pobiera i odpala installer prosto z `main`:
+Jedna komenda — pobiera i odpala instalator prosto z `main`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/scripts/install-vps.sh | sudo bash
+```
+
+Nie masz `curl` na świeżym serwerze? Wariant z `wget`:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/scripts/install-vps.sh | sudo bash
 ```
 
 > **🔒 Wykonujesz kod z internetu.** Ta komenda odpala skrypt prosto z GitHuba jako `root`. Jeśli wolisz najpierw go obejrzeć:
@@ -61,19 +71,59 @@ curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/mai
 > sudo bash install-vps.sh
 > ```
 
-Installer zrobi wszystko automatycznie (`git clone` repo, portable Node z weryfikacją `SHASUMS256`, systemd). Po drodze zapyta:
+Instalator prowadzi Cię przez cały przebieg i jest **bezpieczny do ponownego uruchomienia** — re-run wykrywa, co już jest zrobione, i wskakuje w brakujący krok:
 
-| Pytanie | Co wpisać |
-|---------|-----------|
-| **Log in to Claude CLI** | `Y` — auto-odpali `claude` jako user `claude`. Zaloguj się w przeglądarce, wyjdź przez `/exit` — installer automatycznie kontynuuje |
-| **Workspace** | Np. `/home/claude/vault` |
-| **Port** | Enter (domyślny 7777) |
-| **Discord webhook** | URL albo puste |
-| **Timezone** | Enter (Warsaw) |
-| **Tailscale Funnel** | `Y` jeśli chcesz webhoki |
-| **Auto-update cron** | `Y` — codzienny git pull o 2:00 |
+1. checklist + detekcja stanu (co już jest zainstalowane)
+2. wszystkie pytania naraz: email Obsidian, nazwa vaulta, repo `.claude`, Discord webhook (opcjonalny)
+3. automatyczna instalacja narzędzi: Node 22, Claude CLI, `gh`, `obsidian-headless`, Tailscale
+4. blok 5 logowań (jedyne kroki interaktywne): Claude → GitHub → Obsidian → Obsidian Sync → Tailscale
+5. serwisy systemd (`claude-cron`, `obsidian-sync`), firewall, auto-update o 02:00 i notatka-dowód **„Witaj z VPS"**, która za chwilę pojawi się w Obsidianie na Twoim telefonie
+6. na końcu opcjonalne pytanie o Tailscale Funnel (webhooki) — w razie wątpliwości wybierz `N`, wrócisz do tego później
 
-### 1.4 — Zapisz Tailscale IP
+### 1.4 — Flagi
+
+Flagi przekazuje się przez `bash -s --` (wszystko po `--` trafia do skryptu):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/scripts/install-vps.sh | sudo bash -s -- --only-puls
+```
+
+| Flaga | Działanie |
+|-------|-----------|
+| `--only-puls` / `--no-obsidian` | instaluje tylko Puls (bez Obsidian Sync i vaulta) |
+| `--port <n>` | port serwera Puls (domyślnie 7777) |
+| `--tz <tz>` | strefa czasowa (domyślnie autodetekcja / Europe/Warsaw) |
+| `--device-name <s>` | nazwa urządzenia w Obsidian Sync (domyślnie `vps-<hostname>`) |
+| `--no-auto-update` | bez codziennego crona auto-update (02:00) |
+| `--reset` | deinstalacja (patrz niżej) — nie łączy się z `--only-puls` |
+
+### 1.5 — Reset (deinstalacja)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AIBiz-Automatyzacje/claude-cron/main/scripts/install-vps.sh | sudo bash -s -- --reset
+```
+
+Instalator wypisze **dokładną listę** tego, co usunie, i poprosi o potwierdzenie wpisaniem `TAK` (samo Enter anuluje). Usuwa: oba serwisy systemd, wpis auto-update z crona, plik sudoers i użytkownika `claude` z całym `/home/claude` (vault lokalny, vault-git, loginy). **Dane vaulta są bezpieczne na serwerze Obsidian Sync** — komputer i telefon nadal mają wszystko.
+
+Reset świadomie **nie usuwa** rzeczy współdzielonych z systemem:
+- **Tailscale** — odłącz ręcznie: `tailscale logout`, potem usuń maszynę w [admin console](https://login.tailscale.com/admin/machines)
+- **reguły UFW** — odblokuj port: `ufw delete deny 7777/tcp`
+- **Node.js, gh i pakiety apt** (git, curl, cron)
+
+Po resecie ponowna instalacja działa od zera — wklej one-liner jeszcze raz.
+
+### 1.6 — Test z brancha (env-override, dla testerów)
+
+Instalator z forka/brancha PRZED merge — prawdziwym pipe, nie lokalnym plikiem:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<user>/claude-cron/<branch>/scripts/install-vps.sh \
+  | sudo CLAUDE_CRON_REPO=https://github.com/<user>/claude-cron.git CLAUDE_CRON_REF=<branch> bash
+```
+
+`CLAUDE_CRON_REPO`/`CLAUDE_CRON_REF` wskazują, skąd instalator sklonuje kod Pulsa (domyślnie to repo, branch `main`).
+
+### 1.7 — Zapisz Tailscale IP
 
 Na końcu installer pokaże **Tailscale IP VPS-a**. **Zapisz to IP** — będziesz go potrzebować w kroku 2! Jeśli nie widzisz:
 
@@ -141,7 +191,7 @@ To wszystko. Ta jedna komenda:
 | Pytanie | Co wpisać |
 |---------|-----------|
 | **1. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). Otworzy się **natywne okno wyboru folderu** (macOS `osascript` „choose folder" w Finderze) — zaznacz folder i kliknij OK. Jeśli okno się nie pojawi, wpisz ścieżkę w terminalu |
-| **2. VPS** | Tailscale IP VPS-a z kroku 1.4 (np. `100.86.100.113`) albo Enter, jeśli używasz Pulsa tylko lokalnie |
+| **2. VPS** | Tailscale IP VPS-a z kroku 1.7 (np. `100.86.100.113`) albo Enter, jeśli używasz Pulsa tylko lokalnie |
 | **3. Discord** | URL webhooka Discord do powiadomień albo Enter, żeby pominąć |
 | **4. Autostart** | `Y` — serwer startuje automatycznie z każdą sesją Claude Code |
 
@@ -209,7 +259,7 @@ To wszystko. Ta jedna komenda:
 | Pytanie | Co wpisać |
 |---------|-----------|
 | **1. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). Otworzy się **natywne okno wyboru folderu** (Windows `FolderBrowserDialog`) — zaznacz folder i kliknij OK. Jeśli okno się nie pojawi, wklej pełną ścieżkę w terminalu, np. `C:\Users\kacpe\OneDrive\Obsidian\Vault` |
-| **2. VPS** | Tailscale IP VPS-a z kroku 1.4 (np. `100.86.100.113`) albo Enter, jeśli używasz Pulsa tylko lokalnie |
+| **2. VPS** | Tailscale IP VPS-a z kroku 1.7 (np. `100.86.100.113`) albo Enter, jeśli używasz Pulsa tylko lokalnie |
 | **3. Discord** | URL webhooka Discord do powiadomień albo Enter, żeby pominąć |
 | **4. Autostart** | `Y` — serwer startuje automatycznie z Claude Code |
 
