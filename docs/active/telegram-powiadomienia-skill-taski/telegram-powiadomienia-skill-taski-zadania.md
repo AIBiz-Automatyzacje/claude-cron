@@ -88,10 +88,10 @@ Pozostałe P3 (16 pozycji: ekspozycja promptu/webhook_payload w diagLog → powi
 
 - [x] Modyfikuj `public/index.html` (przycisk + modal: 3 pola — Discord webhook URL, Telegram token, Telegram chat ID; przycisk „Wyczyść" per kanał)
 - [x] Modyfikuj `public/app.js` (otwarcie modala z `GET /api/settings/notifications` — placeholdery z maskami; zapis `PUT` lokalny, puste pole = nie nadpisuj; „Wyślij na VPS" → `POST /api/settings/notifications/push-to-vps` gdy `vps_configured`; „Wyczyść" → `PUT` z pustymi stringami kluczy kanału)
-- [ ] Test: [E2E] otwórz modal → placeholdery „skonfigurowano/…4242"; wpisz wartość → Zapisz → ponowne otwarcie pokazuje nową maskę
-- [ ] Test: [E2E] „Wyczyść" przy kanale → GET pokazuje `configured:false` (przy pustym env)
-- [ ] Weryfikacja: scenariusz E2E lokalny przez agent-browser przechodzi (zapis + odczyt maski)
-- [ ] Weryfikacja (operator): push na żywy VPS — `GET /api/vps/settings/notifications` po pushu pokazuje `configured:true`
+- [x] Test: [E2E] otwórz modal → placeholdery „skonfigurowano/…4242"; wpisz wartość → Zapisz → ponowne otwarcie pokazuje nową maskę (fix po review fazy 3: PASS przez agent-browser na izolowanej instancji port 7799 — maski `…4242`/`…9999`, puste pole nie nadpisuje drugiego kanału)
+- [x] Test: [E2E] „Wyczyść" przy kanale → GET pokazuje `configured:false` (przy pustym env) (fix po review fazy 3: PASS — Wyczyść Telegram i Wyczyść Discord → GET `configured:false` dla obu, toast + placeholdery wracają do „nie skonfigurowano" bez zamykania modala)
+- [x] Weryfikacja: scenariusz E2E lokalny przez agent-browser przechodzi (zapis + odczyt maski) (fix po review fazy 3: 3/3 scenariusze PASS headless — izolowana instancja z kodem fazy 3, świeża DB, czysty env powiadomień; produkcyjny `localhost:7777` celowo nietknięty — testowe tokeny zanieczyściłyby realny state)
+- [ ] Weryfikacja (operator): push na żywy VPS — `GET /api/vps/settings/notifications` po pushu pokazuje `configured:true` — wymaga operatora (Operator checklist faza 3)
 
 ### Unit 6: Setup lokalny — pytania do state, auto-detect chat ID, test-send, push na VPS
 
@@ -100,8 +100,8 @@ Pozostałe P3 (16 pozycji: ekspozycja promptu/webhook_payload w diagLog → powi
 - [x] Rozstrzygnij moment zapisu `setState` (DB otwierana przy smoke-teście PO pytaniach — odpowiedzi w zmiennych, zapis przy smoke-teście) — rozstrzygnięte: odpowiedzi hoistowane przed `try`, `persistNotifySettings` woła `db.setState` bezpośrednio PO udanym smoke-teście, push na VPS zaraz potem
 - [x] Test: `buildNotificationSettingsPayload` — tylko wypełnione pola w payloadzie; wszystkie puste → `null` (pomiń push)
 - [x] Test: `extractChatIdFromUpdates(json)` — jedna rozmowa → chat ID; brak update'ów → `null` (ręczny fallback); wiele czatów → najnowszy
-- [ ] Weryfikacja: `node --test setup.test.mjs` zielony
-- [ ] Weryfikacja (operator): pełny setup na żywo (prawdziwy bot) — chat ID wykryty, testowa wiadomość dochodzi, po setupie VPS ma konfigurację
+- [x] Weryfikacja: `node --test setup.test.mjs` zielony (review fazy 3: 46/46 PASS, exit 0)
+- [ ] Weryfikacja (operator): pełny setup na żywo (prawdziwy bot) — chat ID wykryty, testowa wiadomość dochodzi, po setupie VPS ma konfigurację — wymaga operatora (Operator checklist faza 3)
 
 ### Unit 7: Instalator VPS przestaje pytać o Discord
 
@@ -109,7 +109,21 @@ Pozostałe P3 (16 pozycji: ekspozycja promptu/webhook_payload w diagLog → powi
 - [x] Modyfikuj `scripts/install-vps.test.sh` (test 21 usunięty — testował usuwaną funkcjonalność; test 45: asercja, że unit NIE zawiera `DISCORD_WEBHOOK_URL`; asercje `WEBHOOK_BASE_URL` zostają)
 - [x] Test: `build_puls_env_lines` nie emituje `DISCORD_WEBHOOK_URL` niezależnie od env
 - [x] Test: harness instalatora przechodzi bez pytania o Discord (brak wiszącego `read`)
-- [ ] Weryfikacja: `bash scripts/install-vps.test.sh` zielony; `grep -c DISCORD scripts/install-vps.sh` → 0 (lub wyłącznie komentarz historyczny)
+- [x] Weryfikacja: `bash scripts/install-vps.test.sh` zielony; `grep -c DISCORD scripts/install-vps.sh` → 0 (lub wyłącznie komentarz historyczny) (review fazy 3: 101/101 PASS, exit 0; grep → 0 wystąpień)
+
+## Do poprawy po review fazy 3
+
+- [x] 🟠 [P2] **public/app.js:960** — scenariusze [E2E] Unit 5 niewykonane, cały nowy frontend modala (openNotifyModal, saveNotifySettings, clearNotifyChannel, pushNotifyToVps — 138 linii) bez żadnej weryfikacji zachowania. Wykonalne headless przez agent-browser na `localhost:7777`: (1) otwarcie modala → placeholdery z maskami „skonfigurowano (…4242)"; (2) wpis wartości → Zapisz → ponowne otwarcie pokazuje nową maskę; (3) „Wyczyść" kanału → GET pokazuje `configured:false` (przy pustym env). Po PASS odhaczyć checkboxy [E2E] i Weryfikacja Unit 5 — NAPRAWIONE (fix po review fazy 3): 3/3 scenariusze PASS przez agent-browser na izolowanej instancji (port 7799, świeża DB, czysty env — produkcyjny 7777 celowo nietknięty, testowe tokeny nadpisałyby realny state); checkboxy Unit 5 odhaczone
+- [x] 🟠 [P2] **scripts/install-vps.test.sh:600** — scenariusz z planu (Unit 7) „harness instalatora przechodzi bez pytania o Discord — brak wiszącego read" nie istnieje: `collect_config` w harnessie main() jest mockowany (MAIN_COMPONENT_FNS), żaden test nie wykonuje realnego `collect_config` z fixture TTY. Regresja przywracająca pytanie/read w bloku pytań (wiszący read pod curl|bash = EOF i ciche domyślne) nie zostałaby wykryta. Fix: test wykonujący realny `collect_config` z podpiętym fixture stdin/TTY — NAPRAWIONE (fix po review fazy 3): nowy Test 70 `test_collect_config_no_discord_question` wykonuje REALNY `collect_config` (pełny tryb i `--only-puls`) ze stubem `ask_tty` na granicy tty i kolejką o znanej długości — dodatkowe pytanie (np. przywrócony Discord) sięga poza kolejkę i wywala test (guard `:?`), asercje: dokładnie 4/2 pytania, zero `discord|webhook` w outputcie, exit 0; suite 102/102 PASS
+- [ ] 🟡 [P3] **setup.mjs:672** — komunikat „[info] Pominięto Telegram (brak chat ID)" niespójny z zachowaniem: `buildNotificationSettingsPayload` i tak zapisuje sam `telegram_bot_token` do state i pushuje na VPS — sekret trafia do bazy mimo deklaracji pominięcia. Fix: nie wkładać tokena do payloadu bez chat ID, albo komunikat zgodny z zachowaniem
+- [ ] 🟡 [P3] **setup.mjs:655 + lib/notify-config.js:57** — zero walidacji formatu wartości powiadomień na wszystkich granicach (regresja po usunięciu `is_valid_discord_webhook` z instalatora): prefix `https://discord.com/api/webhooks/`, token `\d+:[A-Za-z0-9_-]+`, chat_id `-?\d+` w jednym wspólnym miejscu (`sanitizeNotifySettings`) + warn w setupie
+
+Pozostałe P3 (13 pozycji: auto-detekcja chat ID bez tożsamości nadawcy, `extractChatIdFromUpdates` zlewa ok:false z brakiem update'ów, trzeci punkt prawdy kluczy snake_case w setup.mjs, druga implementacja klienta Bot API z rozjechaną semantyką sukcesu, main() ~118 linii, push tylko przy vpsUrl z bieżącego runu, `askTelegramChatId` bez DI/testu, guard ok:true-z-body bez asercji, re-run instalatora cicho kasuje DISCORD_WEBHOOK_URL ze starego unitu, listen na wszystkich interfejsach a state = magazyn sekretów [pre-existing, świadoma decyzja], brak guardu in-flight save/clear, wspólny try/catch clear+refresh ze sprzecznymi toastami, push bez ostrzeżenia o niezapisanych polach, czyste helpery frontendu bez testów, inline styl layoutu w headerze) — szczegóły i rekomendacje w `review-faza-3.md`; nie blokują.
+
+## Operator checklist faza 3
+
+- [ ] Operator: push konfiguracji powiadomień na żywy VPS niezweryfikowany (wymaga realnej instancji VPS srv1362522 po Tailscale i prawdziwych credentiali — headless test z fikcyjnym tokenem nadpisałby produkcyjną konfigurację na VPS) — Operator action: (1) na lokalnym dashboardzie otwórz modal 🔔 Powiadomienia z prawdziwym tokenem/chat ID zapisanym w state, (2) kliknij „Wyślij na VPS", (3) zweryfikuj `curl http://localhost:7777/api/vps/settings/notifications` → `telegram.configured:true`
+- [ ] Operator: pełny interaktywny przebieg setup.mjs z prawdziwym botem Telegrama niezweryfikowany (wymaga bota z @BotFather i TTY; czyste funkcje pokryte 7 testami, ścieżka integracyjna setup → state → push bez potwierdzenia) — Operator action: (1) załóż/użyj bota przez @BotFather, (2) uruchom `node setup.mjs` i przejdź pytania o powiadomienia, (3) napisz cokolwiek do bota gdy setup poprosi → potwierdź wykryty chat ID, (4) potwierdź dojście wiadomości „✅ Puls połączony z Telegramem", (5) po setupie sprawdź `GET /api/vps/settings/notifications` → konfiguracja na VPS
 
 ## Faza 4 — onboarding: taski i skill
 

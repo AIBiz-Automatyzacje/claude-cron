@@ -571,6 +571,62 @@ EOF
   fi
 }
 
+# --- Test 70: collect_config REALNY przebieg — komplet pytań bez Discorda, bez wiszącego read ---
+test_collect_config_no_discord_question() {
+  # Unit 7 (faza 3): instalator NIE pyta o Discord. Harness main() mockuje
+  # collect_config (MAIN_COMPONENT_FNS), więc regresja przywracająca pytanie
+  # przeszłaby suite — a pod curl|bash wiszący `read` dostaje EOF i ciche
+  # domyślne (learned pattern). TEN test wykonuje REALNY collect_config ze
+  # stubem ask_tty na granicy tty (DI jak w t.27B): kolejka odpowiedzi o ZNANEJ
+  # długości — każde DODATKOWE pytanie sięga poza kolejkę i wywala test
+  # (guard :?), a licznik ASK_I przypina dokładną liczbę interakcji.
+  local snippet="$SANDBOX/t-collect-full.sh" out rc out2 rc2
+
+  # Część A: pełny tryb — dokładnie 4 pytania (email, vault, repo, potwierdzenie).
+  cat > "$snippet" <<EOF
+parse_flags
+CLAUDE_HOME="$SANDBOX/home-claude"
+ASK_QUEUE=("kursant@example.com" "MojVault" "user/repo" "T")
+ASK_I=0
+ask_tty() {
+  echo "PYTANIE: \$2"
+  printf -v "\$1" '%s' "\${ASK_QUEUE[\$ASK_I]:?za duzo pytan - wiszacy read}"
+  ASK_I=\$((ASK_I + 1))
+}
+collect_config
+echo "QUESTIONS=\$ASK_I REPO=\$VAULT_GIT_REPO"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+
+  # Część B: --only-puls — dokładnie 2 pytania (workspace, potwierdzenie).
+  mkdir -p "$WS_SANDBOX/ws-collect"
+  cat > "$snippet" <<EOF
+parse_flags --only-puls
+CLAUDE_HOME="$SANDBOX/home-claude"
+ASK_QUEUE=("$WS_SANDBOX/ws-collect" "T")
+ASK_I=0
+ask_tty() {
+  echo "PYTANIE: \$2"
+  printf -v "\$1" '%s' "\${ASK_QUEUE[\$ASK_I]:?za duzo pytan - wiszacy read}"
+  ASK_I=\$((ASK_I + 1))
+}
+collect_config
+echo "QUESTIONS=\$ASK_I WS=\$WORKSPACE"
+EOF
+  out2="$(run_snippet "$snippet")"
+  rc2=$?
+
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"QUESTIONS=4 REPO=https://github.com/user/repo.git"* ]] \
+    && ! grep -qiE 'discord|webhook' <<<"$out" \
+    && [ "$rc2" -eq 0 ] && [[ "$out2" == *"QUESTIONS=2 WS=$WS_SANDBOX/ws-collect"* ]] \
+    && ! grep -qiE 'discord|webhook' <<<"$out2"; then
+    pass "collect_config: realny przebieg — 4 pytania (pełny) / 2 (--only-puls), zero Discorda, brak wiszącego read"
+  else
+    problem "collect_config: zły przebieg bloku pytań (rc=$rc, out: $out, rc2=$rc2, out2: $out2)"
+  fi
+}
+
 # --- Test 28: ensure_workspace — chown TYLKO dla świeżo utworzonego katalogu ---
 test_ensure_workspace_chown_only_on_create() {
   # Bezwarunkowy chown = root po cichu przejmuje istniejący katalog innego
@@ -2400,6 +2456,7 @@ test_is_supported_os
 test_normalize_path
 test_is_valid_workspace_path
 test_ask_workspace_flow
+test_collect_config_no_discord_question
 test_ensure_workspace_chown_only_on_create
 test_main_installs_before_login_block
 test_main_only_puls_skips_ob
