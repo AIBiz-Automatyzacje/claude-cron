@@ -193,8 +193,8 @@ To wszystko. Ta jedna komenda:
 |---------|-----------|
 | **1. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). Otworzy się **natywne okno wyboru folderu** (macOS `osascript` „choose folder" w Finderze) — zaznacz folder i kliknij OK. Jeśli okno się nie pojawi, wpisz ścieżkę w terminalu |
 | **2. VPS** | Tailscale IP VPS-a z kroku 1.7 (np. `100.86.100.113`) albo Enter, jeśli używasz Pulsa tylko lokalnie |
-| **3. Discord** | URL webhooka Discord do powiadomień albo Enter, żeby pominąć |
-| **4. Telegram** | Token bota z [@BotFather](#telegram--bot-krok-po-kroku) albo Enter, żeby pominąć. Chat ID setup **wykryje sam** — napisz cokolwiek do swojego bota, gdy poprosi, i wciśnij Enter. Na koniec dostaniesz wiadomość testową „✅ Puls połączony z Telegramem" |
+| **3. Powiadomienia** | `T`, jeśli chcesz dostawać powiadomienia po zakończeniu zadań (albo `n` — skonfigurujesz później w dashboardzie) |
+| **4. Kanał** | `1` = Discord (podasz URL webhooka) lub `2` = Telegram (podasz token bota z [@BotFather](#telegram--bot-krok-po-kroku); chat ID setup **wykryje sam** — napisz cokolwiek do swojego bota, gdy poprosi, i wciśnij Enter; na koniec dostaniesz wiadomość testową „✅ Puls połączony z Telegramem"). Drugi kanał możesz dodać później w dashboardzie |
 | **5. Autostart** | `Y` — serwer startuje automatycznie z każdą sesją Claude Code |
 | **6. Podstawowe taski** | `T` — dodaje [gotowy zestaw jobów startowych](#-podstawowe-taski-onboarding) (memory update, reflect, skill scout) |
 
@@ -263,8 +263,8 @@ To wszystko. Ta jedna komenda:
 |---------|-----------|
 | **1. Workspace** | Folder w którym Claude ma wykonywać joby (najczęściej Twój vault Obsidian). Otworzy się **natywne okno wyboru folderu** (Windows `FolderBrowserDialog`) — zaznacz folder i kliknij OK. Jeśli okno się nie pojawi, wklej pełną ścieżkę w terminalu, np. `C:\Users\kacpe\OneDrive\Obsidian\Vault` |
 | **2. VPS** | Tailscale IP VPS-a z kroku 1.7 (np. `100.86.100.113`) albo Enter, jeśli używasz Pulsa tylko lokalnie |
-| **3. Discord** | URL webhooka Discord do powiadomień albo Enter, żeby pominąć |
-| **4. Telegram** | Token bota z [@BotFather](#telegram--bot-krok-po-kroku) albo Enter, żeby pominąć. Chat ID setup **wykryje sam** — napisz cokolwiek do swojego bota, gdy poprosi, i wciśnij Enter. Na koniec dostaniesz wiadomość testową „✅ Puls połączony z Telegramem" |
+| **3. Powiadomienia** | `T`, jeśli chcesz dostawać powiadomienia po zakończeniu zadań (albo `n` — skonfigurujesz później w dashboardzie) |
+| **4. Kanał** | `1` = Discord (podasz URL webhooka) lub `2` = Telegram (podasz token bota z [@BotFather](#telegram--bot-krok-po-kroku); chat ID setup **wykryje sam** — napisz cokolwiek do swojego bota, gdy poprosi, i wciśnij Enter; na koniec dostaniesz wiadomość testową „✅ Puls połączony z Telegramem"). Drugi kanał możesz dodać później w dashboardzie |
 | **5. Autostart** | `Y` — serwer startuje automatycznie z Claude Code |
 | **6. Podstawowe taski** | `T` — dodaje [gotowy zestaw jobów startowych](#-podstawowe-taski-onboarding) (memory update, reflect, skill scout) |
 

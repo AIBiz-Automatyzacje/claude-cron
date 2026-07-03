@@ -20,6 +20,7 @@ import {
   buildSetUserEnvCommand,
   buildNotificationSettingsPayload,
   extractChatIdFromUpdates,
+  parseNotifyChannelChoice,
   matchJobIdsByName,
   NODE_VERSION,
 } from './setup.mjs';
@@ -399,6 +400,22 @@ test('extractChatIdFromUpdates: ok:false / malformed / update bez message → nu
   assert.equal(extractChatIdFromUpdates({ ok: false, result: [] }), null);
   assert.equal(extractChatIdFromUpdates({ ok: true }), null);
   assert.equal(extractChatIdFromUpdates({ ok: true, result: [{ update_id: 5 }] }), null);
+});
+
+// === parseNotifyChannelChoice — wybór kanału powiadomień w setupie ===
+
+test('parseNotifyChannelChoice: numer lub nazwa kanału → identyfikator kanału', () => {
+  assert.equal(parseNotifyChannelChoice('1'), 'discord');
+  assert.equal(parseNotifyChannelChoice('2'), 'telegram');
+  assert.equal(parseNotifyChannelChoice(' Discord '), 'discord');
+  assert.equal(parseNotifyChannelChoice('TELEGRAM'), 'telegram');
+});
+
+test('parseNotifyChannelChoice: puste / nierozpoznane → null (pomiń powiadomienia)', () => {
+  assert.equal(parseNotifyChannelChoice(''), null);
+  assert.equal(parseNotifyChannelChoice('3'), null);
+  assert.equal(parseNotifyChannelChoice('voice'), null);
+  assert.equal(parseNotifyChannelChoice(undefined), null);
 });
 
 // === copySkillDir — instalacja skilla puls do ~/.claude/skills (Unit 9) ===

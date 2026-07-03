@@ -241,6 +241,16 @@ export function extractChatIdFromUpdates(json) {
   return chatId;
 }
 
+// === Pure helper: odpowiedź na pytanie o kanał powiadomień → 'discord' | 'telegram' | null ===
+// Akceptuje numer z menu ([1]/[2]) i nazwę kanału (dowolna wielkość liter).
+// null = nierozpoznany wybór — caller pomija konfigurację powiadomień (dashboard później).
+export function parseNotifyChannelChoice(input) {
+  const choice = String(input ?? '').trim().toLowerCase();
+  if (choice === '1' || choice === 'discord') return 'discord';
+  if (choice === '2' || choice === 'telegram') return 'telegram';
+  return null;
+}
+
 // === Pure helper: rekurencyjne kopiowanie katalogu skilla (DI ścieżek źródło/cel) ===
 // Kopiowanie zamiast symlinku — symlink na Windows wymaga uprawnień administratora.
 // force nadpisuje istniejące pliki (re-run setupu aktualizuje skill), recursive tworzy
@@ -549,6 +559,54 @@ async function askTelegramChatId(rl, botToken) {
   return ask(rl, 'Chat ID (puste = pomiń Telegram): ');
 }
 
+// === I/O shell: pełna konfiguracja kanału Telegram (token → chat ID → test-send) ===
+async function askTelegramSettings(rl) {
+  const token = await ask(rl, 'Telegram bot token (puste = pomiń): ');
+  if (!token) {
+    console.log('[info] Pominięto Telegram.');
+    return { token: '', chatId: '' };
+  }
+  const chatId = await askTelegramChatId(rl, token);
+  if (!chatId) {
+    console.log('[info] Pominięto Telegram (brak chat ID).');
+    return { token, chatId: '' };
+  }
+  const sent = await sendTelegramTestMessage(token, chatId);
+  console.log(
+    sent
+      ? '[ok] Wiadomość testowa wysłana — sprawdź Telegram.'
+      : '[warn] Wiadomość testowa nie doszła — sprawdź token i chat ID; poprawisz je w dashboardzie (Ustawienia powiadomień).',
+  );
+  return { token, chatId };
+}
+
+// === I/O shell: pytania o powiadomienia — opt-in, potem wybór JEDNEGO kanału ===
+// Feedback z testów operatora: nie pytamy o oba kanały po kolei — user wybiera
+// Discord ALBO Telegram; drugi kanał można dodać później w dashboardzie
+// (Ustawienia powiadomień), executor i tak obsługuje oba niezależnie per job.
+async function askNotificationSettings(rl) {
+  const answers = { discordWebhookUrl: '', telegramBotToken: '', telegramChatId: '' };
+  const want = (await ask(rl, 'Chcesz otrzymywać powiadomienia po zakończeniu zadań? [T/n]: ', 'T')).toLowerCase();
+  if (want !== 't') {
+    console.log('[info] Pominięto powiadomienia — skonfigurujesz je w dashboardzie (Ustawienia powiadomień).');
+    return answers;
+  }
+  const channel = parseNotifyChannelChoice(await ask(rl, 'Kanał powiadomień — [1] Discord, [2] Telegram: '));
+  if (channel === 'discord') {
+    answers.discordWebhookUrl = await ask(rl, 'Discord webhook URL (puste = pomiń): ');
+    if (!answers.discordWebhookUrl) {
+      console.log('[info] Pominięto Discord.');
+    }
+  } else if (channel === 'telegram') {
+    const { token, chatId } = await askTelegramSettings(rl);
+    answers.telegramBotToken = token;
+    answers.telegramChatId = chatId;
+  } else {
+    console.log('[info] Nierozpoznany wybór — pominięto powiadomienia (skonfigurujesz je w dashboardzie).');
+  }
+  return answers;
+}
+
 // === I/O shell: zapis payloadu powiadomień do state lokalnej DB ===
 // Wołany PO smoke-teście (baza zweryfikowana); getDb() otwiera połączenie lazy po
 // db.close() ze smoke-testu, migrate() jest idempotentny.
@@ -761,34 +819,7 @@ async function main() {
 
     // Powiadomienia idą do state DB (nie env) — zmiana z dashboardu działa bez restartu,
     // a env DISCORD_WEBHOOK_URL/TELEGRAM_* pozostaje fallbackiem dla starych instalacji (R3).
-    const discordUrl = await ask(rl, 'Discord webhook URL (puste = pomiń): ');
-    if (!discordUrl) {
-      console.log('[info] Pominięto Discord.');
-    }
-
-    const telegramToken = await ask(rl, 'Telegram bot token (puste = pomiń): ');
-    let telegramChatId = '';
-    if (telegramToken) {
-      telegramChatId = await askTelegramChatId(rl, telegramToken);
-      if (telegramChatId) {
-        const sent = await sendTelegramTestMessage(telegramToken, telegramChatId);
-        console.log(
-          sent
-            ? '[ok] Wiadomość testowa wysłana — sprawdź Telegram.'
-            : '[warn] Wiadomość testowa nie doszła — sprawdź token i chat ID; poprawisz je w dashboardzie (Ustawienia powiadomień).',
-        );
-      } else {
-        console.log('[info] Pominięto Telegram (brak chat ID).');
-      }
-    } else {
-      console.log('[info] Pominięto Telegram.');
-    }
-
-    notifyPayload = buildNotificationSettingsPayload({
-      discordWebhookUrl: discordUrl,
-      telegramBotToken: telegramToken,
-      telegramChatId,
-    });
+    notifyPayload = buildNotificationSettingsPayload(await askNotificationSettings(rl));
 
     const installHook = (await ask(rl, 'Zainstalować autostart? [Y/n]: ', 'Y')).toLowerCase();
     if (installHook === 'y') {
