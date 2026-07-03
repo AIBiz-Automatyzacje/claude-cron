@@ -12,6 +12,8 @@ const skills = require('./lib/skills');
 const platform = require('./lib/platform');
 const keepAwake = require('./lib/keep-awake');
 const { matchWebhookToken } = require('./lib/webhook');
+const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
+const { pushNotifySettings, buildPushPayload } = require('./lib/notify-push');
 
 // === MIME types ===
 const MIME = {
@@ -191,6 +193,42 @@ async function handleApi(req, res) {
   // GET /api/skills
   if (method === 'GET' && urlPath === '/api/skills') {
     return json(res, skills.getAllSkills());
+  }
+
+  // POST /api/settings/notifications/push-to-vps — push server-side (R10): serwer czyta
+  // PEŁNE wartości z własnego state/env i PUT-uje na VPS; sekrety nie przechodzą przez
+  // przeglądarkę, a przycisk w modalu działa też przy pustych polach (GET zwraca maski).
+  if (method === 'POST' && urlPath === '/api/settings/notifications/push-to-vps') {
+    const config = resolveNotifyConfig(db.getState, process.env);
+    const result = await pushNotifySettings({ vpsUrl: VPS_API_URL, settings: buildPushPayload(config) });
+    if (result.ok) return json(res, result);
+    // Statusy spójne z proxyToVps: brak VPS = 503; reszta padów pusha = 502 (bad gateway)
+    const status = result.reason === 'vps_not_configured' ? 503
+      : result.reason === 'nothing_to_push' ? 400 : 502;
+    return json(res, result, status);
+  }
+
+  // GET/PUT /api/settings/notifications — konfiguracja powiadomień w state (env = fallback).
+  // Endpoint objęty guardem 403 XFF jak cały dashboard; na VPS dostępny przez proxy /api/vps/*.
+  if (urlPath === '/api/settings/notifications') {
+    // GET — wyłącznie zamaskowany stan (configured + ostatnie 4 znaki), sekrety nigdy w pełni
+    if (method === 'GET') {
+      const config = resolveNotifyConfig(db.getState, process.env);
+      return json(res, buildMaskedNotifySettings(config));
+    }
+
+    // PUT — whitelist trzech kluczy, tylko stringi; pusty string czyści klucz w state
+    // (fallback env wraca do gry — czyszczenie nie nadpisuje env pustą wartością)
+    if (method === 'PUT') {
+      const body = await parseBody(req);
+      const check = sanitizeNotifySettings(body);
+      if (!check.ok) return error(res, check.error);
+      for (const [key, value] of Object.entries(check.updates)) {
+        db.setState(key, value);
+      }
+      const config = resolveNotifyConfig(db.getState, process.env);
+      return json(res, buildMaskedNotifySettings(config));
+    }
   }
 
   // GET /api/status

@@ -7,26 +7,26 @@ Ostatnia aktualizacja: 2026-07-03
 
 ### Unit 1: Wspólny moduł formatowania powiadomień (`notify-format`)
 
-- [ ] Stwórz `lib/notify-format.js` (przeniesienie 1:1 `extractResult` + `smartSplit` z `lib/discord.js`)
-- [ ] Stwórz `lib/notify-format.test.js`
-- [ ] Modyfikuj `lib/discord.js` (import z notify-format; grep konsumentów eksportów `extractResult`/`smartSplit` przed usunięciem re-eksportu)
-- [ ] Test: `extractResult` — stdout z wpisem `type:'result'` → treść; brak wpisu → fallback „Job completed…"; niepoprawny JSON w linii nie wywala parsowania
-- [ ] Test: `smartSplit` — tekst < maxLen → 1 chunk; podział po `\n`, potem `. `; słowo > maxLen → twardy podział; każdy chunk ≤ maxLen
+- [x] Stwórz `lib/notify-format.js` (przeniesienie 1:1 `extractResult` + `smartSplit` z `lib/discord.js`)
+- [x] Stwórz `lib/notify-format.test.js`
+- [x] Modyfikuj `lib/discord.js` (import z notify-format; grep konsumentów eksportów `extractResult`/`smartSplit` przed usunięciem re-eksportu)
+- [x] Test: `extractResult` — stdout z wpisem `type:'result'` → treść; brak wpisu → fallback „Job completed…"; niepoprawny JSON w linii nie wywala parsowania
+- [x] Test: `smartSplit` — tekst < maxLen → 1 chunk; podział po `\n`, potem `. `; słowo > maxLen → twardy podział; każdy chunk ≤ maxLen
 - [ ] Weryfikacja: `npm test` przechodzi; `node --test lib/notify-format.test.js` zielony
 
 ### Unit 2: Konfiguracja powiadomień w `state` + endpointy settings i push-to-vps
 
-- [ ] Stwórz `lib/notify-config.js` (`resolveNotifyConfig(stateGetter, env)`: state niepusty > env; maskowanie — configured + ostatnie 4 znaki)
-- [ ] Stwórz `lib/notify-config.test.js`
-- [ ] Stwórz `lib/notify-push.js` (push na VPS: PUT `<vpsUrl>/api/settings/notifications` + potwierdzenie GET-em po zapisie; `{ok, reason}` bez rzucania)
-- [ ] Stwórz `lib/notify-push.test.js`
-- [ ] Modyfikuj `lib/config.js` (eksport `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`)
-- [ ] Modyfikuj `lib/discord.js` (webhook URL rozwiązywany przy wysyłce: state → env fallback)
-- [ ] Modyfikuj `server.js` (route'y `GET/PUT /api/settings/notifications` + `POST /api/settings/notifications/push-to-vps`; PUT: whitelist 3 kluczy, tylko stringi, pusty string czyści)
-- [ ] Test: `resolveNotifyConfig` — state ustawiony → wygrywa; state pusty + env → env; oba puste → kanał nieskonfigurowany
-- [ ] Test: maskowanie — token 46-znakowy → `…ostatnie 4`; pusty → `configured:false`
-- [ ] Test: sanityzacja PUT body — nieznane klucze odrzucone, nie-string odrzucony
-- [ ] Test: `notify-push` z mock fetch — sukces potwierdzony GET-em po PUT; VPS bez endpointu (404) → `{ok:false, reason}` bez rzucania; timeout → `{ok:false}`
+- [x] Stwórz `lib/notify-config.js` (`resolveNotifyConfig(stateGetter, env)`: state niepusty > env; maskowanie — configured + ostatnie 4 znaki)
+- [x] Stwórz `lib/notify-config.test.js`
+- [x] Stwórz `lib/notify-push.js` (push na VPS: PUT `<vpsUrl>/api/settings/notifications` + potwierdzenie GET-em po zapisie; `{ok, reason}` bez rzucania)
+- [x] Stwórz `lib/notify-push.test.js`
+- [x] Modyfikuj `lib/config.js` (eksport `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`)
+- [x] Modyfikuj `lib/discord.js` (webhook URL rozwiązywany przy wysyłce: state → env fallback)
+- [x] Modyfikuj `server.js` (route'y `GET/PUT /api/settings/notifications` + `POST /api/settings/notifications/push-to-vps`; PUT: whitelist 3 kluczy, tylko stringi, pusty string czyści)
+- [x] Test: `resolveNotifyConfig` — state ustawiony → wygrywa; state pusty + env → env; oba puste → kanał nieskonfigurowany
+- [x] Test: maskowanie — token 46-znakowy → `…ostatnie 4`; pusty → `configured:false`
+- [x] Test: sanityzacja PUT body — nieznane klucze odrzucone, nie-string odrzucony
+- [x] Test: `notify-push` z mock fetch — sukces potwierdzony GET-em po PUT; VPS bez endpointu (404) → `{ok:false, reason}` bez rzucania; timeout → `{ok:false}`
 - [ ] Weryfikacja: `npm test` zielony; `curl PUT` + `curl GET` na działającym serwerze zwracają zapisany (zamaskowany) stan
 
 ## Faza 2 — Telegram

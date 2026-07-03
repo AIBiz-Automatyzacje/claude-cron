@@ -38,6 +38,16 @@ Ostatnia aktualizacja: 2026-07-03
 8. **Skill kopiowany, nie symlinkowany** — Windows bez uprawnień do symlinków; nadpisanie przy re-run.
 9. **Seed w setupie, NIE w `migrate()`** — learned pattern (backfill w migrate clobberuje opt-outy); idempotencja po `name`.
 10. **Test-send / push weryfikowane stanem faktycznym** — `ok:true` w JSON odpowiedzi Telegrama (nie kod HTTP); push potwierdzany GET-em po PUT (learned pattern: fałszywe sygnały statusów CLI).
+11. **Fallback „Job completed (no result text)" żyje w `extractResult`** (eksport `RESULT_FALLBACK` z `notify-format`), nie u wołającego — dawne `|| fallback` w `sendNotification` pokrywało te same ścieżki, zachowanie end-to-end identyczne (Faza 1, IU-1).
+12. **`extractResult`/`smartSplit` NIE są re-eksportowane z `discord.js`** — grep repo wykazał zero konsumentów poza samym `discord.js` (executor importuje tylko `sendNotification`); jedyne źródło to `notify-format` (Faza 1, IU-1).
+13. **Payload pusha na VPS budowany z resolved configu (state > env), nie z gołego state** — push użyteczny też dla starych instalacji env-only; sekrety nadal wyłącznie server-side (Faza 1, IU-2).
+14. **`discord.js` zależy teraz od `db.js`** (odczyt state przy wysyłce przez `resolveNotifyConfig(db.getState, process.env)`) — bez cyklu importów (db nie importuje discord).
+
+## Stan realizacji
+
+- **Faza 1 — UKOŃCZONA (2026-07-03).** Unit 1 (notify-format) i Unit 2 (notify-config + notify-push + endpointy `GET/PUT /api/settings/notifications`, `POST .../push-to-vps`) zaimplementowane. `npm test`: 202/202 PASS. Nowe pliki: `lib/notify-format.js(+test)`, `lib/notify-config.js(+test)`, `lib/notify-push.js(+test)`; zmodyfikowane: `lib/config.js` (eksport `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`), `lib/discord.js` (resolve przy wysyłce), `server.js` (3 route'y).
+- Nota testowa IU-2: test timeoutu notify-push wymaga ref'owanego keep-alive timera w harnessie — timer `AbortSignal.timeout` jest unref'owany i event loop `node:test` umierał przed abortem (poprawka harnessu, asercje nietknięte).
+- Faza 2 (Telegram end-to-end) — następna.
 
 ## Zależności
 

@@ -103,7 +103,7 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 
 ### Faza 1 — fundament powiadomień
 
-- [ ] **Unit 1: Wspólny moduł formatowania powiadomień (`notify-format`)**
+- [x] **Unit 1: Wspólny moduł formatowania powiadomień (`notify-format`)**
 
 **Cel:** Wydzielenie `extractResult` i `smartSplit` do współdzielonego modułu — przygotowanie pod drugi kanał (Telegram).
 
@@ -130,9 +130,9 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 - [Unit] `smartSplit`: tekst < maxLen → 1 chunk; podział po `\n`, potem `. `; słowo dłuższe niż maxLen → twardy podział; każdy chunk ≤ maxLen.
 
 **Weryfikacja:**
-- `npm test` przechodzi; `node --test lib/notify-format.test.js` zielony.
+- `npm test` przechodzi; `node --test lib/notify-format.test.js` zielony. — ✔ zaliczone 2026-07-03 (suite 202/202 PASS, scenariusze extractResult/smartSplit pokryte)
 
-- [ ] **Unit 2: Konfiguracja powiadomień w `state` + endpoint `/api/settings/notifications`**
+- [x] **Unit 2: Konfiguracja powiadomień w `state` + endpoint `/api/settings/notifications`**
 
 **Cel:** Źródło prawdy konfiguracji powiadomień w DB (state) z fallbackiem env; API do odczytu (maskowany) i zapisu; Discord czyta config w czasie wysyłki.
 
@@ -168,7 +168,7 @@ Puls wysyła powiadomienia tylko na Discord, a ich konfiguracja jest zdublowana 
 - [Unit] `notify-push` z mock fetch: sukces potwierdzony GET-em po PUT; VPS bez endpointu (404, stary serwer) → `{ok:false, reason}` bez rzucania; timeout → `{ok:false}`.
 
 **Weryfikacja:**
-- `npm test` zielony; `curl PUT` + `curl GET` na działającym serwerze zwracają zapisany (zamaskowany) stan — scenariusz w kroku weryfikacji E2E planu (sekcja niżej).
+- `npm test` zielony; `curl PUT` + `curl GET` na działającym serwerze zwracają zapisany (zamaskowany) stan — scenariusz w kroku weryfikacji E2E planu (sekcja niżej). — ✔ testy jednostkowe zaliczone 2026-07-03 (resolve/maskowanie/sanityzacja/push z mock fetch); curl E2E w kroku review
 
 ### Faza 2 — Telegram
 
