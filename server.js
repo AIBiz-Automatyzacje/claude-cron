@@ -279,7 +279,8 @@ async function handleApi(req, res) {
     }
     const job = db.createJob(body);
     scheduler.scheduleJob(job);
-    return json(res, job, 201);
+    // next_run jak w GET/PUT — bez tego klient musiałby dopytać drugim zapytaniem.
+    return json(res, { ...job, next_run: scheduler.getNextRun(job.id) }, 201);
   }
 
   // Routes with :id — /api/jobs/:id
