@@ -304,7 +304,7 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 **Wzorce do naśladowania:**
 - `install-vps.sh` L164–188 (clone/pull + backup non-git), L269–320 (systemd heredoc + ENV_LINES + PATH)
 - Przewodnik headless sekcja 4 (unit obsidian-sync, lock cleanup)
-- `docs/MIGRACJA-PULS.md` SEKCJA 10 (symlink `.claude`, dwukierunkowość)
+- `docs/plans/archive/MIGRACJA-PULS.md` SEKCJA 10 (symlink `.claude`, dwukierunkowość)
 
 **Scenariusze testowe:**
 - [x] [Unit] budowa ENV_LINES (funkcja czysta): pełny tryb → `CLAUDE_CRON_WORKSPACE=…/vault`, PORT, PATH z `~/.local/bin`; z Discordem → linia `DISCORD_WEBHOOK_URL`; bez → brak linii (test 50: `build_puls_env_lines`)
@@ -415,7 +415,7 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 
 - README: sekcja instalacji VPS (IU7).
 - Po merge: wycofanie `AIBiz-Automatyzacje/obsidian-vps-installer` (archiwizacja repo + nota w README tamtego repo) — czynność operatora, poza tym repo.
-- Aktualizacja `docs/MIGRACJA-PULS.md` SEKCJA 10 (status: zrealizowane) — przy `/dev-docs-complete`.
+- Aktualizacja `docs/plans/archive/MIGRACJA-PULS.md` SEKCJA 10 (status: zrealizowane) — przy `/dev-docs-complete`.
 - Po wdrożeniu: `/dev-compound` na nowe tereny (ob headless, gh device flow w instalatorze, trap-ERR-rollback vs leave-partial) — zidentyfikowane luki w wiedzy instytucjonalnej.
 
 ## Operator gate (całościowy, poza autopilotem)
@@ -430,4 +430,4 @@ Kolejność = zależności. IU2–IU6 mapują się 1:1 na FAZY 0–6 spec-u; IU1
 - **Dokument źródłowy:** [docs/plans/2026-07-01-001-feat-polaczony-instalator-vps-flow.md](docs/plans/2026-07-01-001-feat-polaczony-instalator-vps-flow.md) (spec przebiegu po sesji roast 2026-07-02)
 - Powiązany kod: `scripts/install-vps.sh`, `install.sh`, `install.test.sh`, `scripts/uninstall-macos.sh`, `lib/config.js`
 - Wiedza instytucjonalna: `docs/solutions/deployment-issues/2026-06-30-curl-bash-instalator-interaktywny-tty.md`, `docs/solutions/deployment-issues/2026-07-01-instalator-cross-platform-irm-iex-encoding-env-symlink.md`, `docs/solutions/runtime-errors/2026-06-29-migracja-better-sqlite3-na-node-sqlite.md`, `docs/completed/ulatwienie-instalacji/…`, `docs/completed/instalacja-jedna-komenda/…`
-- Zewnętrzne: przewodnik `…workspace/Zasoby/Archiwum/Tech/obsidian-headless-vps-guide.md`; README `obsidian-headless@0.0.12`; kontekst kursu: `docs/MIGRACJA-PULS.md` SEKCJA 10
+- Zewnętrzne: przewodnik `…workspace/Zasoby/Archiwum/Tech/obsidian-headless-vps-guide.md`; README `obsidian-headless@0.0.12`; kontekst kursu: `docs/plans/archive/MIGRACJA-PULS.md` SEKCJA 10

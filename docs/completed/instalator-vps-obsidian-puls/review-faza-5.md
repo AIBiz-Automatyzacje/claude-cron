@@ -39,7 +39,7 @@ Przy ponownym uruchomieniu instalatora `configure_obsidian_file_types` aplikuje 
 
 ### P2-4 [KOD] `scripts/install-vps.sh:931` — `link_vault_claude` bez guardu „cudzego stanu": realny katalog `~/vault/.claude` wywala cały run w rollback
 
-Gdy `~/vault/.claude` istnieje jako REALNY katalog (np. pozostałość po starym obsidian-vps-installer albo ręcznej instalacji wg `docs/MIGRACJA-PULS.md` SEKCJA 10), `ln -sfn` kończy się błędem „cannot overwrite directory" → trap ERR → rollback całego runu (unitów). Sąsiednia `setup_vault_git` obsługuje dokładnie ten przypadek wzorcem backup-mv (katalog bez `.git` → kopia zapasowa) — niespójność wzorca w obrębie tej samej fazy; spec R8 wymaga tylko idempotencji symlinku, ale kontrakt wobec „cudzego stanu" jest niespójny.
+Gdy `~/vault/.claude` istnieje jako REALNY katalog (np. pozostałość po starym obsidian-vps-installer albo ręcznej instalacji wg `docs/plans/archive/MIGRACJA-PULS.md` SEKCJA 10), `ln -sfn` kończy się błędem „cannot overwrite directory" → trap ERR → rollback całego runu (unitów). Sąsiednia `setup_vault_git` obsługuje dokładnie ten przypadek wzorcem backup-mv (katalog bez `.git` → kopia zapasowa) — niespójność wzorca w obrębie tej samej fazy; spec R8 wymaga tylko idempotencji symlinku, ale kontrakt wobec „cudzego stanu" jest niespójny.
 
 **Fix:** przed `ln` guard `[ -d … ] && [ ! -L … ]` → backup mv (jak vault-git), z testem.
 

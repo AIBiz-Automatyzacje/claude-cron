@@ -116,7 +116,7 @@ Ostatnia aktualizacja: 2026-07-02 (Faza 7 ukończona — implementacja wszystkic
 - Requirements doc: brak (zastępuje go spec przebiegu po sesji roast)
 - Plan techniczny: `docs/plans/2026-07-02-001-feat-instalator-vps-obsidian-puls-plan.md`
 - Spec przebiegu (źródło produktowe): `docs/plans/2026-07-01-001-feat-polaczony-instalator-vps-flow.md`
-- Kontekst kursu: `docs/MIGRACJA-PULS.md` SEKCJA 10
+- Kontekst kursu: `docs/plans/archive/MIGRACJA-PULS.md` SEKCJA 10
 
 ## Review fazy 1 (2026-07-02)
 

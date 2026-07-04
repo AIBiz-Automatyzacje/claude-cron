@@ -1,7 +1,7 @@
 # Połączony instalator VPS (Obsidian + Puls) — flow instalacji
 
 > Status: **pre-plan / spec przebiegu — po sesji roast 2026-07-02**. Podstawa pod plan techniczny (Implementation Units).
-> Data: 2026-07-01, zaktualizowano 2026-07-02 (audyt `/zroastuj-mnie` — decyzje wpisane niżej). Kontekst: SEKCJA 10 `docs/MIGRACJA-PULS.md` (kurs „Osobisty Asystent AI", B1 — Asystent w chmurze).
+> Data: 2026-07-01, zaktualizowano 2026-07-02 (audyt `/zroastuj-mnie` — decyzje wpisane niżej). Kontekst: SEKCJA 10 `docs/plans/archive/MIGRACJA-PULS.md` (kurs „Osobisty Asystent AI", B1 — Asystent w chmurze).
 > Cel: `scripts/install-vps.sh` wchłania kroki Obsidian z `obsidian-vps-installer` → **jedna komenda** stawia całość. Po merge `obsidian-vps-installer` do wycofania.
 
 ## Decyzja produktowa (ustalona)
