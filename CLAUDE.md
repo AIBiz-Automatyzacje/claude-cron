@@ -30,6 +30,7 @@ Aplikacja stoi na wbudowanym `node:sqlite` (klasa `DatabaseSync`), stabilnym bez
 - `lib/runtime-guard.js` **MUSI być pierwszym `require` w `server.js`** — robi fail-fast z czytelnym komunikatem PRZED jakimkolwiek top-level `require('node:sqlite')` (który na starym Node rzuca nieczytelnym błędem).
 - Po migracji `db.assertDbReturnsNumbers()` robi smoke-test: niektóre buildy zwracają `COUNT(*)`/`SUM(...)` jako BigInt zamiast number — wtedy arytmetyka i `JSON.stringify` cicho się psują. Fail-fast zamiast cichej korupcji.
 - Instalatory pobierają **przenośny Node 22.17.0** do `.node/` (weryfikacja SHA256) — nie dotykają systemowego Node ani PATH. Wersja pinowana w `setup.mjs` (`NODE_VERSION`) musi być spójna z `install.sh`/`install.ps1`.
+- Po postawieniu portable Node, PRZED handoffem do `setup.mjs`, bootstrap odpala `npm install --omit=dev` **npm-em z portable Node** (`ensure_dependencies`/`Install-Dependencies`) — bootstrap NIE przenosi `node_modules` ze starej instalacji, więc świeży katalog zawsze wymaga instalacji. Portable Node musi być na czole PATH, bo install-script `koffi` (cnoke) spawnuje `node`. Bez build-tools: `koffi` bundluje prebuilty (w tym `win32_*`); deterministycznie przez `package-lock.json`. Historycznie ten krok zgubił się przy przepisaniu na portable Node — brak go = `setup.mjs` pada na `Cannot find module 'gray-matter'` przy seedowaniu starter-tasków.
 
 ## Architektura backendu (`lib/`)
 
