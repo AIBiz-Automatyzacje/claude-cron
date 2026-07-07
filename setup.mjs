@@ -549,8 +549,8 @@ async function askTelegramChatId(rl, botToken) {
   await ask(rl, 'Napisz teraz cokolwiek do swojego bota na Telegramie, potem wciśnij Enter: ');
   const detected = extractChatIdFromUpdates(await fetchTelegramUpdates(botToken));
   if (detected) {
-    const useDetected = (await ask(rl, `Wykryto chat ID: ${detected}. Użyć? [Y/n]: `, 'Y')).toLowerCase();
-    if (useDetected === 'y') {
+    const useDetected = (await ask(rl, `Wykryto chat ID: ${detected}. Użyć? [T/n]: `, 'T')).toLowerCase();
+    if (useDetected === 't') {
       return detected;
     }
   } else {
@@ -821,8 +821,8 @@ async function main() {
     // a env DISCORD_WEBHOOK_URL/TELEGRAM_* pozostaje fallbackiem dla starych instalacji (R3).
     notifyPayload = buildNotificationSettingsPayload(await askNotificationSettings(rl));
 
-    const installHook = (await ask(rl, 'Zainstalować autostart? [Y/n]: ', 'Y')).toLowerCase();
-    if (installHook === 'y') {
+    const installHook = (await ask(rl, 'Zainstalować autostart? [T/n]: ', 'T')).toLowerCase();
+    if (installHook === 't') {
       const hookFile = writeHook(workspace, REPO_DIR, nodeBin);
       const added = registerHook(workspace, hookFile, nodeBin);
       console.log(added ? `[ok] Hook zarejestrowany: ${hookFile}` : '[ok] Hook już zarejestrowany.');
