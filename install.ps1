@@ -207,6 +207,41 @@ function Install-PortableNode {
     return $nodeExe
 }
 
+# ============ ZALEZNOSCI (node_modules przez portable npm) ============
+
+# Instaluje zaleznosci produkcyjne przez npm z portable Node (nie systemowego -
+# bootstrap nie dotyka PATH). Bootstrap NIE przenosi node_modules ze starej
+# instalacji, wiec swiezy katalog zawsze wymaga instalacji. Portable Node musi
+# byc w PATH, bo install-script koffi (cnoke) spawnuje `node`.
+function Install-Dependencies {
+    param(
+        [Parameter(Mandatory = $true)][string] $NodeExe,
+        [Parameter(Mandatory = $true)][string] $RepoDir
+    )
+    $nodeDir = Split-Path -Parent $NodeExe
+    $npmCli  = Join-Path $nodeDir "node_modules\npm\bin\npm-cli.js"
+    if (-not (Test-Path -LiteralPath $npmCli)) {
+        throw "Nie znaleziono npm w portable Node: $npmCli"
+    }
+
+    Write-Host "[info] Instaluje zaleznosci (npm install)..." -ForegroundColor Cyan
+    $oldPath = $env:PATH
+    $oldLocation = Get-Location
+    try {
+        $env:PATH = "$nodeDir;$env:PATH"
+        Set-Location $RepoDir
+        & $NodeExe $npmCli install --omit=dev --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install zakonczyl sie kodem $LASTEXITCODE."
+        }
+    }
+    finally {
+        Set-Location $oldLocation
+        $env:PATH = $oldPath
+    }
+    Write-Host "[ok] Zaleznosci zainstalowane." -ForegroundColor Green
+}
+
 # ============ HANDOFF DO setup.mjs ============
 
 # Pod irm|iex proces node dziedziczy konsole jako stdin (nie potok ze
@@ -254,6 +289,7 @@ function Invoke-Main {
     }
 
     $nodeExe = Install-PortableNode -RepoDir $repoDir
+    Install-Dependencies -NodeExe $nodeExe -RepoDir $repoDir
     Invoke-Setup -NodeExe $nodeExe -RepoDir $repoDir
 }
 

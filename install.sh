@@ -229,6 +229,24 @@ verify_node_checksum() {
     || fail "Suma SHA256 się nie zgadza! Oczekiwano $expected, otrzymano $actual. Przerywam (archiwum uszkodzone lub podmienione)."
 }
 
+# ============ ZALEŻNOŚCI (node_modules przez portable npm) ============
+
+# Instaluje zależności produkcyjne przez npm z portable Node (nie systemowego —
+# bootstrap nie dotyka PATH). Bootstrap NIE przenosi node_modules ze starej
+# instalacji, więc świeży katalog zawsze wymaga instalacji. Portable Node musi
+# być w PATH, bo install-script koffi (cnoke) spawnuje `node`.
+ensure_dependencies() {
+  local node_dir npm_cli
+  node_dir="$(dirname "$NODE_BIN")"
+  npm_cli="$node_dir/../lib/node_modules/npm/bin/npm-cli.js"
+  [ -f "$npm_cli" ] || fail "Nie znaleziono npm w portable Node: $npm_cli"
+
+  info "Instaluję zależności (npm install)..."
+  ( cd "$REPO_DIR" && PATH="$node_dir:$PATH" "$NODE_BIN" "$npm_cli" install --omit=dev --no-audit --no-fund ) \
+    || fail "npm install nie powiódł się — sprawdź połączenie sieciowe."
+  ok "Zależności zainstalowane."
+}
+
 # ============ HANDOFF DO setup.mjs (z fixem TTY) ============
 
 # curl|bash zajmuje stdin pipe'em ze skryptem → setup.mjs nie może czytać
@@ -264,6 +282,7 @@ main() {
   fi
 
   ensure_portable_node
+  ensure_dependencies
   handoff_to_setup
 }
 
