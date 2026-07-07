@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 10 -->
+<!-- rule-count: 11 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -33,3 +33,6 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **getUpdates świeżego bota Telegram bywa pusty mimo dostarczonych wiadomości — auto-detekcja zawsze z ręcznym fallbackiem**: Wiadomości wysłane w pierwszych minutach po `/newbot` mogą nie wejść do kolejki update'ów (`result:[]`, `pending:0`) i przepaść. Pusty `getUpdates` ≠ zły token ani konkurencyjny konsument — rozstrzygaj testem: świeża wiadomość + kilka polli (update bez `offset` nie jest konsumowany, więc powinien WISIEĆ; znika = realny konsument). Auto-detekcję stanu zewnętrznego API projektuj z ręcznym fallbackiem jako ścieżką pierwszej klasy.
   Source: docs/solutions/deployment-issues/2026-07-03-telegram-getupdates-swiezy-bot-lag-kolejki.md
+
+- **Zmiana env po instalacji nie propaguje się do żyjących procesów — proxy 502/504, nie 503, myli na sieć**: `config.js` czyta `CLAUDE_CRON_*` raz przy starcie; hook autostartu wskrzesza serwer dziedzicząc env sesji Claude Code, a ta env terminala sprzed re-installu. Setup zapisuje nowy adres do User-scope, ale otwarte terminale/sesje trzymają stary → serwer proxuje do martwego VPS (nieistniejący IP Tailscale = blackhole = timeout 504, nie 502/503). Diagnozuj TRZEMA źródłami naraz: User-scope (`GetEnvironmentVariable(...,'User')`) vs `$env:` terminala vs kod proxy (503=brak env, 502/504=sieć/adres). „Lokalnie działa" ≠ „proxy działa" — inny proces, inne env. Fix: restart serwera z NOWO otwartego terminala (twardo: reboot).
+  Source: docs/solutions/deployment-issues/2026-07-07-stale-env-vps-url-hook-respawn-serwera.md
