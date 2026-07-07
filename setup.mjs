@@ -506,16 +506,27 @@ function persistEnvVar(varName, value, comment) {
 // Timeout wywołań Bot API — setup nie może wisieć na sieci (spójny z lib/notify-push).
 const TELEGRAM_API_TIMEOUT_MS = 10_000;
 
+// Auto-detekcja chat ID: świeży bot bywa laggy — getUpdates zwraca pusto mimo
+// dostarczonej wiadomości (docs/solutions: telegram-getupdates-swiezy-bot-lag).
+// Zamiast jednego strzału pollujemy z long-pollem (serwer trzyma połączenie do
+// TELEGRAM_LONGPOLL_TIMEOUT_S sekund czekając na update), a między próbami
+// prosimy o kolejną wiadomość — to rozgrzewa kolejkę update'ów.
+const CHAT_ID_DETECT_ATTEMPTS = 4;
+const TELEGRAM_LONGPOLL_TIMEOUT_S = 5;
+
 function telegramApiUrl(botToken, method) {
   return `https://api.telegram.org/bot${botToken}/${method}`;
 }
 
 // === I/O shell: getUpdates Bot API → sparsowany JSON albo null (warn, bez przerywania) ===
 // Komunikaty błędów NIE zawierają URL-a — w path żyje token (jak w lib/telegram.js).
-async function fetchTelegramUpdates(botToken) {
+async function fetchTelegramUpdates(botToken, longPollTimeoutS = 0) {
   try {
-    const res = await fetch(telegramApiUrl(botToken, 'getUpdates'), {
-      signal: AbortSignal.timeout(TELEGRAM_API_TIMEOUT_MS),
+    const method = longPollTimeoutS > 0 ? `getUpdates?timeout=${longPollTimeoutS}` : 'getUpdates';
+    // Klient musi dać zapas ponad long-poll serwera, inaczej ucięlibyśmy własne oczekiwanie.
+    const clientTimeoutMs = TELEGRAM_API_TIMEOUT_MS + longPollTimeoutS * 1000;
+    const res = await fetch(telegramApiUrl(botToken, method), {
+      signal: AbortSignal.timeout(clientTimeoutMs),
     });
     return await res.json();
   } catch (error) {
@@ -543,18 +554,42 @@ async function sendTelegramTestMessage(botToken, chatId) {
   }
 }
 
+// Komunikat ręcznego fallbacku — auto-detekcja to wygoda, ręczne wpisanie to
+// ścieżka pierwszej klasy (learned pattern: zewnętrzne API projektuj z fallbackiem).
+function buildManualChatIdMessage() {
+  return [
+    '[info] Nie wykryto wiadomości do bota — podaj chat ID ręcznie.',
+    '       Najszybciej: napisz do @userinfobot na Telegramie — odpisze "Id: <liczba>".',
+    '       Ta liczba to Twój chat ID (rozmowa 1:1 z botem: chat ID = Twoje user ID).',
+    '       Albo w przeglądarce: https://api.telegram.org/bot<TOKEN>/getUpdates → znajdź "chat":{"id":...}.',
+  ].join('\n');
+}
+
 // === I/O shell: auto-detekcja chat ID przez getUpdates + potwierdzenie, ręczny fallback ===
 // Mechanizm ask obsługuje tty-handoff (curl|bash) — NIE czytamy stdin bezpośrednio.
 async function askTelegramChatId(rl, botToken) {
   await ask(rl, 'Napisz teraz cokolwiek do swojego bota na Telegramie, potem wciśnij Enter: ');
-  const detected = extractChatIdFromUpdates(await fetchTelegramUpdates(botToken));
+
+  // Poll z long-pollem zamiast jednego strzału — świeży bot bywa laggy. Między
+  // próbami prosimy o kolejną wiadomość, bo to rozgrzewa kolejkę update'ów.
+  let detected = null;
+  for (let attempt = 1; attempt <= CHAT_ID_DETECT_ATTEMPTS; attempt++) {
+    detected = extractChatIdFromUpdates(
+      await fetchTelegramUpdates(botToken, TELEGRAM_LONGPOLL_TIMEOUT_S)
+    );
+    if (detected) break;
+    if (attempt < CHAT_ID_DETECT_ATTEMPTS) {
+      console.log(`[info] Jeszcze nie widzę wiadomości (próba ${attempt}/${CHAT_ID_DETECT_ATTEMPTS}) — wyślij ją do bota jeszcze raz...`);
+    }
+  }
+
   if (detected) {
     const useDetected = (await ask(rl, `Wykryto chat ID: ${detected}. Użyć? [T/n]: `, 'T')).toLowerCase();
     if (useDetected === 't') {
       return detected;
     }
   } else {
-    console.log('[info] Nie wykryto wiadomości do bota — podaj chat ID ręcznie.');
+    console.log(buildManualChatIdMessage());
   }
   return ask(rl, 'Chat ID (puste = pomiń Telegram): ');
 }
