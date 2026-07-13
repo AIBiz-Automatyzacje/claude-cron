@@ -128,7 +128,7 @@ sequenceDiagram
     end
 ```
 
-- [ ] **Unit 1: Wspólny helper spawnowania Claude — `lib/claude-spawn.js`**
+- [x] **Unit 1: Wspólny helper spawnowania Claude — `lib/claude-spawn.js`**
 
 **Cel:** Wydzielić z `executor.js:100-152` czyste elementy spawnu CLI claude do reużycia przez ask, bez zmiany zachowania executora.
 
@@ -167,7 +167,7 @@ sequenceDiagram
 - `npm test` przechodzi w całości — w tym istniejące `lib/executor.test.js` i `lib/scheduler.test.js` bez zmian asercji.
 - `lib/claude-spawn.test.js` pokrywa scenariusze powyżej i przechodzi.
 
-- [ ] **Unit 2: Konfiguracja `ASK_*` i matcher tokenu**
+- [x] **Unit 2: Konfiguracja `ASK_*` i matcher tokenu**
 
 **Cel:** Stałe konfiguracyjne feature'a i rozpoznawanie URL `/ask/:token` w stylu webhooka.
 

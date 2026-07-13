@@ -1,7 +1,15 @@
 # Kontekst: Endpoint /ask — asystent głosowy
 
 Branch: `feature/ask-endpoint`
-Ostatnia aktualizacja: 2026-07-13
+Ostatnia aktualizacja: 2026-07-13 (faza 1 ukończona: U1 + U2)
+
+## Stan po fazie 1 (U1 + U2)
+
+- `lib/claude-spawn.js` powstał: `spawnClaude(args)`, `buildCleanEnv(baseEnv, oauthTokenFile)` (strip `CLAUDE_CODE*`/`CLAUDECODE` → inject OAuth PO stripie), `readOauthToken`, `setClaudeBin` (override binarki dla testów, wzorzec `db.setDbPath`), `OAUTH_TOKEN_FILE`.
+- `lib/executor.js` przeszedł na `claudeSpawn.spawnClaude(args)`; stateful (currentProcess, timeouty, watchdog, caffeinate, kill) został na miejscu. `readOauthToken` re-eksportowany z executora dla kompatybilności istniejących importów (m.in. `lib/executor.test.js`).
+- `lib/config.js`: sekcja `// Ask (asystent głosowy)` — `ASK_ENABLED` (opt-in, truthy tylko przy `'1'`), `ASK_TOKEN`/`ASK_SECRET` (env, brak defaultów), `ASK_TIMEOUT_MS` 55000, `ASK_MAX_MS` 600000, `ASK_MODEL` 'sonnet'.
+- `lib/webhook.js`: `ASK_URL_PATTERN` + `matchAskToken(url)` bliźniacze do `matchWebhookToken`.
+- Testy: `lib/claude-spawn.test.js` (5 testów, realny spawn `node <skrypt tmp>`, w tym regresja shell:true na wielowyrazowym prompcie) + rozszerzony `lib/webhook.test.js` (matcher + defaulty config). Cały suite: 284/284 PASS, testy executora/schedulera bez zmian asercji (refactor charakteryzacyjny potwierdzony).
 
 ## Powiązane pliki
 

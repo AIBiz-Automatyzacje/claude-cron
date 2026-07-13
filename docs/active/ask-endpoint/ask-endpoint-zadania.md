@@ -7,23 +7,23 @@ Ostatnia aktualizacja: 2026-07-13
 
 ## Unit 1: Wspólny helper spawnowania Claude — `lib/claude-spawn.js` (Delegate: feature-builder-data)
 
-- [ ] Stwórz `lib/claude-spawn.js`: czysty env (strip `CLAUDE_CODE*`+`CLAUDECODE` → OAuth z `readOauthToken` PO stripie), resolve binarki (Windows `where claude` bez `shell:true`), spawn `cwd: WORKSPACE_DIR`, `stdio:['ignore','pipe','pipe']`, `windowsHide:true`; argumenty CLI od wywołującego; override binarki dla testów (wzorzec `db.setDbPath`)
-- [ ] Przenieś `readOauthToken` do helpera (eksport z `claude-spawn.js`; bez cyklu importów z executorem)
-- [ ] Zmodyfikuj `lib/executor.js` na użycie helpera — stateful rzeczy (currentProcess, timeouty, watchdog, caffeinate, kill, guard killed, `notifyRunOutcome`) ZOSTAJĄ w executorze
-- [ ] Stwórz `lib/claude-spawn.test.js`
-- [ ] Test: env po stripie bez żadnego `CLAUDE_CODE*`/`CLAUDECODE`, z `CLAUDE_CODE_OAUTH_TOKEN` gdy plik tokenu istnieje (kolejność strip→inject)
-- [ ] Test: brak pliku OAuth (ENOENT) → spawn bez tokenu, bez wyjątku
-- [ ] Test: spawn z override binarki `node` + skrypt tmp zwraca stdout i kod wyjścia
-- [ ] Test: argumenty CLI przechodzą do procesu bez modyfikacji (echo argv w skrypcie testowym)
+- [x] Stwórz `lib/claude-spawn.js`: czysty env (strip `CLAUDE_CODE*`+`CLAUDECODE` → OAuth z `readOauthToken` PO stripie), resolve binarki (Windows `where claude` bez `shell:true`), spawn `cwd: WORKSPACE_DIR`, `stdio:['ignore','pipe','pipe']`, `windowsHide:true`; argumenty CLI od wywołującego; override binarki dla testów (wzorzec `db.setDbPath`)
+- [x] Przenieś `readOauthToken` do helpera (eksport z `claude-spawn.js`; bez cyklu importów z executorem)
+- [x] Zmodyfikuj `lib/executor.js` na użycie helpera — stateful rzeczy (currentProcess, timeouty, watchdog, caffeinate, kill, guard killed, `notifyRunOutcome`) ZOSTAJĄ w executorze
+- [x] Stwórz `lib/claude-spawn.test.js`
+- [x] Test: env po stripie bez żadnego `CLAUDE_CODE*`/`CLAUDECODE`, z `CLAUDE_CODE_OAUTH_TOKEN` gdy plik tokenu istnieje (kolejność strip→inject)
+- [x] Test: brak pliku OAuth (ENOENT) → spawn bez tokenu, bez wyjątku
+- [x] Test: spawn z override binarki `node` + skrypt tmp zwraca stdout i kod wyjścia
+- [x] Test: argumenty CLI przechodzą do procesu bez modyfikacji (echo argv w skrypcie testowym)
 - [ ] Weryfikacja: `npm test` przechodzi w całości — w tym istniejące `lib/executor.test.js` i `lib/scheduler.test.js` bez zmian asercji
 - [ ] Weryfikacja: `lib/claude-spawn.test.js` pokrywa scenariusze powyżej i przechodzi
 
 ## Unit 2: Konfiguracja `ASK_*` i matcher tokenu (Delegate: feature-builder-data)
 
-- [ ] Zmodyfikuj `lib/config.js`: sekcja `// Ask (asystent głosowy)` — `ASK_ENABLED` (opt-in, default false), `ASK_TOKEN`, `ASK_SECRET`, `ASK_TIMEOUT_MS` 55000, `ASK_MAX_MS` 600000, `ASK_MODEL` 'sonnet'; wszystkie w `module.exports`
-- [ ] Zmodyfikuj `lib/webhook.js`: `ASK_URL_PATTERN` + `matchAskToken(url)` bliźniacze do `matchWebhookToken`
-- [ ] Test: `matchAskToken('/ask/abc123?x=1')` → `'abc123'`; `/askk/…`, `/ask/`, nie-string → `null` (happy + error path) — w `lib/webhook.test.js`
-- [ ] Test: defaulty config — `ASK_ENABLED` false bez env, `ASK_TIMEOUT_MS` 55000, `ASK_MODEL` 'sonnet'
+- [x] Zmodyfikuj `lib/config.js`: sekcja `// Ask (asystent głosowy)` — `ASK_ENABLED` (opt-in, default false), `ASK_TOKEN`, `ASK_SECRET`, `ASK_TIMEOUT_MS` 55000, `ASK_MAX_MS` 600000, `ASK_MODEL` 'sonnet'; wszystkie w `module.exports`
+- [x] Zmodyfikuj `lib/webhook.js`: `ASK_URL_PATTERN` + `matchAskToken(url)` bliźniacze do `matchWebhookToken`
+- [x] Test: `matchAskToken('/ask/abc123?x=1')` → `'abc123'`; `/askk/…`, `/ask/`, nie-string → `null` (happy + error path) — w `lib/webhook.test.js`
+- [x] Test: defaulty config — `ASK_ENABLED` false bez env, `ASK_TIMEOUT_MS` 55000, `ASK_MODEL` 'sonnet'
 - [ ] Weryfikacja: `npm test` przechodzi; `lib/webhook.test.js` pokrywa nowy matcher
 - [ ] Weryfikacja: `node -e "const c=require('./lib/config'); process.exit(c.ASK_ENABLED===false && c.ASK_TIMEOUT_MS===55000 ? 0 : 1)"` kończy się kodem 0
 
