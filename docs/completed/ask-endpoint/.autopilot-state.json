@@ -1,0 +1,43 @@
+{
+  "wersja": 1,
+  "zadanie": "ask-endpoint",
+  "fazy": [
+    {
+      "numer": 1,
+      "nazwa": "Fundament",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 2,
+      "nazwa": "Rdzeń modułu ask",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 3,
+      "nazwa": "Integracja HTTP i domknięcie gwarancji",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    },
+    {
+      "numer": 4,
+      "nazwa": "Deploy i Shortcut",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": []
+    }
+  ],
+  "zakonczenie": {
+    "walidacja": "done",
+    "complete": "done",
+    "compound": "done"
+  }
+}

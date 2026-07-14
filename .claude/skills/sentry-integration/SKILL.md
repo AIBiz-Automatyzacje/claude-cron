@@ -7,15 +7,15 @@ description: Sentry error tracking i performance monitoring dla React + Supabase
 
 Kompleksowy przewodnik integracji Sentry error tracking i performance monitoring dla projektu React + Supabase Edge Functions.
 
-> **📅 Ostatnia aktualizacja: Marzec 2026**
+> **Stan SDK**
 >
 > - **React SDK:** v10+ (funkcyjne integracje, React 19 error hooks) ✅
-> - **Edge Functions:** Ograniczone wsparcie ⚠️ (wymaga `withScope` + `flush`)
+> - **Edge Functions:** `@sentry/deno` na Deno 2.x (instrumentacja `Deno.serve` świeża/eksperymentalna + `beforeSend`) ⚠️ — ustaw `defaultIntegrations: false` (dokumentacja Supabase nadal to zaleca na Edge Runtime), używaj `withScope` dla izolacji i `await flush()` przed `Response`
 
 ## Table of Contents
 
 - [Critical Rules](#critical-rules)
-- [Known Limitations](#known-limitations)
+- [Dobre praktyki (Edge Functions / Supabase)](#dobre-praktyki-edge-functions--supabase)
 - [Error Levels](#error-levels)
 - [Quick Reference](#quick-reference)
 - [Context Enrichment](#context-enrichment)
@@ -38,17 +38,20 @@ Kompleksowy przewodnik integracji Sentry error tracking i performance monitoring
 
 ---
 
-## Known Limitations
+## Dobre praktyki (Edge Functions / Supabase)
 
-### Edge Functions (Supabase)
+`@sentry/deno` działa na Supabase Edge Runtime (Deno 2.x) z instrumentacją requestów
+i wsparciem `beforeSend`. Wsparcie instrumentacji `Deno.serve` jest jednak świeże/eksperymentalne —
+oficjalna dokumentacja Supabase nadal zaleca `defaultIntegrations: false` na Edge Runtime, bo bez
+tego nie ma gwarancji scope separation między requestami w tym samym isolate. Nadal stosuj:
 
-⚠️ **Sentry Deno SDK ma ograniczenia:**
-
-| Problem | Przyczyna | Rozwiązanie |
-|---------|-----------|-------------|
-| Brak izolacji scope między requestami | SDK nie wspiera `Deno.serve` instrumentation | Zawsze używaj `Sentry.withScope()` |
-| Wymagana wersja Deno 2.0+ | Supabase używa Deno 1.45.2 | Używaj `defaultIntegrations: false` |
-| Kontekst współdzielony | Runtime reużywany między requestami | Nie ustawiaj globalnych tagów per-request |
+| Zasada | Dlaczego |
+|--------|----------|
+| `defaultIntegrations: false` w `Sentry.init()` | Bezpieczny default dopóki nie zweryfikujesz scope separation na swoim runtime |
+| Ustawiaj kontekst przez `Sentry.withScope()` | Izolacja per operacja; unikasz wycieku tagów między requestami |
+| Nie ustawiaj globalnych tagów per-request | Globalny scope jest współdzielony w obrębie isolate'u |
+| `await Sentry.flush()` przed `Response` | Isolate może zostać zamrożony zaraz po odpowiedzi |
+| Maskuj PII w `beforeSend` | Jeden centralny punkt dla wszystkich zdarzeń |
 
 **Zawsze używaj tego wzorca:**
 ```typescript
@@ -264,5 +267,4 @@ Szczegółowe wzorce znajdują się w:
 ---
 
 **Skill Status**: COMPLETE
-**Line Count**: < 200 (following 500-line rule)
-**Progressive Disclosure**: Reference files for detailed patterns
+**Progressive Disclosure**: Szczegółowe wzorce w plikach `resources/`

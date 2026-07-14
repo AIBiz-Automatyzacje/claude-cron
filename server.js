@@ -3,7 +3,8 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { PORT, PUBLIC_DIR, VPS_API_URL, WEBHOOK_ENABLED, WEBHOOK_BASE_URL, MAINTENANCE_WINDOW } = require('./lib/config');
+const { PORT, PUBLIC_DIR, VPS_API_URL, WEBHOOK_ENABLED, WEBHOOK_BASE_URL, MAINTENANCE_WINDOW, ASK_ENABLED } = require('./lib/config');
+const ask = require('./lib/ask');
 const db = require('./lib/db');
 const computeNextRun = require('./lib/next-run');
 const scheduler = require('./lib/scheduler');
@@ -11,7 +12,7 @@ const executor = require('./lib/executor');
 const skills = require('./lib/skills');
 const platform = require('./lib/platform');
 const keepAwake = require('./lib/keep-awake');
-const { matchWebhookToken } = require('./lib/webhook');
+const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
 const { pushNotifySettings, buildPushPayload } = require('./lib/notify-push');
 
@@ -415,6 +416,94 @@ async function handleWebhook(req, res, token) {
   return json(res, { ok: true, run_id: run.id, job_name: job.name });
 }
 
+// === Ask handler (asystent głosowy) ===
+
+// Cap na body /ask: pytanie głosowe to pojedyncze KB, 64 KB to wielokrotny zapas.
+// Bez limitu nieuwierzytelniony intruz (endpoint publiczny przez Funnel, body czytane
+// PRZED autoryzacją) streamowałby setki MB per połączenie → OOM całego schedulera.
+const ASK_MAX_BODY_BYTES = 64 * 1024;
+
+// Surowe body text/plain — parseBody się nie nadaje (zawsze JSON.parse i cicho {}),
+// a pytanie z dyktowania to goły tekst. Zwraca string albo null (limit przekroczony /
+// zerwany stream) — caller odpowiada odmową i zamyka połączenie.
+function readTextBody(req, maxBytes) {
+  return new Promise((resolve) => {
+    let body = '';
+    let receivedBytes = 0;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    // setEncoding: string_decoder buforuje niedokończoną sekwencję UTF-8 na granicy
+    // chunków — bez tego znak wielobajtowy rozcięty między chunki (granice za proxy
+    // Funnel są poza kontrolą) daje U+FFFD w środku pytania („pogod��").
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      receivedBytes += Buffer.byteLength(chunk);
+      if (receivedBytes > maxBytes) {
+        // Stop akumulacji: pause() wstrzymuje 'data', backpressure trzyma resztę
+        // w buforach socketu (pamięć ograniczona) do czasu destroy przez callera.
+        req.pause();
+        finish(null);
+        return;
+      }
+      body += chunk;
+    });
+    req.on('end', () => finish(body));
+    // Abort klienta w połowie body: bez listenera 'error' = uncaughtException,
+    // a 'end' nigdy nie nadejdzie — promise MUSI się rozstrzygnąć.
+    req.on('error', () => finish(null));
+  });
+}
+
+// Odpowiedzi „dla człowieka" ZAWSZE 200 text/plain — Shortcuts gubi body przy
+// kodach błędów (R2). Kody 403/405 wyłącznie dla intruzów; helpery json/error
+// zostają nietknięte dla API.
+function plainText(res, text) {
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end(text);
+}
+
+const TEXT_EMPTY_QUESTION = 'Nic nie usłyszałem — powtórz pytanie';
+
+async function handleAsk(req, res, token) {
+  // Opt-in: bez jawnego ASK_ENABLED=1 endpoint nie istnieje dla świata
+  if (!ASK_ENABLED) {
+    return error(res, 'Forbidden', 403);
+  }
+  if (req.method !== 'POST') {
+    return error(res, 'Method not allowed', 405);
+  }
+  // Body czytamy PRZED bramkami (stream i tak trzeba skonsumować), ale odpowiedź
+  // na puste body dopiero PO autoryzacji — intruz bez sekretu dostaje zawsze 403.
+  const rawBody = await readTextBody(req, ASK_MAX_BODY_BYTES);
+  if (rawBody === null) {
+    // Limit przekroczony albo zerwany stream — odmowa PRZED bramkami (żadna
+    // rezerwacja admitRequest jeszcze nie istnieje). Destroy dopiero po flushu
+    // odpowiedzi ('finish'), inaczej Node dumpowałby resztę streama w nieskończoność.
+    res.once('finish', () => req.destroy());
+    return error(res, 'Payload too large', 413);
+  }
+  const question = rawBody.trim();
+  const decision = ask.admitRequest({ token, secret: req.headers['x-secret'] });
+  if (!decision.allowed) {
+    // 403 bez szczegółów — nie zdradzamy, czy padł token czy sekret;
+    // odmowy „dla człowieka" (rate limit / zajętość) to 200 z tekstem ⏳.
+    if (decision.status === 403) return error(res, 'Forbidden', 403);
+    return plainText(res, decision.text);
+  }
+  if (!question) {
+    // Przyjęty, ale nie ma o co pytać — oddaj OBIE rezerwacje z admitRequest.
+    ask.releaseSyncLock();
+    ask.releaseBackgroundSlot();
+    return plainText(res, TEXT_EMPTY_QUESTION);
+  }
+  const result = await ask.executeAsk(question);
+  return plainText(res, result.text);
+}
+
 // === Server ===
 
 const server = http.createServer(async (req, res) => {
@@ -433,6 +522,16 @@ const server = http.createServer(async (req, res) => {
     const webhookToken = matchWebhookToken(req.url);
     if (webhookToken) {
       return await handleWebhook(req, res, webhookToken);
+    }
+
+    // Ask endpoint: /ask/:token — publiczny (dostępny przez Funnel) jak webhook.
+    // KONTRAKT KOLEJNOŚCI matcherów: webhook → ask → guard XFF → api/static.
+    // Ask MUSI stać PRZED guardem X-Forwarded-For (inaczej requesty z Funnela
+    // dostają 403 i endpoint głosowy jest martwy), a guard MUSI zostać przed
+    // api/static (inaczej dashboard robi się publiczny).
+    const askToken = matchAskToken(req.url);
+    if (askToken) {
+      return await handleAsk(req, res, askToken);
     }
 
     // Block non-webhook requests from external sources (Tailscale Funnel)
@@ -463,8 +562,13 @@ const conn = db.getDb();
 db.assertDbReturnsNumbers(conn);
 
 // Reaper: osierocone runy 'running' z przerwanego procesu → 'killed' (gasi wiszący kill-bar)
-const reaped = db.reapOrphanedRuns();
-if (reaped > 0) console.log(`[reaper] Oznaczono ${reaped} przerwany(ch) run(ów) jako zatrzymane`);
+const reapedRuns = db.reapOrphanedRuns();
+if (reapedRuns.length > 0) console.log(`[reaper] Oznaczono ${reapedRuns.length} przerwany(ch) run(ów) jako zatrzymane`);
+
+// Runy teczki ask wśród zebranych → ❌ „przerwane przez restart" na komunikator (R7 „nigdy
+// cisza"); zwykłe joby dalej tylko log powyżej. Wysyłka fire-and-forget wewnątrz modułu ask
+// (pad kanału nie blokuje startu), kontrakt notifyRunOutcome/„killed milczy" nietknięty.
+ask.notifyInterruptedAskRuns(reapedRuns);
 
 // Start scheduler
 scheduler.start();
