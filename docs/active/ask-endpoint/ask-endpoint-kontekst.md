@@ -1,7 +1,16 @@
 # Kontekst: Endpoint /ask — asystent głosowy
 
 Branch: `feature/ask-endpoint`
-Ostatnia aktualizacja: 2026-07-14 (review fazy 1 zakończony)
+Ostatnia aktualizacja: 2026-07-14 (faza 2 wykonana — U3 + U4)
+
+## Stan po fazie 2 (U3 + U4)
+
+- `lib/ask.js` powstał (335 linii): bramki wejścia + wykonanie w jednym module (struktura narzucona planem — Unit 3 i 4 współdzielą plik; >300 linii z coding-rules zgłoszone do rozważenia splitu w kolejnych fazach).
+  - **U3**: `verifySecret` (guard długości przed `timingSafeEqual`), `verifyAuth` (token+sekret liczone bez short-circuit), `admitRequest` (bramki: auth 403 → rate limit 10/min stały kubeł → lock sync → 3 sloty tła; rezerwacja pesymistyczna locka I slotu przy przyjęciu), `releaseSyncLock`/`releaseBackgroundSlot` (floor 0), `resetAskState` (izolacja testów), `getOrCreateAskJob` (idempotencja po `name`, nigdy nie nadpisuje; `run_on_wake:0`, `routine:1`).
+  - **U4**: `executeAsk` — run teczki od razu `running`, spawn helperem (`--output-format text --model`), wyścig close vs `ASK_TIMEOUT_MS` (odczepienie logiczne bez killa, lock sync puszczany przy odczepieniu), bezpiecznik `ASK_MAX_MS` liczony OD SPAWNU (rozstrzygnięcie kwestii odroczonej — prostszy wariant, pokryty testem) z finalize już w timerze killa (kill może nie dać close), `finalizeAskRun` idempotentny przez świeży odczyt DB (guard `killed`), `notifyAskOutcome` (✅ stdout / ❌ ogon stderr; oba kanały off = jawny warning `[ask]`), pad spawnu = failed + zwrot OBU rezerwacji.
+- Seam kanałów: `sendPlain(text)` w `lib/discord.js` i `lib/telegram.js` (rozstrzygnięcie kwestii odroczonej — bez parametru `job`, ask sam składa nagłówek ✅/❌); surowy tekst przez `smartSplit`, bez embedów/parse_mode/`extractResult`, `resolveNotifyConfig` w czasie wysyłki; testy chunkowania i braku konfiguracji w testach kanałów.
+- Testy: `lib/ask.test.js` (26 testów — bramki z wstrzykiwanym zegarem i configiem, spawn realny przez atrapę CLI z shebangiem `#!/usr/bin/env node` + `setClaudeBin`; shebang wymaga POSIX → skip na Windows z jawnym powodem; mocki tylko na kanałach) + po 2 testy `sendPlain` w `lib/discord.test.js`/`lib/telegram.test.js`. Hak testowy `onSettled` w `executeAsk` (DI, wzorzec wstrzykiwanego zegara) — deterministyczne czekanie na close odczepionego procesu zamiast sleep-pollingu.
+- Cały suite: **318/318 PASS** (było 284 — +34 nowe). Audyt error-handlingu: logi `[ask]` przez console to wymóg planu i konwencja repo (brak pino/Sentry, zero nowych zależności); puste catche tylko wokół `kill`/`taskkill` (wzorzec executora, wyścig ESRCH).
 
 ## Review fazy 1 (2026-07-14)
 

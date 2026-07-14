@@ -198,7 +198,7 @@ sequenceDiagram
 - `npm test` przechodzi; `lib/webhook.test.js` pokrywa nowy matcher.
 - `node -e "const c=require('./lib/config'); process.exit(c.ASK_ENABLED===false && c.ASK_TIMEOUT_MS===55000 ? 0 : 1)"` kończy się kodem 0.
 
-- [ ] **Unit 3: `lib/ask.js` — bramki wejścia i teczka**
+- [x] **Unit 3: `lib/ask.js` — bramki wejścia i teczka**
 
 **Cel:** Czyste, testowalne funkcje decyzyjne: autoryzacja, rate limit, współbieżność (1 sync + 3 tła z rezerwacją pesymistyczną) oraz get-or-create joba-teczki.
 
@@ -236,7 +236,7 @@ sequenceDiagram
 **Weryfikacja:**
 - `npm test` przechodzi; `lib/ask.test.js` pokrywa wszystkie powyższe scenariusze z asercjami na treść tekstów.
 
-- [ ] **Unit 4: `lib/ask.js` — wykonanie zapytania: spawn, odczepienie, powiadomienia**
+- [x] **Unit 4: `lib/ask.js` — wykonanie zapytania: spawn, odczepienie, powiadomienia**
 
 **Cel:** Pełny cykl życia zapytania: run teczki, spawn przez helper, odpowiedź sync albo odczepienie w tło, bezpiecznik `ASK_MAX_MS`, powiadomienia ✅/❌ wyłącznie dla zadań odczepionych.
 

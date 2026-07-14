@@ -1,7 +1,7 @@
 # Zadania: Endpoint /ask — asystent głosowy
 
 Branch: `feature/ask-endpoint`
-Ostatnia aktualizacja: 2026-07-14 (po review fazy 1)
+Ostatnia aktualizacja: 2026-07-14 (faza 2 wykonana — U3 + U4)
 
 Źródło definicji unitów: `docs/plans/2026-07-13-001-feat-ask-endpoint-asystent-glosowy-plan.md`
 
@@ -42,37 +42,37 @@ P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): log `SPAWN:` w 
 
 ## Unit 3: `lib/ask.js` — bramki wejścia i teczka (Delegate: feature-builder-data)
 
-- [ ] Stwórz `lib/ask.js`: `verifySecret` (porównanie długości buforów PRZED `crypto.timingSafeEqual`; brak konfiguracji = zawsze odmowa)
-- [ ] Rate limiter (10/min per token) i liczniki współbieżności (1 sync + 3 sloty tła, rezerwacja pesymistyczna przy spawnie) — in-memory, enkapsulowany stan z resetem i wstrzykiwanym zegarem; ZERO agregatów SQL
-- [ ] Kolejność bramek: auth → rate limit → lock sync („⏳ Jeszcze myślę…") → slot tła („⏳ Mam pełne ręce…"); odmowy jako obiekty decyzji `{status, text}` — mapowanie na HTTP w Unit 5
-- [ ] `getOrCreateAskJob()`: szukaj po `name: 'Asystent głosowy'`, brak → `db.createJob({…, cron_expr:'', routine:1, discord_notify:0, telegram_notify:0})`; NIGDY nie nadpisuje istniejącego
-- [ ] Stwórz `lib/ask.test.js`
-- [ ] Test: zły token / zły sekret / brak sekretu → decyzja 403 bez treści diagnostycznej (trzy przypadki)
-- [ ] Test: sekrety o różnych długościach nie rzucają wyjątku (guard przed `timingSafeEqual`)
-- [ ] Test: brak `ASK_TOKEN`/`ASK_SECRET` w konfiguracji → odmowa nawet przy „poprawnym" pustym sekrecie
-- [ ] Test: 10 zapytań/min przechodzi, 11. → `{status:200, text}` z tekstem rate-limitu; po przesunięciu zegara okno się odnawia
-- [ ] Test: drugi równoległy sync → tekst „jeszcze myślę"; po zwolnieniu locka kolejny przechodzi
-- [ ] Test: 3 zajęte sloty tła → „mam pełne ręce" BEZ spawnu; zwolnienie slotu odblokowuje
-- [ ] Test: `getOrCreateAskJob` × 2 → jeden job; ręczna zmiana `telegram_notify=1` między wywołaniami NIE jest nadpisana
+- [x] Stwórz `lib/ask.js`: `verifySecret` (porównanie długości buforów PRZED `crypto.timingSafeEqual`; brak konfiguracji = zawsze odmowa)
+- [x] Rate limiter (10/min per token) i liczniki współbieżności (1 sync + 3 sloty tła, rezerwacja pesymistyczna przy spawnie) — in-memory, enkapsulowany stan z resetem i wstrzykiwanym zegarem; ZERO agregatów SQL
+- [x] Kolejność bramek: auth → rate limit → lock sync („⏳ Jeszcze myślę…") → slot tła („⏳ Mam pełne ręce…"); odmowy jako obiekty decyzji `{status, text}` — mapowanie na HTTP w Unit 5
+- [x] `getOrCreateAskJob()`: szukaj po `name: 'Asystent głosowy'`, brak → `db.createJob({…, cron_expr:'', routine:1, discord_notify:0, telegram_notify:0})`; NIGDY nie nadpisuje istniejącego
+- [x] Stwórz `lib/ask.test.js`
+- [x] Test: zły token / zły sekret / brak sekretu → decyzja 403 bez treści diagnostycznej (trzy przypadki)
+- [x] Test: sekrety o różnych długościach nie rzucają wyjątku (guard przed `timingSafeEqual`)
+- [x] Test: brak `ASK_TOKEN`/`ASK_SECRET` w konfiguracji → odmowa nawet przy „poprawnym" pustym sekrecie
+- [x] Test: 10 zapytań/min przechodzi, 11. → `{status:200, text}` z tekstem rate-limitu; po przesunięciu zegara okno się odnawia
+- [x] Test: drugi równoległy sync → tekst „jeszcze myślę"; po zwolnieniu locka kolejny przechodzi
+- [x] Test: 3 zajęte sloty tła → „mam pełne ręce" BEZ spawnu; zwolnienie slotu odblokowuje
+- [x] Test: `getOrCreateAskJob` × 2 → jeden job; ręczna zmiana `telegram_notify=1` między wywołaniami NIE jest nadpisana
 - [ ] Weryfikacja: `npm test` przechodzi; `lib/ask.test.js` pokrywa wszystkie scenariusze Unit 3 z asercjami na treść tekstów
 
 ## Unit 4: `lib/ask.js` — wykonanie: spawn, odczepienie, powiadomienia (Delegate: feature-builder-data)
 
-- [ ] Prompt asystencki (template: pytanie → 2–4 zdania czytane na głos; polecenie → wykonaj + potwierdź jednym zdaniem; BEZ klasyfikacji długie/krótkie) + tekst usera
-- [ ] Run teczki: `db.createRun({job_id, trigger_type:'ask', webhook_payload: <pytanie>})` → natychmiast `running` + `started_at`
-- [ ] Spawn helperem: `--dangerously-skip-permissions --output-format text --model <ASK_MODEL> -p <prompt>` (bez `--verbose`)
-- [ ] Wyścig close vs `ASK_TIMEOUT_MS`: zdążył → updateRun (success/failed) + stdout do handlera; nie zdążył → „⏳ robię w tle", proces ŻYJE (odczepienie bez killa), kontynuacja na close
-- [ ] Close odczepionego: re-read runu z DB przed zapisem (guard `killed` od reapera/usera) → updateRun → powiadomienie wg flag teczki (surowy stdout, `smartSplit` + `resolveNotifyConfig`; BEZ `extractResult`/`notifyRunOutcome`)
-- [ ] Seam plain-text w `lib/discord.js`/`lib/telegram.js` (kształt wg uznania implementatora; + testy kanałów jeśli seam tego wymaga)
-- [ ] `ASK_MAX_MS`: timer → kill drzewa (wzorzec executora) → run `timeout` → ❌
-- [ ] Idempotentny finalize (jedna funkcja kończąca zadanie odczepione; drugi call = no-op po sprawdzeniu stanu w DB) — strukturalna gwarancja „nigdy cisza"
-- [ ] Log konsolowy `[ask]` dla każdego wywołania; sync bez powiadomień
-- [ ] Test: happy path sync (atrapa node przez override binarki) → odpowiedź = stdout, run `success` z pytaniem w `webhook_payload` i odpowiedzią w `stdout`, ZERO wywołań kanałów
-- [ ] Test: odczepienie (skrypt śpi > testowy `ASK_TIMEOUT_MS`) → „robię w tle", proces NIE ubity, po close run `success` + dokładnie jedno ✅ na zamockowanym kanale
-- [ ] Test: pad odczepionego procesu (exit≠0) → run `failed` + dokładnie jedno ❌
-- [ ] Test: przekroczenie `ASK_MAX_MS` (testowo małe) → proces ubity, run `timeout`, dokładnie jedno ❌
-- [ ] Test: close po oznaczeniu runu `killed` w DB (symulacja reapera/usera) → brak nadpisania statusu, brak podwójnego powiadomienia
-- [ ] Test: flagi teczki oba 0 → zadanie odczepione loguje warning zamiast cicho zgubić wynik
+- [x] Prompt asystencki (template: pytanie → 2–4 zdania czytane na głos; polecenie → wykonaj + potwierdź jednym zdaniem; BEZ klasyfikacji długie/krótkie) + tekst usera
+- [x] Run teczki: `db.createRun({job_id, trigger_type:'ask', webhook_payload: <pytanie>})` → natychmiast `running` + `started_at`
+- [x] Spawn helperem: `--dangerously-skip-permissions --output-format text --model <ASK_MODEL> -p <prompt>` (bez `--verbose`)
+- [x] Wyścig close vs `ASK_TIMEOUT_MS`: zdążył → updateRun (success/failed) + stdout do handlera; nie zdążył → „⏳ robię w tle", proces ŻYJE (odczepienie bez killa), kontynuacja na close
+- [x] Close odczepionego: re-read runu z DB przed zapisem (guard `killed` od reapera/usera) → updateRun → powiadomienie wg flag teczki (surowy stdout, `smartSplit` + `resolveNotifyConfig`; BEZ `extractResult`/`notifyRunOutcome`)
+- [x] Seam plain-text w `lib/discord.js`/`lib/telegram.js` (kształt wg uznania implementatora; + testy kanałów jeśli seam tego wymaga)
+- [x] `ASK_MAX_MS`: timer → kill drzewa (wzorzec executora) → run `timeout` → ❌
+- [x] Idempotentny finalize (jedna funkcja kończąca zadanie odczepione; drugi call = no-op po sprawdzeniu stanu w DB) — strukturalna gwarancja „nigdy cisza"
+- [x] Log konsolowy `[ask]` dla każdego wywołania; sync bez powiadomień
+- [x] Test: happy path sync (atrapa node przez override binarki) → odpowiedź = stdout, run `success` z pytaniem w `webhook_payload` i odpowiedzią w `stdout`, ZERO wywołań kanałów
+- [x] Test: odczepienie (skrypt śpi > testowy `ASK_TIMEOUT_MS`) → „robię w tle", proces NIE ubity, po close run `success` + dokładnie jedno ✅ na zamockowanym kanale
+- [x] Test: pad odczepionego procesu (exit≠0) → run `failed` + dokładnie jedno ❌
+- [x] Test: przekroczenie `ASK_MAX_MS` (testowo małe) → proces ubity, run `timeout`, dokładnie jedno ❌
+- [x] Test: close po oznaczeniu runu `killed` w DB (symulacja reapera/usera) → brak nadpisania statusu, brak podwójnego powiadomienia
+- [x] Test: flagi teczki oba 0 → zadanie odczepione loguje warning zamiast cicho zgubić wynik
 - [ ] Weryfikacja: `npm test` przechodzi; scenariusze Unit 4 w `lib/ask.test.js` z mockami wyłącznie na kanałach, spawn realny przez `node` + skrypty tmp
 
 ## Unit 5: Endpoint `POST /ask/:token` w `server.js` + etykieta triggera (Delegate: feature-builder-data)
