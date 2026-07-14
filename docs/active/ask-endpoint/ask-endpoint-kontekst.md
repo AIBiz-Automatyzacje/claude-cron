@@ -1,7 +1,17 @@
 # Kontekst: Endpoint /ask — asystent głosowy
 
 Branch: `feature/ask-endpoint`
-Ostatnia aktualizacja: 2026-07-13 (faza 1 ukończona: U1 + U2)
+Ostatnia aktualizacja: 2026-07-14 (review fazy 1 zakończony)
+
+## Review fazy 1 (2026-07-14)
+
+Multi-agent review + adversarial verify. Raport: `review-faza-1.md`. Gate: **⚠️ ZASTRZEŻENIA** (0× P1, 2× P2, 9× P3, 1× OPERATOR). Kluczowe wnioski:
+
+- **P2 #1**: fallback `shell:true` w `resolveClaudeBin` (Windows) — Node nie escapuje args przy `shell:true`, a args niosą treść z publicznych endpointów (`webhook_payload`, w U4 tekst z `/ask`). Fix: fail z czytelnym błędem zamiast fallbacku.
+- **P2 #2**: `ASK_TIMEOUT_MS`/`ASK_MAX_MS` hardcodowane bez override z env — plan zakładał mitygację limitu Shortcuts przez env bez zmiany kodu. Fix: `Number(process.env.ASK_TIMEOUT_MS) || 55_000`.
+- P3 klastrują się wokół: testów config zależnych od ambient env runnera (VPS z `ASK_*` w env = fałszywy FAIL `npm test`), luk pokrycia przeniesionych 1:1 z executora (nie-ENOENT w `readOauthToken`, memoizacja `where claude`) i kolokacji (testy config w webhook.test.js).
+- Ścieżka Windows `resolveClaudeBin` niewykonalna headless na Macu → Operator checklist faza 1.
+- Bookkeeping `Weryfikacja:`: 4/4 CLI PASS (284/284 testów, defaulty config exit 0). Zero E2E (faza bez UI).
 
 ## Stan po fazie 1 (U1 + U2)
 

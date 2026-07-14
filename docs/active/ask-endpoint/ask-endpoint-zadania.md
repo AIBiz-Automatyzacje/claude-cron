@@ -1,7 +1,7 @@
 # Zadania: Endpoint /ask — asystent głosowy
 
 Branch: `feature/ask-endpoint`
-Ostatnia aktualizacja: 2026-07-13
+Ostatnia aktualizacja: 2026-07-14 (po review fazy 1)
 
 Źródło definicji unitów: `docs/plans/2026-07-13-001-feat-ask-endpoint-asystent-glosowy-plan.md`
 
@@ -15,8 +15,8 @@ Ostatnia aktualizacja: 2026-07-13
 - [x] Test: brak pliku OAuth (ENOENT) → spawn bez tokenu, bez wyjątku
 - [x] Test: spawn z override binarki `node` + skrypt tmp zwraca stdout i kod wyjścia
 - [x] Test: argumenty CLI przechodzą do procesu bez modyfikacji (echo argv w skrypcie testowym)
-- [ ] Weryfikacja: `npm test` przechodzi w całości — w tym istniejące `lib/executor.test.js` i `lib/scheduler.test.js` bez zmian asercji
-- [ ] Weryfikacja: `lib/claude-spawn.test.js` pokrywa scenariusze powyżej i przechodzi
+- [x] Weryfikacja: `npm test` przechodzi w całości — w tym istniejące `lib/executor.test.js` i `lib/scheduler.test.js` bez zmian asercji
+- [x] Weryfikacja: `lib/claude-spawn.test.js` pokrywa scenariusze powyżej i przechodzi
 
 ## Unit 2: Konfiguracja `ASK_*` i matcher tokenu (Delegate: feature-builder-data)
 
@@ -24,8 +24,21 @@ Ostatnia aktualizacja: 2026-07-13
 - [x] Zmodyfikuj `lib/webhook.js`: `ASK_URL_PATTERN` + `matchAskToken(url)` bliźniacze do `matchWebhookToken`
 - [x] Test: `matchAskToken('/ask/abc123?x=1')` → `'abc123'`; `/askk/…`, `/ask/`, nie-string → `null` (happy + error path) — w `lib/webhook.test.js`
 - [x] Test: defaulty config — `ASK_ENABLED` false bez env, `ASK_TIMEOUT_MS` 55000, `ASK_MODEL` 'sonnet'
-- [ ] Weryfikacja: `npm test` przechodzi; `lib/webhook.test.js` pokrywa nowy matcher
-- [ ] Weryfikacja: `node -e "const c=require('./lib/config'); process.exit(c.ASK_ENABLED===false && c.ASK_TIMEOUT_MS===55000 ? 0 : 1)"` kończy się kodem 0
+- [x] Weryfikacja: `npm test` przechodzi; `lib/webhook.test.js` pokrywa nowy matcher
+- [x] Weryfikacja: `node -e "const c=require('./lib/config'); process.exit(c.ASK_ENABLED===false && c.ASK_TIMEOUT_MS===55000 ? 0 : 1)"` kończy się kodem 0
+
+## Do poprawy po review fazy 1
+
+Pełny raport: `docs/active/ask-endpoint/review-faza-1.md` (0× P1, 2× P2, 9× P3, 1× OPERATOR — gate: ZASTRZEŻENIA).
+
+- [x] 🟠 [P2] **lib/claude-spawn.js:65** — Fallback `shell:true` w `resolveClaudeBin` (Windows, gdy `where claude` pada): Node przy `shell:true` NIE escapuje args, więc metaznaki cmd.exe w argumentach wykonują się jako komendy; args zawierają treść atakującego (dziś `webhook_payload` z publicznego `/webhook/:token`, w Unit 4 tekst z publicznego `/ask`). Fix: przy padzie `where` failować run z czytelnym błędem zamiast `shell:true`.
+- [x] 🟠 [P2] **lib/config.js:51** — `ASK_TIMEOUT_MS` (55000) i `ASK_MAX_MS` (600000) hardcodowane bez override z env, a plan jawnie zakłada korektę przez env (R6, sekcja Ryzyka, Operator checklist „obniżyć ASK_TIMEOUT_MS w env bez zmiany kodu"). Fix: `Number(process.env.ASK_TIMEOUT_MS) || 55_000` (analogicznie `ASK_MAX_MS`). *(niezweryfikowany adversarially — 0 głosów sceptyków)*
+
+P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): log `SPAWN:` w executor.js:96 kłamie o resolved binarce; testy defaultów `ASK_*` w webhook.test.js zależą od ambient env runnera i łamią kolokację (→ config.test.js); brak memoizacji `execSync('where claude')` per spawn; martwy eksport `OAUTH_TOKEN_FILE`; brak testu happy path `ASK_ENABLED='1'` → true; `matchAskToken` bez wariantów „token bez query" i „nielegalny znak"; nieprzetestowana gałąź nie-ENOENT w `readOauthToken`.
+
+## Operator checklist faza 1
+
+- [ ] Operator: Ścieżka Windows w `resolveClaudeBin` (`lib/claude-spawn.js:57` — resolve przez `where claude`, fallback gdy `where` nie znajdzie binarki) jest niewykonalna do weryfikacji headless na Macu (`IS_WIN=false`, gałąź martwa w testach; override binarki ją omija) — Operator action: przy najbliższym teście instalacji Windows (install.ps1/Pester lub ręczny smoke) uruchomić job na maszynie Windows i potwierdzić, że spawn CLI `claude` działa oraz że log pokazuje realnie uruchomioną binarkę.
 
 ## Unit 3: `lib/ask.js` — bramki wejścia i teczka (Delegate: feature-builder-data)
 
