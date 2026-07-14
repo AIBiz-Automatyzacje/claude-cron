@@ -1,7 +1,15 @@
 # Kontekst: Endpoint /ask — asystent głosowy
 
 Branch: `feature/ask-endpoint`
-Ostatnia aktualizacja: 2026-07-14 (faza 2 wykonana — U3 + U4)
+Ostatnia aktualizacja: 2026-07-14 (faza 3 wykonana — U5 + U6)
+
+## Stan po fazie 3 (U5 + U6)
+
+- **U5 — endpoint HTTP**: `server.js` — handler `handleAsk` (opt-in `ASK_ENABLED` → 403; nie-POST → 405; 403 bez szczegółów dla intruzów; odmowy „dla człowieka" i sukces jako 200 `text/plain; charset=utf-8` przez helper `plainText`), własny `readTextBody` (surowy tekst — `parseBody` zawsze JSON-uje), puste body → 200 „Nic nie usłyszałem" ze zwrotem OBU rezerwacji z `admitRequest`. Match `matchAskToken` wpięty dokładnie MIĘDZY webhookiem a guardem XFF z polskim komentarzem o kontrakcie kolejności (webhook → ask → guard XFF → api/static). Etykieta triggera `ask` („Asystent", ikona ⌾) w `public/enum-map.js` + test.
+- **U6 — reaper**: `db.reapOrphanedRuns()` zwraca listę zebranych `{id, job_id}` (SELECT przed UPDATE; normalizacja null-prototype wierszy node:sqlite), semantyka logu startowego dla zwykłych jobów bez zmian. `lib/ask.js`: `notifyInterruptedAskRuns(reapedRuns)` — lookup teczki po `name` BEZ tworzenia (reaper nie seeduje teczki na czystej instalacji), jedno ❌ „przerwane przez restart serwera — poproś jeszcze raz" per przerwany run teczki; wspólny szew wysyłki `sendAskNotification` (fire-and-forget, pad kanału tylko do logu) wydzielony z `notifyAskOutcome`. `notifyRunOutcome`/`isFinalFailure` nietknięte — kontrakt „killed milczy" dla zwykłych jobów zachowany.
+- **Odchylenie od sekcji Pliki planu (U5)**: zmodyfikowany dodatkowo `lib/config.js` — env seamy `CLAUDE_CRON_CLAUDE_BIN` (plan wymaga override binarki przez env przy spawnie serwera; mechanizm nie istniał) i `CLAUDE_CRON_DB_PATH` (izolacja bazy — test HTTP pisze joby/runy i bez seamu zaśmiecałby realną `data/claude-cron.db` usera przy każdym `npm test`).
+- Testy: `lib/ask.http.test.js` (8 testów na ŻYWYM procesie serwera, wzorzec `server.env.test.js` — dwa serwery: enabled/disabled, atrapa CLI różnicowana treścią promptu; skip na Windows jak w `lib/ask.test.js`). Scenariusz „trzy przypadki 403" pokryty w dwóch testach: brak `X-Secret` osobno; zły sekret + zły token razem z `deepEqual` na identyczność body (nierozróżnialność dla intruza). Test szwu ask+reaper ×3 w `lib/ask.test.js` (teczka → killed + jedno ❌; zwykły job → cisza mimo włączonych flag; brak osieroconych → no-op), zwrotka reapera ×3 w `lib/db.test.js`, etykieta w `public/enum-map.test.js`.
+- Cały suite: **332/332 PASS** (było 318 — +14 nowych). Audyt error-handlingu diffu: zero pustych catchy (`.catch(logNotifyError)` loguje), logi `[ask]`/`[reaper]` przez console = wymóg planu i konwencja repo (rozstrzygnięte w audycie fazy 2).
 
 ## Stan po fazie 2 (U3 + U4)
 
@@ -11,6 +19,16 @@ Ostatnia aktualizacja: 2026-07-14 (faza 2 wykonana — U3 + U4)
 - Seam kanałów: `sendPlain(text)` w `lib/discord.js` i `lib/telegram.js` (rozstrzygnięcie kwestii odroczonej — bez parametru `job`, ask sam składa nagłówek ✅/❌); surowy tekst przez `smartSplit`, bez embedów/parse_mode/`extractResult`, `resolveNotifyConfig` w czasie wysyłki; testy chunkowania i braku konfiguracji w testach kanałów.
 - Testy: `lib/ask.test.js` (26 testów — bramki z wstrzykiwanym zegarem i configiem, spawn realny przez atrapę CLI z shebangiem `#!/usr/bin/env node` + `setClaudeBin`; shebang wymaga POSIX → skip na Windows z jawnym powodem; mocki tylko na kanałach) + po 2 testy `sendPlain` w `lib/discord.test.js`/`lib/telegram.test.js`. Hak testowy `onSettled` w `executeAsk` (DI, wzorzec wstrzykiwanego zegara) — deterministyczne czekanie na close odczepionego procesu zamiast sleep-pollingu.
 - Cały suite: **318/318 PASS** (było 284 — +34 nowe). Audyt error-handlingu: logi `[ask]` przez console to wymóg planu i konwencja repo (brak pino/Sentry, zero nowych zależności); puste catche tylko wokół `kill`/`taskkill` (wzorzec executora, wyścig ESRCH).
+
+## Review fazy 2 (2026-07-14)
+
+Multi-agent review + adversarial verify. Raport: `review-faza-2.md`. Gate: **⚠️ ZASTRZEŻENIA** (0× P1, 1× P2, 14× P3, 1× OPERATOR). Kluczowe wnioski:
+
+- **P2 #1**: wyciek slotu tła — `settle()` zwalnia slot tylko na `close`, a `killProcessTree` na Unix zabija tylko bezpośrednie dziecko; wnuk CLI trzymający pipe stdout/stderr blokuje `close` na zawsze → 3 zdarzenia = permanentny „⏳ Mam pełne ręce" (DoS `/ask` do restartu). Fix: dodatkowy `proc.on('exit', ...)` → `settle` (guard `settled` już chroni przed podwójnym zwolnieniem).
+- P3 klastrują się wokół: rozmiaru/SRP pliku (335 linii, naturalny split ask-gates.js + ask.js najtańszy przed Unit 5), duplikacji z executorem (`truncateTail`, kill drzewa — wersje już się rozjeżdżają), nieudokumentowanych trade-offów bezpieczeństwa (403 poza rate limitem, leak długości sekretu timingiem) i luk pokrycia (sync-fail exit≠0, ✅ na obu kanałach naraz, gałąź obcinania >50KB).
+- Zgodność ze spec: jedno odchylenie literalne — treść `TEXT_DETACHED` inna niż cytat R5/konspektu (sens zachowany, P3).
+- Gałąź Windows (`taskkill`, skip testów spawnu na win32) niewykonalna headless na Macu → Operator checklist faza 2.
+- Bookkeeping `Weryfikacja:`: 2/2 CLI PASS (`npm test` 318/318, `lib/ask.test.js` 26/26). Zero E2E (faza bez UI — endpoint HTTP dopiero w U5).
 
 ## Review fazy 1 (2026-07-14)
 

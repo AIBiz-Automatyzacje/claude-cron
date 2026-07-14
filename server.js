@@ -3,7 +3,8 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { PORT, PUBLIC_DIR, VPS_API_URL, WEBHOOK_ENABLED, WEBHOOK_BASE_URL, MAINTENANCE_WINDOW } = require('./lib/config');
+const { PORT, PUBLIC_DIR, VPS_API_URL, WEBHOOK_ENABLED, WEBHOOK_BASE_URL, MAINTENANCE_WINDOW, ASK_ENABLED } = require('./lib/config');
+const ask = require('./lib/ask');
 const db = require('./lib/db');
 const computeNextRun = require('./lib/next-run');
 const scheduler = require('./lib/scheduler');
@@ -11,7 +12,7 @@ const executor = require('./lib/executor');
 const skills = require('./lib/skills');
 const platform = require('./lib/platform');
 const keepAwake = require('./lib/keep-awake');
-const { matchWebhookToken } = require('./lib/webhook');
+const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
 const { pushNotifySettings, buildPushPayload } = require('./lib/notify-push');
 
@@ -415,6 +416,56 @@ async function handleWebhook(req, res, token) {
   return json(res, { ok: true, run_id: run.id, job_name: job.name });
 }
 
+// === Ask handler (asystent głosowy) ===
+
+// Surowe body text/plain — parseBody się nie nadaje (zawsze JSON.parse i cicho {}),
+// a pytanie z dyktowania to goły tekst.
+function readTextBody(req) {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => resolve(body));
+  });
+}
+
+// Odpowiedzi „dla człowieka" ZAWSZE 200 text/plain — Shortcuts gubi body przy
+// kodach błędów (R2). Kody 403/405 wyłącznie dla intruzów; helpery json/error
+// zostają nietknięte dla API.
+function plainText(res, text) {
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end(text);
+}
+
+const TEXT_EMPTY_QUESTION = 'Nic nie usłyszałem — powtórz pytanie';
+
+async function handleAsk(req, res, token) {
+  // Opt-in: bez jawnego ASK_ENABLED=1 endpoint nie istnieje dla świata
+  if (!ASK_ENABLED) {
+    return error(res, 'Forbidden', 403);
+  }
+  if (req.method !== 'POST') {
+    return error(res, 'Method not allowed', 405);
+  }
+  // Body czytamy PRZED bramkami (stream i tak trzeba skonsumować), ale odpowiedź
+  // na puste body dopiero PO autoryzacji — intruz bez sekretu dostaje zawsze 403.
+  const question = (await readTextBody(req)).trim();
+  const decision = ask.admitRequest({ token, secret: req.headers['x-secret'] });
+  if (!decision.allowed) {
+    // 403 bez szczegółów — nie zdradzamy, czy padł token czy sekret;
+    // odmowy „dla człowieka" (rate limit / zajętość) to 200 z tekstem ⏳.
+    if (decision.status === 403) return error(res, 'Forbidden', 403);
+    return plainText(res, decision.text);
+  }
+  if (!question) {
+    // Przyjęty, ale nie ma o co pytać — oddaj OBIE rezerwacje z admitRequest.
+    ask.releaseSyncLock();
+    ask.releaseBackgroundSlot();
+    return plainText(res, TEXT_EMPTY_QUESTION);
+  }
+  const result = await ask.executeAsk(question);
+  return plainText(res, result.text);
+}
+
 // === Server ===
 
 const server = http.createServer(async (req, res) => {
@@ -433,6 +484,16 @@ const server = http.createServer(async (req, res) => {
     const webhookToken = matchWebhookToken(req.url);
     if (webhookToken) {
       return await handleWebhook(req, res, webhookToken);
+    }
+
+    // Ask endpoint: /ask/:token — publiczny (dostępny przez Funnel) jak webhook.
+    // KONTRAKT KOLEJNOŚCI matcherów: webhook → ask → guard XFF → api/static.
+    // Ask MUSI stać PRZED guardem X-Forwarded-For (inaczej requesty z Funnela
+    // dostają 403 i endpoint głosowy jest martwy), a guard MUSI zostać przed
+    // api/static (inaczej dashboard robi się publiczny).
+    const askToken = matchAskToken(req.url);
+    if (askToken) {
+      return await handleAsk(req, res, askToken);
     }
 
     // Block non-webhook requests from external sources (Tailscale Funnel)
@@ -463,8 +524,13 @@ const conn = db.getDb();
 db.assertDbReturnsNumbers(conn);
 
 // Reaper: osierocone runy 'running' z przerwanego procesu → 'killed' (gasi wiszący kill-bar)
-const reaped = db.reapOrphanedRuns();
-if (reaped > 0) console.log(`[reaper] Oznaczono ${reaped} przerwany(ch) run(ów) jako zatrzymane`);
+const reapedRuns = db.reapOrphanedRuns();
+if (reapedRuns.length > 0) console.log(`[reaper] Oznaczono ${reapedRuns.length} przerwany(ch) run(ów) jako zatrzymane`);
+
+// Runy teczki ask wśród zebranych → ❌ „przerwane przez restart" na komunikator (R7 „nigdy
+// cisza"); zwykłe joby dalej tylko log powyżej. Wysyłka fire-and-forget wewnątrz modułu ask
+// (pad kanału nie blokuje startu), kontrakt notifyRunOutcome/„killed milczy" nietknięty.
+ask.notifyInterruptedAskRuns(reapedRuns);
 
 // Start scheduler
 scheduler.start();

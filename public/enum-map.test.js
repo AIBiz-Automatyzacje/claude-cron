@@ -50,6 +50,12 @@ test('mapTrigger(webhook) → Webhook', () => {
   assert.equal(mapTrigger('webhook').label, 'Webhook');
 });
 
+test('mapTrigger(ask) → Asystent z niepustą ikoną', () => {
+  const result = mapTrigger('ask');
+  assert.equal(result.label, 'Asystent');
+  assert.notEqual(result.ico, '', 'ico nie może być puste');
+});
+
 test('mapTrigger(nieznane) → fallback Harmonogram z niepustą ikoną', () => {
   const result = mapTrigger('cokolwiek-nieznane');
   assert.equal(result.label, 'Harmonogram');

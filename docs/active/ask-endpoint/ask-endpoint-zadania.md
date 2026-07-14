@@ -1,7 +1,7 @@
 # Zadania: Endpoint /ask — asystent głosowy
 
 Branch: `feature/ask-endpoint`
-Ostatnia aktualizacja: 2026-07-14 (faza 2 wykonana — U3 + U4)
+Ostatnia aktualizacja: 2026-07-14 (faza 3 wykonana — U5 + U6)
 
 Źródło definicji unitów: `docs/plans/2026-07-13-001-feat-ask-endpoint-asystent-glosowy-plan.md`
 
@@ -89,29 +89,29 @@ P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): plik 335 linii 
 
 ## Unit 5: Endpoint `POST /ask/:token` w `server.js` + etykieta triggera (Delegate: feature-builder-data)
 
-- [ ] Match `matchAskToken(req.url)` w `server.js` dokładnie MIĘDZY blokiem webhooka a guardem `X-Forwarded-For` + polski komentarz o kontrakcie kolejności
-- [ ] Handler: `ASK_ENABLED` false → 403; nie-POST → 405; zły token/sekret → 403 bez szczegółów
-- [ ] Reader surowego body text/plain (NIE `parseBody`); puste body → 200 z przyjaznym tekstem
-- [ ] Odpowiedzi sukcesu i wszystkie ⏳ jako 200 `Content-Type: text/plain; charset=utf-8`
-- [ ] Etykieta triggera `ask` w `public/enum-map.js` (+ test jeśli enum-map ma plik testowy)
-- [ ] Stwórz `lib/ask.http.test.js` (wzorzec `server.env.test.js`: spawn serwera na efemerycznym porcie + fetch)
-- [ ] Test: POST bez `X-Secret` / ze złym sekretem / ze złym tokenem → 403 (trzy przypadki, body bez szczegółów)
-- [ ] Test: `ASK_ENABLED` niewłączony → 403 nawet z poprawnymi sekretami
-- [ ] Test: GET na `/ask/<token>` → 405
-- [ ] Test: happy path E2E po HTTP (env: override binarki na atrapę, testowe `ASK_TOKEN`/`ASK_SECRET`) → 200 text/plain, body = stdout atrapy; run teczki widoczny przez `GET /api/runs`
-- [ ] Test: request z `X-Forwarded-For` na `/ask/<token>` przechodzi, a na `/api/jobs` dalej 403 (guard nienaruszony)
-- [ ] Test: drugi równoległy POST → 200 z tekstem „jeszcze myślę" (asercja na treść)
+- [x] Match `matchAskToken(req.url)` w `server.js` dokładnie MIĘDZY blokiem webhooka a guardem `X-Forwarded-For` + polski komentarz o kontrakcie kolejności
+- [x] Handler: `ASK_ENABLED` false → 403; nie-POST → 405; zły token/sekret → 403 bez szczegółów
+- [x] Reader surowego body text/plain (NIE `parseBody`); puste body → 200 z przyjaznym tekstem
+- [x] Odpowiedzi sukcesu i wszystkie ⏳ jako 200 `Content-Type: text/plain; charset=utf-8`
+- [x] Etykieta triggera `ask` w `public/enum-map.js` (+ test jeśli enum-map ma plik testowy)
+- [x] Stwórz `lib/ask.http.test.js` (wzorzec `server.env.test.js`: spawn serwera na efemerycznym porcie + fetch)
+- [x] Test: POST bez `X-Secret` / ze złym sekretem / ze złym tokenem → 403 (trzy przypadki, body bez szczegółów)
+- [x] Test: `ASK_ENABLED` niewłączony → 403 nawet z poprawnymi sekretami
+- [x] Test: GET na `/ask/<token>` → 405
+- [x] Test: happy path E2E po HTTP (env: override binarki na atrapę, testowe `ASK_TOKEN`/`ASK_SECRET`) → 200 text/plain, body = stdout atrapy; run teczki widoczny przez `GET /api/runs`
+- [x] Test: request z `X-Forwarded-For` na `/ask/<token>` przechodzi, a na `/api/jobs` dalej 403 (guard nienaruszony)
+- [x] Test: drugi równoległy POST → 200 z tekstem „jeszcze myślę" (asercja na treść)
 - [ ] Weryfikacja: `npm test` przechodzi; `lib/ask.http.test.js` pokrywa scenariusze Unit 5 na żywym procesie serwera
 - [ ] Weryfikacja: smoke curlem (konspekt E) zwraca text/plain — pokryty przez test HTTP happy path
 
 ## Unit 6: Reaper — ❌ „przerwane przez restart" dla runów teczki + test szwu (Delegate: feature-builder-data)
 
-- [ ] Zmodyfikuj `lib/db.js`: `reapOrphanedRuns` zwraca listę zebranych runów `{id, job_id}` (SELECT przed UPDATE albo RETURNING); semantyka logu startowego dla zwykłych jobów bez zmian
-- [ ] Start serwera: runy teczki wśród zebranych → ❌ „przerwane przez restart serwera — poproś jeszcze raz" wg flag teczki (fire-and-forget z `.catch` — pad powiadomienia nie blokuje startu)
-- [ ] `notifyRunOutcome`/`isFinalFailure` NIETKNIĘTE (kontrakt „killed milczy" dla zwykłych jobów)
-- [ ] Test: `reapOrphanedRuns` zwraca listę z `job_id`; brak osieroconych → pusta lista (w `lib/db.test.js`)
-- [ ] Test: test szwu ask+reaper na `:memory:` — run teczki `running` (symulacja odczepionego sprzed restartu) → reap + logika startowa → run `killed`, dokładnie jedno ❌ z tekstem o restarcie (w `lib/ask.test.js`)
-- [ ] Test: osierocony run ZWYKŁEGO joba → reap bez żadnego powiadomienia
+- [x] Zmodyfikuj `lib/db.js`: `reapOrphanedRuns` zwraca listę zebranych runów `{id, job_id}` (SELECT przed UPDATE albo RETURNING); semantyka logu startowego dla zwykłych jobów bez zmian
+- [x] Start serwera: runy teczki wśród zebranych → ❌ „przerwane przez restart serwera — poproś jeszcze raz" wg flag teczki (fire-and-forget z `.catch` — pad powiadomienia nie blokuje startu)
+- [x] `notifyRunOutcome`/`isFinalFailure` NIETKNIĘTE (kontrakt „killed milczy" dla zwykłych jobów)
+- [x] Test: `reapOrphanedRuns` zwraca listę z `job_id`; brak osieroconych → pusta lista (w `lib/db.test.js`)
+- [x] Test: test szwu ask+reaper na `:memory:` — run teczki `running` (symulacja odczepionego sprzed restartu) → reap + logika startowa → run `killed`, dokładnie jedno ❌ z tekstem o restarcie (w `lib/ask.test.js`)
+- [x] Test: osierocony run ZWYKŁEGO joba → reap bez żadnego powiadomienia
 - [ ] Weryfikacja: `npm test` przechodzi; test szwu w `lib/ask.test.js` i zwrotka reapera w `lib/db.test.js` pokrywają scenariusze Unit 6
 
 ## Operator checklist (poza automatyzacją — odznacza człowiek)

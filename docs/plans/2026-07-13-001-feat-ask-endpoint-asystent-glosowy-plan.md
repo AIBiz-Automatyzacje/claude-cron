@@ -277,7 +277,7 @@ sequenceDiagram
 **Weryfikacja:**
 - `npm test` przechodzi; scenariusze powyżej w `lib/ask.test.js` z mockami wyłącznie na kanałach (`t.mock.method(discord/telegram, …)`), spawn realny przez `node` + skrypty tmp.
 
-- [ ] **Unit 5: Endpoint `POST /ask/:token` w `server.js` + etykieta triggera**
+- [x] **Unit 5: Endpoint `POST /ask/:token` w `server.js` + etykieta triggera**
 
 **Cel:** Wpiąć ask w router HTTP: surowe body text/plain, pozycja przed guardem `X-Forwarded-For`, kody dla intruzów, odpowiedzi text/plain; etykieta `ask` w UI.
 
@@ -317,7 +317,7 @@ sequenceDiagram
 - `npm test` przechodzi; `lib/ask.http.test.js` pokrywa scenariusze powyżej na żywym procesie serwera.
 - Lokalny smoke curlem (jak w konspekcie E) zwraca odpowiedź text/plain — pokryty przez test HTTP happy path.
 
-- [ ] **Unit 6: Reaper — ❌ „przerwane przez restart" dla runów teczki + test szwu**
+- [x] **Unit 6: Reaper — ❌ „przerwane przez restart" dla runów teczki + test szwu**
 
 **Cel:** Domknąć gwarancję „nigdy cisza": po restarcie serwera osierocone runy teczki (odczepione zadania przerwane restartem) dostają ❌ na komunikator; zwykłe runy `killed` dalej milczą.
 

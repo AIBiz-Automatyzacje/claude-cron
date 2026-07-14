@@ -21,6 +21,7 @@
     scheduled: { ico: '◷', label: 'Harmonogram' },
     manual: { ico: '⚇', label: 'Ręcznie' },
     webhook: { ico: '⬡', label: 'Webhook' },
+    ask: { ico: '⌾', label: 'Asystent' },
     retry: { ico: '◷', label: 'Harmonogram' },
   };
 
