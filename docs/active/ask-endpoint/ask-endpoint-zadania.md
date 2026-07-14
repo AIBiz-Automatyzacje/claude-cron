@@ -54,7 +54,7 @@ P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): log `SPAWN:` w 
 - [x] Test: drugi równoległy sync → tekst „jeszcze myślę"; po zwolnieniu locka kolejny przechodzi
 - [x] Test: 3 zajęte sloty tła → „mam pełne ręce" BEZ spawnu; zwolnienie slotu odblokowuje
 - [x] Test: `getOrCreateAskJob` × 2 → jeden job; ręczna zmiana `telegram_notify=1` między wywołaniami NIE jest nadpisana
-- [ ] Weryfikacja: `npm test` przechodzi; `lib/ask.test.js` pokrywa wszystkie scenariusze Unit 3 z asercjami na treść tekstów
+- [x] Weryfikacja: `npm test` przechodzi; `lib/ask.test.js` pokrywa wszystkie scenariusze Unit 3 z asercjami na treść tekstów
 
 ## Unit 4: `lib/ask.js` — wykonanie: spawn, odczepienie, powiadomienia (Delegate: feature-builder-data)
 
@@ -73,7 +73,19 @@ P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): log `SPAWN:` w 
 - [x] Test: przekroczenie `ASK_MAX_MS` (testowo małe) → proces ubity, run `timeout`, dokładnie jedno ❌
 - [x] Test: close po oznaczeniu runu `killed` w DB (symulacja reapera/usera) → brak nadpisania statusu, brak podwójnego powiadomienia
 - [x] Test: flagi teczki oba 0 → zadanie odczepione loguje warning zamiast cicho zgubić wynik
-- [ ] Weryfikacja: `npm test` przechodzi; scenariusze Unit 4 w `lib/ask.test.js` z mockami wyłącznie na kanałach, spawn realny przez `node` + skrypty tmp
+- [x] Weryfikacja: `npm test` przechodzi; scenariusze Unit 4 w `lib/ask.test.js` z mockami wyłącznie na kanałach, spawn realny przez `node` + skrypty tmp
+
+## Do poprawy po review fazy 2
+
+Pełny raport: `docs/active/ask-endpoint/review-faza-2.md` (0× P1, 1× P2, 14× P3, 1× OPERATOR — gate: ZASTRZEŻENIA).
+
+- [x] 🟠 [P2] **lib/ask.js:296** — Slot tła zwalniany wyłącznie w `settle()` na zdarzeniu `close`, a `killProcessTree` na Unix (lib/ask.js:161-168) zabija tylko bezpośrednie dziecko (SIGTERM/SIGKILL do `proc.pid`, bez grupy procesów). Wnuk CLI dziedziczący stdout/stderr trzyma pipe po SIGKILL rodzica, więc `close` nigdy nie nadchodzi i slot wycieka na zawsze — 3 takie zdarzenia = permanentne „⏳ Mam pełne ręce" (DoS /ask do restartu serwera). Fix: dodatkowo `proc.on('exit', ...)` wołające `settle` — guard `settled` już chroni przed podwójnym zwolnieniem.
+
+P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): plik 335 linii → split ask-gates.js + ask.js najtańszy przed Unit 5; ścieżka 403 nielimitowana (brute-force poza rate limitem) — udokumentować trade-off lub luźny licznik 403; `verifySecret` zdradza timingiem długość sekretu (porównanie skrótów SHA-256 zamiast guardu długości); `getOrCreateAskJob` ładuje pełną kolekcję jobów per zapytanie; nieucięty stdout do `sendPlain` (setki POST-ów przy dużym outpucie); `truncateTail` = duplikacja `truncate()` z executora; `isRateLimited` mutuje stan mimo prefixu `is*`; puste `catch {}` w `killProcessTree`; duplikacja literału komunikatu ASK_MAX_MS (linie 282/308); treść `TEXT_DETACHED` niezgodna z literalnym cytatem spec (R5/konspekt); `killProcessTree` duplikuje kill drzewa executora (wersje już się rozjeżdżają); brak testu sync-fail (close z exit≠0 przed timeoutem); brak testu ✅ na obu kanałach naraz przy odczepieniu; brak pokrycia gałęzi obcinania `truncateTail` >50KB.
+
+## Operator checklist faza 2
+
+- [ ] Operator: Gałąź Windows w `lib/ask.js` (`killProcessTree` przez `taskkill /PID /T /F`, lib/ask.js:162) oraz pełny cykl `executeAsk` są niewykonalne do weryfikacji headless na macOS — wszystkie testy spawnu w `lib/ask.test.js` mają skip na win32 (atrapa CLI przez shebang wymaga POSIX) — Operator action: jeśli instalacja Windows ma używać `/ask`, przed deployem uruchomić `node --test lib/ask.test.js` (i pełny `npm test`) na realnej maszynie Windows i potwierdzić, że kill drzewa przez taskkill oraz cykl sync/odczepienie/timeout działają.
 
 ## Unit 5: Endpoint `POST /ask/:token` w `server.js` + etykieta triggera (Delegate: feature-builder-data)
 
