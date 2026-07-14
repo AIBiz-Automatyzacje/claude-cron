@@ -418,13 +418,43 @@ async function handleWebhook(req, res, token) {
 
 // === Ask handler (asystent głosowy) ===
 
+// Cap na body /ask: pytanie głosowe to pojedyncze KB, 64 KB to wielokrotny zapas.
+// Bez limitu nieuwierzytelniony intruz (endpoint publiczny przez Funnel, body czytane
+// PRZED autoryzacją) streamowałby setki MB per połączenie → OOM całego schedulera.
+const ASK_MAX_BODY_BYTES = 64 * 1024;
+
 // Surowe body text/plain — parseBody się nie nadaje (zawsze JSON.parse i cicho {}),
-// a pytanie z dyktowania to goły tekst.
-function readTextBody(req) {
+// a pytanie z dyktowania to goły tekst. Zwraca string albo null (limit przekroczony /
+// zerwany stream) — caller odpowiada odmową i zamyka połączenie.
+function readTextBody(req, maxBytes) {
   return new Promise((resolve) => {
     let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', () => resolve(body));
+    let receivedBytes = 0;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    // setEncoding: string_decoder buforuje niedokończoną sekwencję UTF-8 na granicy
+    // chunków — bez tego znak wielobajtowy rozcięty między chunki (granice za proxy
+    // Funnel są poza kontrolą) daje U+FFFD w środku pytania („pogod��").
+    req.setEncoding('utf8');
+    req.on('data', (chunk) => {
+      receivedBytes += Buffer.byteLength(chunk);
+      if (receivedBytes > maxBytes) {
+        // Stop akumulacji: pause() wstrzymuje 'data', backpressure trzyma resztę
+        // w buforach socketu (pamięć ograniczona) do czasu destroy przez callera.
+        req.pause();
+        finish(null);
+        return;
+      }
+      body += chunk;
+    });
+    req.on('end', () => finish(body));
+    // Abort klienta w połowie body: bez listenera 'error' = uncaughtException,
+    // a 'end' nigdy nie nadejdzie — promise MUSI się rozstrzygnąć.
+    req.on('error', () => finish(null));
   });
 }
 
@@ -448,7 +478,15 @@ async function handleAsk(req, res, token) {
   }
   // Body czytamy PRZED bramkami (stream i tak trzeba skonsumować), ale odpowiedź
   // na puste body dopiero PO autoryzacji — intruz bez sekretu dostaje zawsze 403.
-  const question = (await readTextBody(req)).trim();
+  const rawBody = await readTextBody(req, ASK_MAX_BODY_BYTES);
+  if (rawBody === null) {
+    // Limit przekroczony albo zerwany stream — odmowa PRZED bramkami (żadna
+    // rezerwacja admitRequest jeszcze nie istnieje). Destroy dopiero po flushu
+    // odpowiedzi ('finish'), inaczej Node dumpowałby resztę streama w nieskończoność.
+    res.once('finish', () => req.destroy());
+    return error(res, 'Payload too large', 413);
+  }
+  const question = rawBody.trim();
   const decision = ask.admitRequest({ token, secret: req.headers['x-secret'] });
   if (!decision.allowed) {
     // 403 bez szczegółów — nie zdradzamy, czy padł token czy sekret;

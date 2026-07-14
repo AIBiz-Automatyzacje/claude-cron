@@ -101,8 +101,8 @@ P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): plik 335 linii 
 - [x] Test: happy path E2E po HTTP (env: override binarki na atrapę, testowe `ASK_TOKEN`/`ASK_SECRET`) → 200 text/plain, body = stdout atrapy; run teczki widoczny przez `GET /api/runs`
 - [x] Test: request z `X-Forwarded-For` na `/ask/<token>` przechodzi, a na `/api/jobs` dalej 403 (guard nienaruszony)
 - [x] Test: drugi równoległy POST → 200 z tekstem „jeszcze myślę" (asercja na treść)
-- [ ] Weryfikacja: `npm test` przechodzi; `lib/ask.http.test.js` pokrywa scenariusze Unit 5 na żywym procesie serwera
-- [ ] Weryfikacja: smoke curlem (konspekt E) zwraca text/plain — pokryty przez test HTTP happy path
+- [x] Weryfikacja: `npm test` przechodzi; `lib/ask.http.test.js` pokrywa scenariusze Unit 5 na żywym procesie serwera *(review fazy 3: 332 pass, 0 fail)*
+- [x] Weryfikacja: smoke curlem (konspekt E) zwraca text/plain — pokryty przez test HTTP happy path *(review fazy 3: wykonany też realny smoke curlem na żywym serwerze z env-override — 200 `text/plain; charset=utf-8` przy poprawnym sekrecie, 403 bez sekretu)*
 
 ## Unit 6: Reaper — ❌ „przerwane przez restart" dla runów teczki + test szwu (Delegate: feature-builder-data)
 
@@ -112,7 +112,22 @@ P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): plik 335 linii 
 - [x] Test: `reapOrphanedRuns` zwraca listę z `job_id`; brak osieroconych → pusta lista (w `lib/db.test.js`)
 - [x] Test: test szwu ask+reaper na `:memory:` — run teczki `running` (symulacja odczepionego sprzed restartu) → reap + logika startowa → run `killed`, dokładnie jedno ❌ z tekstem o restarcie (w `lib/ask.test.js`)
 - [x] Test: osierocony run ZWYKŁEGO joba → reap bez żadnego powiadomienia
-- [ ] Weryfikacja: `npm test` przechodzi; test szwu w `lib/ask.test.js` i zwrotka reapera w `lib/db.test.js` pokrywają scenariusze Unit 6
+- [x] Weryfikacja: `npm test` przechodzi; test szwu w `lib/ask.test.js` i zwrotka reapera w `lib/db.test.js` pokrywają scenariusze Unit 6 *(review fazy 3: 332 pass, 0 fail)*
+
+## Do poprawy po review fazy 3
+
+Pełny raport: `docs/active/ask-endpoint/review-faza-3.md` (1× P1, 2× P2, 17× P3, 2× OPERATOR — gate: BLOKUJE).
+
+- [x] 🔴 [P1] **server.js:451** — `readTextBody` bez limitu rozmiaru body na publicznym endpoincie `/ask/:token`, a body czytane w całości PRZED autoryzacją. `matchAskToken` to czysty regex (przepuszcza dowolny token), endpoint stoi przed guardem `X-Forwarded-For`, więc przy `ASK_ENABLED=1` nieuwierzytelniony atakujący z internetu (Funnel) streamuje dowolnie duże body — `body += chunk` rośnie bez ograniczeń (rate limit w `admitRequest` liczy się dopiero PO pełnej konsumpcji streama, auth-fail w ogóle nie jest rate-limitowany). Kilka równoległych requestów po kilkaset MB = OOM procesu na VPS = śmierć całego schedulera. Fix: cap (np. 64 KB) — po przekroczeniu `req.destroy()` + odmowa, licznik długości zamiast konkatenacji do skutku.
+- [x] 🟠 [P2] **server.js:423** — `readTextBody` buforuje CAŁE body do stringa bez limitu i bez obsługi zdarzenia `error`/`aborted` na streamie requesta (abort klienta w połowie body = `error` bez listenera → ryzyko uncaughtException + nierozwiązana promise, `end` nigdy nie nadejdzie). Nowa instancja wzorca z `parseBody` na NOWEJ publicznej powierzchni. Fix: limit rozmiaru (np. 16 KB, powyżej destroy + 403/413) + listener `error`/`aborted` resolvujący promise (wspólny fix z P1).
+- [x] 🟠 [P2] **server.js:422** — `readTextBody` skleja chunki przez `body += chunk` (Buffer.toString() per chunk) bez `req.setEncoding('utf8')` — znak wielobajtowy UTF-8 rozcięty między chunki daje U+FFFD („pytanie o pogod��"); to główna ścieżka wejścia polskiego endpointu głosowego, a granice chunków za proxy Funnel są poza kontrolą. Fix jednoliniowy: `req.setEncoding('utf8')` przed handlerem `data`.
+
+P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): `parseBody` (server.js:41) z tą samą luką unbounded body na publicznym webhooku (pre-existing — najlepiej wspólny helper czytania body z limitem); ścieżka 403 poza rate limitem (brute-force token+sekret bez lockoutu, brak wymuszania entropii sekretów); 405 przed auth = fingerprinting `ASK_ENABLED`; wisząca Promise `readTextBody` przy zerwaniu połączenia; lookup teczki przez pełny skan `getAllJobs().find` zduplikowany w 2 miejscach (→ `findAskJob()`/`db.getJobByName`); `lib/ask.js` 385 linii i 3 odpowiedzialności (→ wydzielić `ask-notify.js`); N przerwanych runów teczki = N identycznych ❌ bez skrótu pytania; leaky abstraction pary rezerwacji w `server.js:461` (→ `ask.releaseAdmission()`); `TEXT_EMPTY_QUESTION` poza katalogiem tekstów w `lib/ask.js`; R11 „logowanie każdego wywołania" bez odmów (403/rate-limit/puste body bez śladu w konsoli); guard `!reapedRuns` na niemożliwy scenariusz; nowe env-vary `CLAUDE_CRON_DB_PATH`/`CLAUDE_CRON_CLAUDE_BIN` niedopisane do `CLAUDE.md`; brak testu granicy rozmiaru body (po fixie P1); test pustego body nie asertuje „bez tworzenia runu"; `waitForServerReady` skopiowane 1:1 z `server.env.test.js`; brak testu z wieloma przerwanymi runami teczki naraz.
+
+## Operator checklist faza 3
+
+- [ ] Operator: Happy path z PRAWDZIWĄ binarką `claude` (OAuth token z `~/.claude-cron-oauth-token`, model sonnet) oraz dostępność `/ask` przez realny Tailscale Funnel są niewykonalne headless — testy pokrywają to atrapą CLI i nagłówkiem `X-Forwarded-For` symulującym Funnel — Operator action: po deployu na VPS wykonać smoke-test curlem z innej maszyny przez Funnel (poprawny sekret → odpowiedź; bez sekretu → 403) — pokrywa się z pozycjami Operator checklist planu.
+- [ ] Operator: Granica Funnel/XFF w realnej sieci i limit czekania Shortcuts są niewykonalne headless (testy HTTP pokrywają logikę lokalnie) — Operator action: deploy na VPS z realnymi `ASK_TOKEN`/`ASK_SECRET`; test curlem z innej maszyny przez Tailscale Funnel; włączyć kanał powiadomień na jobie „Asystent głosowy" w panelu; zbudować Shortcut na Macu i zmierzyć realny limit czekania akcji „Pobierz zawartość URL" (w razie potrzeby obniżyć `ASK_TIMEOUT_MS` w env).
 
 ## Operator checklist (poza automatyzacją — odznacza człowiek)
 
