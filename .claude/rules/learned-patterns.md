@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 11 -->
+<!-- rule-count: 12 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -36,3 +36,6 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **Zmiana env po instalacji nie propaguje się do żyjących procesów — proxy 502/504, nie 503, myli na sieć**: `config.js` czyta `CLAUDE_CRON_*` raz przy starcie; hook autostartu wskrzesza serwer dziedzicząc env sesji Claude Code, a ta env terminala sprzed re-installu. Setup zapisuje nowy adres do User-scope, ale otwarte terminale/sesje trzymają stary → serwer proxuje do martwego VPS (nieistniejący IP Tailscale = blackhole = timeout 504, nie 502/503). Diagnozuj TRZEMA źródłami naraz: User-scope (`GetEnvironmentVariable(...,'User')`) vs `$env:` terminala vs kod proxy (503=brak env, 502/504=sieć/adres). „Lokalnie działa" ≠ „proxy działa" — inny proces, inne env. Fix: restart serwera z NOWO otwartego terminala (twardo: reboot).
   Source: docs/solutions/deployment-issues/2026-07-07-stale-env-vps-url-hook-respawn-serwera.md
+
+- **child_process: domykaj cykl życia na `'exit'` z karencją, nie tylko na `'close'`**: `'close'` odpala dopiero gdy zamkną się stdio-streamy dziecka; jeśli spawnowany proces ma wnuka DZIEDZICZĄCEGO `stdout`/`stderr` (np. CLI odpalające podproces), a `killProcessTree` ubija tylko rodzica, wnuk trzyma pipe i `'close'` NIE nadchodzi nigdy → zwolnienie zasobu (slot/lock/licznik) wisiące wyłącznie na `'close'` wycieka na zawsze. Trzymaj release w idempotentnym `settle()` (guard `settled` — `close`/`exit`/`error` mogą przyjść w dowolnej kombinacji), domykaj na `'exit'` (przychodzi ZAWSZE) z krótką karencją dającą `'close'` pierwszeństwo dla pełnego stdout; timer karencji z `unref()`.
+  Source: docs/solutions/runtime-errors/2026-07-14-close-nie-odpala-wnuk-dziedziczy-pipe-wyciek-slotu.md
