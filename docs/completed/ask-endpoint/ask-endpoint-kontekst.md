@@ -1,7 +1,7 @@
 # Kontekst: Endpoint /ask — asystent głosowy
 
 Branch: `feature/ask-endpoint`
-Ostatnia aktualizacja: 2026-07-14 (faza 3 wykonana — U5 + U6)
+Ostatnia aktualizacja: 2026-07-14 (review fazy 4 — Deploy i Shortcut)
 
 ## Stan po fazie 3 (U5 + U6)
 
@@ -19,6 +19,25 @@ Ostatnia aktualizacja: 2026-07-14 (faza 3 wykonana — U5 + U6)
 - Seam kanałów: `sendPlain(text)` w `lib/discord.js` i `lib/telegram.js` (rozstrzygnięcie kwestii odroczonej — bez parametru `job`, ask sam składa nagłówek ✅/❌); surowy tekst przez `smartSplit`, bez embedów/parse_mode/`extractResult`, `resolveNotifyConfig` w czasie wysyłki; testy chunkowania i braku konfiguracji w testach kanałów.
 - Testy: `lib/ask.test.js` (26 testów — bramki z wstrzykiwanym zegarem i configiem, spawn realny przez atrapę CLI z shebangiem `#!/usr/bin/env node` + `setClaudeBin`; shebang wymaga POSIX → skip na Windows z jawnym powodem; mocki tylko na kanałach) + po 2 testy `sendPlain` w `lib/discord.test.js`/`lib/telegram.test.js`. Hak testowy `onSettled` w `executeAsk` (DI, wzorzec wstrzykiwanego zegara) — deterministyczne czekanie na close odczepionego procesu zamiast sleep-pollingu.
 - Cały suite: **318/318 PASS** (było 284 — +34 nowe). Audyt error-handlingu: logi `[ask]` przez console to wymóg planu i konwencja repo (brak pino/Sentry, zero nowych zależności); puste catche tylko wokół `kill`/`taskkill` (wzorzec executora, wyścig ESRCH).
+
+## Review fazy 4 (2026-07-14)
+
+Multi-agent review + adversarial verify. Raport: `review-faza-4.md`. Gate: **⚠️ ZASTRZEŻENIA** (KOD/TEST/E2E: 0× P1, 1× P2, 3× P3; OPERATOR: 5, w tym 2× P1). Kluczowe wnioski:
+
+- **P2 [KOD]**: jedyny headless-wykonalny deliverable fazy 4 niewykonany — `CLAUDE.md` bez żadnej wzmianki o `/ask`, `lib/ask.js`, `lib/claude-spawn.js` (plan: „po implementacji dopisać do architektury i granic bezpieczeństwa"), mimo `execute=done` w stanie autopilota. Przy tej samej edycji domknąć P3-15 fazy 3 (env-vary `CLAUDE_CRON_DB_PATH`/`CLAUDE_CRON_CLAUDE_BIN`).
+- **OPERATOR 2× P1**: cała substancja fazy (deploy `/ask` na VPS, realne sekrety w env + restart daemona, przeżycie OAuth tokenu, curl przez prawdziwy Funnel z innej maszyny, kanał powiadomień na teczce) niewykonalna headless — granica auth publicznego endpointu do czasu wykonania pozostaje udowodniona tylko symulacją XFF + atrapą CLI. OPERATOR nie blokuje gate'u, ale blokuje wdrożenie.
+- P3 [KOD]: „długie losowe" sekrety bez komendy generacji (jedyna obrona ścieżki 403 poza rate limitem — dopisać `openssl rand -hex 32` ×2); `execute:'done'` dla fazy czysto operatorskiej bez zapisanej konwencji (ryzyko fałszywej archiwizacji z funkcją nigdy nie wdrożoną); niezacommitowany bookkeeping review fazy 3 w working tree.
+- Bookkeeping `Weryfikacja:`: faza 4 nie definiuje ŻADNYCH checkboxów `Weryfikacja:` (0 trafień regexem) — substancja fazy to Operator checklist. E2E: 0 passed / 0 failed / 2 skipped (Funnel + Shortcut → operator).
+
+## Review fazy 3 (2026-07-14)
+
+Multi-agent review + adversarial verify. Raport: `review-faza-3.md`. Gate: **⛔ BLOKUJE** (1× P1, 2× P2, 17× P3, 2× OPERATOR). Kluczowe wnioski:
+
+- **P1**: `readTextBody` w `server.js` czyta body bez limitu rozmiaru, w całości PRZED autoryzacją, na publicznym endpoincie (przed guardem XFF, `matchAskToken` przepuszcza dowolny token) — nieuwierzytelniony atakujący z Funnela streamuje setki MB per połączenie → OOM procesu na VPS = śmierć całego schedulera. Fix: cap (np. 64 KB) + `req.destroy()` po przekroczeniu.
+- **P2 ×2**: ten sam `readTextBody` — (a) brak listenera `error`/`aborted` (abort klienta = ryzyko uncaughtException + wisząca Promise), (b) brak `req.setEncoding('utf8')` → rozcięty między chunki znak wielobajtowy daje U+FFFD (udowodnione: „pytanie o pogod��") — krytyczne dla polskiego endpointu głosowego za proxy Funnel. Wszystkie 3 findingi zamyka jeden wspólny helper czytania body z limitem + encoding + error handling (docelowo współdzielony z pre-existing `parseBody`, który ma tę samą lukę na `/webhook/:token` — P3).
+- P3 klastrują się wokół: bezpieczeństwa defense-in-depth (403 poza rate limitem — brute-force bez lockoutu; 405 przed auth = fingerprinting `ASK_ENABLED`), duplikacji/SRP (`lib/ask.js` 385 linii → wydzielić `ask-notify.js`; lookup teczki ×2 → `findAskJob()`; `TEXT_EMPTY_QUESTION` poza katalogiem tekstów; leaky abstraction pary rezerwacji w server.js), spec (R11 bez logu odmów; N identycznych ❌ przy wielu przerwanych runach; env-vary `CLAUDE_CRON_DB_PATH`/`CLAUDE_CRON_CLAUDE_BIN` niedopisane do CLAUDE.md) i luk pokrycia (granica rozmiaru body po fixie P1, „bez tworzenia runu" przy pustym body, wiele przerwanych runów naraz).
+- Realny Funnel + prawdziwa binarka `claude` + Shortcut na Macu niewykonalne headless → Operator checklist faza 3.
+- Bookkeeping `Weryfikacja:`: 3/3 PASS (`npm test` 332/332; realny smoke curlem na żywym serwerze z env-override — 200 `text/plain; charset=utf-8`, bez sekretu 403). E2E: 0 passed / 0 failed / 2 skipped (oba → operator).
 
 ## Review fazy 2 (2026-07-14)
 
