@@ -1,7 +1,7 @@
 # Zadania: Endpoint /ask — asystent głosowy
 
 Branch: `feature/ask-endpoint`
-Ostatnia aktualizacja: 2026-07-14 (faza 3 wykonana — U5 + U6)
+Ostatnia aktualizacja: 2026-07-14 (review fazy 4 — Deploy i Shortcut)
 
 Źródło definicji unitów: `docs/plans/2026-07-13-001-feat-ask-endpoint-asystent-glosowy-plan.md`
 
@@ -136,4 +136,20 @@ P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): `parseBody` (se
 - [ ] Test curlem z innej maszyny przez Funnel (poprawny sekret → odpowiedź; bez sekretu → 403)
 - [ ] Zbudować Shortcut „Asystent" na Macu (Dyktuj → Pobierz zawartość URL → Okno dialogowe → Powiedz tekst Zosia Enhanced); zmierzyć realny limit czekania akcji „Pobierz zawartość URL", w razie potrzeby obniżyć `ASK_TIMEOUT_MS` w env
 - [ ] Wybrać hotkey (Shortcuts.app/Raycast) i tryb dyktowania (Apple vs VoiceInk)
-- [ ] Po wdrożeniu: dopisać `/ask`, `lib/ask.js`, `lib/claude-spawn.js` do `CLAUDE.md` (architektura + granice bezpieczeństwa)
+- [x] Po wdrożeniu: dopisać `/ask`, `lib/ask.js`, `lib/claude-spawn.js` do `CLAUDE.md` (architektura + granice bezpieczeństwa) *(fix po review fazy 4 — dopisane w sekcjach „Architektura backendu" i „server.js — HTTP i granice bezpieczeństwa")*
+
+## Do poprawy po review fazy 4
+
+Pełny raport: `docs/active/ask-endpoint/review-faza-4.md` (KOD/TEST/E2E: 0× P1, 1× P2, 3× P3; OPERATOR: 5 — gate: ZASTRZEŻENIA).
+
+- [x] 🟠 [P2] **CLAUDE.md** (via ask-endpoint-zadania.md:139) — jedyny headless-wykonalny deliverable fazy 4 niewykonany: plan (sekcja „Dokumentacja / Notatki operacyjne") wymaga dopisania `/ask` do sekcji „server.js — HTTP i granice bezpieczeństwa" oraz `lib/ask.js`+`lib/claude-spawn.js` do „Architektura backendu", a grep `CLAUDE.md` nie znajduje żadnej wzmianki o `/ask`, `lib/ask.js` ani `lib/claude-spawn.js` — mimo `execute=done` w `.autopilot-state.json`. Implementacja (fazy 1–3) ukończona, więc warunek „po implementacji" zachodzi. Przy tej samej edycji domknąć P3-15 z review fazy 3: nieudokumentowane env-vary `CLAUDE_CRON_DB_PATH`/`CLAUDE_CRON_CLAUDE_BIN`.
+
+P3 (opcjonalne, nie blokują gate'u — szczegóły w raporcie): checklist deployu mówi „długie losowe `ASK_TOKEN`/`ASK_SECRET`" bez konkretnej komendy generacji (entropia sekretów to jedyna obrona ścieżki 403 poza rate limitem — dopisać np. `openssl rand -hex 32` ×2); `.autopilot-state.json` ma `execute:'done'` dla fazy 4 mimo zera odhaczonych pozycji checklisty (konwencja „done = brak pracy automatyzowalnej" nigdzie nie zapisana — ryzyko fałszywego domknięcia zadania przy archiwizacji); bookkeeping review fazy 3 wisi niezacommitowany w working tree (zmodyfikowany kontekst, untracked `review-faza-3.md` + `.autopilot-state.json`) — do commitu przy najbliższym kroku pipeline'u.
+
+## Operator checklist faza 4
+
+- [ ] Operator: Cała substancja fazy 4 (deploy publicznej powierzchni `/ask`) jest niewykonalna headless i pozostaje NIEZWERYFIKOWANA (P1) — granica auth nowego publicznego endpointu udowodniona wyłącznie testami z symulowanym `X-Forwarded-For` i atrapą CLI — Operator action: merge do `main`, pull na VPS, wpisać do env długie losowe `ASK_TOKEN`/`ASK_SECRET` (np. `openssl rand -hex 32` per sekret), restart daemona (env NIE propaguje się do żyjącego procesu — learned pattern 2026-07-07), sprawdzić że `~/.claude-cron-oauth-token` przeżył deploy.
+- [ ] Operator: Smoke-test granicy bezpieczeństwa w realnej sieci niewykonalny headless (P1) — testy fazy 3 pokrywają to atrapą CLI i symulowanym nagłówkiem XFF — Operator action: po deployu curl z INNEJ maszyny przez Tailscale Funnel (poprawny sekret → odpowiedź text/plain; bez sekretu → 403) oraz włączyć kanał powiadomień (Telegram lub Discord) na jobie „Asystent głosowy" w panelu Pulsa (job powstaje przy pierwszym `/ask`; bez flagi kanału wynik odczepionego zapytania ginie — tylko warning w logu). Pozycje 2–3 checklisty deployu powyżej.
+- [ ] Operator: Budowa Shortcuta „Asystent" na Macu i pomiar realnego limitu czekania akcji „Pobierz zawartość URL" niewykonalne headless (P2) — 55 s jest blisko typowych limitów Shortcuts, pomiar to jawna mitygacja ryzyka z planu — Operator action: zbudować Shortcut (Dyktuj → Pobierz zawartość URL → Okno dialogowe → Powiedz tekst), zmierzyć limit; strona kodowa gotowa — `ASK_TIMEOUT_MS` ma override z env (fix P2 fazy 1), korekta bez zmiany kodu.
+- [ ] Operator: Shortcut przechowuje `ASK_SECRET` plaintext w definicji akcji i domyślnie synchronizuje się przez iCloud na wszystkie urządzenia konta (P3, spójne z poziomem zaufania projektu — sekrety plaintext „jak shell RC") — Operator action: świadoma decyzja przy budowie Shortcuta; przy podejrzeniu wycieku rotacja wg planu (nowe wartości w env + restart daemona).
+- [ ] Operator: Gałąź Windows w `lib/ask.js` (`killProcessTree` przez `taskkill /PID /T /F`) i pełny cykl `executeAsk` mają skip testów na win32 (P3, atrapa CLI wymaga POSIX shebang) — Operator action: jeśli jakakolwiek instalacja Windows ma używać `/ask`, przed deployem odpalić `node --test lib/ask.test.js` + pełny `npm test` na realnej maszynie Windows.
