@@ -7,44 +7,10 @@
 
 import pg from 'pg';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { loadEnv } from './env-loader.mjs';
 
 const TOP_N_IN_DASHBOARD = 3;
-
-// ──────── env loader ────────
-async function readEnvFile(envPath) {
-  try {
-    const raw = await fs.readFile(envPath, 'utf8');
-    for (const line of raw.split('\n')) {
-      const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-      if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
-    }
-  } catch {}
-}
-
-async function loadEnv() {
-  // INBOX_ENV_FILE → czytaj stamtąd i early-return (NIE dotykaj HOME na czystym Windowsie)
-  if (process.env.INBOX_ENV_FILE) {
-    await readEnvFile(process.env.INBOX_ENV_FILE);
-    if (process.env.INBOX_DB_URL && process.env.INBOX_USER) return;
-  }
-
-  const home = process.env.HOME || process.env.USERPROFILE;
-  const workspace = process.env.CLAUDE_CRON_WORKSPACE
-    || (home ? path.resolve(home, 'Documents/kacper_trzepiecinski_workspace') : null);
-
-  if (workspace) await readEnvFile(path.join(workspace, '.env'));
-
-  if (!process.env.INBOX_TODO_PATH) {
-    if (!workspace) throw new Error('Ustaw INBOX_TODO_PATH w .env (brak HOME/USERPROFILE/CLAUDE_CRON_WORKSPACE)');
-    process.env.INBOX_TODO_PATH = path.join(workspace, 'Zadania/to_do.md');
-  }
-  if (!process.env.INBOX_SKRZYNKA_PATH) {
-    if (!workspace) throw new Error('Ustaw INBOX_SKRZYNKA_PATH w .env (brak HOME/USERPROFILE/CLAUDE_CRON_WORKSPACE)');
-    process.env.INBOX_SKRZYNKA_PATH = path.join(workspace, 'Zadania/Skrzynka.md');
-  }
-}
 
 // ──────── rendering ────────
 const TYPE_EMOJI = { task: '📝', query: '❓', reply: '💬', close: '✅' };

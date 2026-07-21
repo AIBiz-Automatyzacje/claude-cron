@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS inbox (
   title      text NOT NULL,
   content    text,
   payload    jsonb,
-  status     text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'read', 'done')),
+  status     text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'delivered', 'done')),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -37,3 +37,8 @@ FOR EACH ROW EXECUTE FUNCTION inbox_touch_updated_at();
 ALTER TABLE inbox DROP CONSTRAINT IF EXISTS inbox_type_check;
 ALTER TABLE inbox ADD CONSTRAINT inbox_type_check
   CHECK (type IN ('task', 'query', 'reply', 'close'));
+
+-- Migracja — usunięcie martwego statusu 'read' (żaden kod go nie ustawiał; idempotentne)
+ALTER TABLE inbox DROP CONSTRAINT IF EXISTS inbox_status_check;
+ALTER TABLE inbox ADD CONSTRAINT inbox_status_check
+  CHECK (status IN ('pending', 'delivered', 'done'));

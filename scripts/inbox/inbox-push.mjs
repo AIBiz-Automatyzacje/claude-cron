@@ -11,52 +11,7 @@ import pg from 'pg';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-
-// ──────── env loader ────────
-async function readEnvFile(envPath) {
-  try {
-    const raw = await fs.readFile(envPath, 'utf8');
-    for (const line of raw.split('\n')) {
-      const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-      if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
-    }
-  } catch {}
-}
-
-function resolveSkrzynkaPath() {
-  if (process.env.INBOX_SKRZYNKA_PATH) return process.env.INBOX_SKRZYNKA_PATH;
-  if (process.env.CLAUDE_CRON_WORKSPACE) {
-    return path.join(process.env.CLAUDE_CRON_WORKSPACE, 'Zadania/Skrzynka.md');
-  }
-  throw new Error('Ustaw INBOX_SKRZYNKA_PATH w .env (lub CLAUDE_CRON_WORKSPACE)');
-}
-
-function resolveArchiveDir(skrzynkaPath) {
-  if (process.env.INBOX_ARCHIVE_DIR) return process.env.INBOX_ARCHIVE_DIR;
-  // Wyprowadź z workspace'u Skrzynki: <workspace>/Zadania/Skrzynka.md → <workspace>/Zasoby/inbox-archive
-  const workspace = path.dirname(path.dirname(skrzynkaPath));
-  return path.join(workspace, 'Zasoby/inbox-archive');
-}
-
-async function loadEnv() {
-  if (process.env.INBOX_ENV_FILE) {
-    await readEnvFile(process.env.INBOX_ENV_FILE);
-    // Early-return: gdy mamy komplet z .env, nie dotykamy HOME w ogóle
-    if (process.env.INBOX_DB_URL && process.env.INBOX_USER) {
-      process.env.INBOX_SKRZYNKA_PATH = resolveSkrzynkaPath();
-      process.env.INBOX_ARCHIVE_DIR   = resolveArchiveDir(process.env.INBOX_SKRZYNKA_PATH);
-      return;
-    }
-  } else {
-    // Spójnie z inbox-pull.mjs: workspace z CLAUDE_CRON_WORKSPACE → HOME/Documents/...; .env z tego workspace'u
-    const home = process.env.HOME || process.env.USERPROFILE;
-    const workspace = process.env.CLAUDE_CRON_WORKSPACE
-      || (home ? path.resolve(home, 'Documents/kacper_trzepiecinski_workspace') : null);
-    if (workspace) await readEnvFile(path.join(workspace, '.env'));
-  }
-  process.env.INBOX_SKRZYNKA_PATH = resolveSkrzynkaPath();
-  process.env.INBOX_ARCHIVE_DIR   = resolveArchiveDir(process.env.INBOX_SKRZYNKA_PATH);
-}
+import { loadEnv } from './env-loader.mjs';
 
 // ──────── parser ────────
 // Wyciąga z Skrzynki tylko sekcję 📥 Otrzymane (między markerami).
@@ -114,20 +69,39 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-function renderArchiveBlock(row, closedBy) {
-  const emoji = TYPE_EMOJI[row.type] || '📨';
-  const label = TYPE_LABEL[row.type] || 'Wiadomość';
-  const quoted = (row.content || '').split('\n').map(l => '> > ' + l).join('\n');
+// Archiwizuje CAŁĄ nitkę wątku w jednym callout (nie pojedynczą wiadomość) —
+// zamknięty wątek ma być czytelny bez sięgania do bazy.
+function renderArchiveThread(thread, closedBy) {
+  const root = thread[0];
+  const emoji = TYPE_EMOJI[root.type] || '📨';
+  const label = TYPE_LABEL[root.type] || 'Wiadomość';
+  const messages = thread.map(m => {
+    const body = (m.content || '').split('\n');
+    const head = `> - **@${m.from_user}** · ${fmtTime(m.created_at)} — ${body[0] || ''}`;
+    const cont = body.slice(1).map(l => `>   ${l}`);
+    return [head, ...cont].join('\n');
+  }).join('\n');
   return [
-    `> [!note]- ${emoji} @${row.from_user} → @${row.to_user} · ${fmtTime(row.created_at)}`,
-    `> **${label}:** ${row.title}`,
-    quoted ? '>\n' + quoted : null,
+    `> [!note]- ${emoji} @${root.from_user} → @${root.to_user} · ${fmtTime(root.created_at)}`,
+    `> **${label}:** ${root.title}`,
+    '>',
+    messages,
     '>',
     `> _archived ${fmtTime(new Date().toISOString())} by @${closedBy}_`,
-  ].filter(Boolean).join('\n');
+  ].join('\n');
 }
 
-async function appendToArchive(archiveDir, row, closedBy) {
+async function fetchThread(client, row) {
+  if (!row.thread_id) return [row];
+  const res = await client.query(
+    `SELECT id, thread_id, from_user, to_user, type, title, content, status, created_at
+     FROM inbox WHERE thread_id = $1 ORDER BY created_at ASC`,
+    [row.thread_id]
+  );
+  return res.rows.length ? res.rows : [row];
+}
+
+async function appendToArchive(archiveDir, thread, closedBy) {
   await fs.mkdir(archiveDir, { recursive: true });
   const file = archivePath(archiveDir);
   let header = '';
@@ -137,7 +111,7 @@ async function appendToArchive(archiveDir, row, closedBy) {
     const ym = path.basename(file, '.md');
     header = `---\ntags: [archiwum, team-os]\n---\n\n# 📁 Archiwum Skrzynki — ${ym}\n\n`;
   }
-  await fs.appendFile(file, header + renderArchiveBlock(row, closedBy) + '\n\n', 'utf8');
+  await fs.appendFile(file, header + renderArchiveThread(thread, closedBy) + '\n\n', 'utf8');
 }
 
 // ──────── main ────────
@@ -187,19 +161,27 @@ export async function main() {
       }
 
       if (row.type === 'task' && item.action === 'Zrobione') {
-        // INSERT reply 'Zrobione' do oryginalnego nadawcy + close task
-        await client.query(
-          `INSERT INTO inbox (thread_id, from_user, to_user, type, title, content)
-           VALUES ($1, $2, $3, 'reply', $4, $5)`,
-          [row.thread_id, INBOX_USER, row.from_user, `Re: ${row.title}`, 'Zrobione ✅']
-        );
-        await client.query(`UPDATE inbox SET status='done' WHERE id=$1`, [row.id]);
-        await appendToArchive(INBOX_ARCHIVE_DIR, row, INBOX_USER);
+        // INSERT reply 'Zrobione' + close task w JEDNEJ transakcji — crash między nimi
+        // zostawiał status!=done i idempotency wstawiała duplikat reply przy następnym runie
+        await client.query('BEGIN');
+        try {
+          await client.query(
+            `INSERT INTO inbox (thread_id, from_user, to_user, type, title, content)
+             VALUES ($1, $2, $3, 'reply', $4, $5)`,
+            [row.thread_id, INBOX_USER, row.from_user, `Re: ${row.title}`, 'Zrobione ✅']
+          );
+          await client.query(`UPDATE inbox SET status='done' WHERE id=$1`, [row.id]);
+          await client.query('COMMIT');
+        } catch (e) {
+          await client.query('ROLLBACK');
+          throw e;
+        }
+        await appendToArchive(INBOX_ARCHIVE_DIR, await fetchThread(client, row), INBOX_USER);
         stats.replied++;
       } else if (item.action === 'Zapoznane') {
         // UPDATE status='done' (query/reply/anything)
         await client.query(`UPDATE inbox SET status='done' WHERE id=$1`, [row.id]);
-        await appendToArchive(INBOX_ARCHIVE_DIR, row, INBOX_USER);
+        await appendToArchive(INBOX_ARCHIVE_DIR, await fetchThread(client, row), INBOX_USER);
         stats.closed++;
       } else {
         stats.skipped++;
