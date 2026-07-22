@@ -249,11 +249,15 @@ export async function main() {
   const client = new pg.Client({ connectionString: INBOX_DB_URL });
   await client.connect();
   try {
-    // Auto-close 1: MOJE WYSŁANE task/query w threadach gdzie ktoś INNY odpisał replym
+    // Auto-close 1: MOJE WYSŁANE query w threadach gdzie ktoś INNY odpisał replym.
+    // S-1 (symulacja 22.07): TYLKO query — dla taska odpowiedź bywa dopytaniem
+    // („którą wersję?"), a auto-close kasował tracking niewykonanej roboty z Delegowanych
+    // i zabierał odbiorcy checkbox „Zrobione" (kotwica przeskakiwała na reply).
+    // Task zamyka się WYŁĄCZNIE checkboxem odbiorcy (inbox-push → reply „Zrobione ✅").
     const closeSentRes = await client.query(
       `UPDATE inbox SET status='done'
        WHERE from_user = $1
-         AND type IN ('task','query')
+         AND type = 'query'
          AND status != 'done'
          AND thread_id IN (
            SELECT thread_id FROM inbox

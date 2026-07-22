@@ -12,6 +12,7 @@ const executor = require('./lib/executor');
 const skills = require('./lib/skills');
 const platform = require('./lib/platform');
 const keepAwake = require('./lib/keep-awake');
+const inboxSeed = require('./lib/inbox-seed');
 const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
 const { pushNotifySettings, buildPushPayload } = require('./lib/notify-push');
@@ -569,6 +570,12 @@ if (reapedRuns.length > 0) console.log(`[reaper] Oznaczono ${reapedRuns.length} 
 // cisza"); zwykłe joby dalej tylko log powyżej. Wysyłka fire-and-forget wewnątrz modułu ask
 // (pad kanału nie blokuje startu), kontrakt notifyRunOutcome/„killed milczy" nietknięty.
 ask.notifyInterruptedAskRuns(reapedRuns);
+
+// Seed joba inbox sync (S-2: brak joba = cicha śmierć Skrzynki) — tylko gdy inbox
+// skonfigurowany; fire-and-forget, nie blokuje startu.
+inboxSeed.seedInboxSyncJob().then((result) => {
+  if (result === 'seeded') console.log(`[seed] Utworzono job "${inboxSeed.JOB_NAME}" (inbox skonfigurowany, joba brakowało)`);
+});
 
 // Start scheduler
 scheduler.start();
