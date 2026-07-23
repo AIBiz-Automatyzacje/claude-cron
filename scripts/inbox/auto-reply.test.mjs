@@ -9,10 +9,12 @@ test('parseAnswer: normalna odpowiedź przechodzi (happy path)', () => {
   assert.equal(parseAnswer('Faza 2 done, zostaje copywriting.\n'), 'Faza 2 done, zostaje copywriting.');
 });
 
-test('parseAnswer: NO_ANSWER, prefiks NO_ANSWER i pusto → null (error case)', () => {
+test('parseAnswer: NO_ANSWER gdziekolwiek w tekście i pusto → null (error case)', () => {
   assert.equal(parseAnswer('NO_ANSWER'), null);
   assert.equal(parseAnswer('  NO_ANSWER\n'), null);
   assert.equal(parseAnswer('NO_ANSWER — nie znalazłem nic w vaultcie'), null);
+  // Regres z testu negatywnego na CAVE 23.07: model owinął NO_ANSWER prozą na końcu
+  assert.equal(parseAnswer('Only the question itself appears in the vault.\n\nNO_ANSWER'), null);
   assert.equal(parseAnswer(''), null);
   assert.equal(parseAnswer(undefined), null);
 });

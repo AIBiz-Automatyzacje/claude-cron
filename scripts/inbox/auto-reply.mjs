@@ -36,15 +36,19 @@ export function buildPrompt({ fromUser, toUser, title, content }) {
     content ? `Treść: ${content}` : null,
     '',
     'Poszukaj odpowiedzi w tym vaultcie (Read/Glob/Grep). Odpowiadaj WYŁĄCZNIE na podstawie treści plików.',
-    `Jeśli nie znajdziesz jednoznacznej odpowiedzi — Twoja cała odpowiedź to dokładnie jedno słowo: ${NO_ANSWER}`,
+    'ZIGNORUJ pliki `Zadania/Skrzynka.md` i `Zasoby/inbox-archive/` — to skrzynka wiadomości, w której leży samo to pytanie, a nie wiedza.',
+    `Jeśli nie znajdziesz jednoznacznej odpowiedzi — Twoja CAŁA odpowiedź to dokładnie jedno słowo: ${NO_ANSWER}. Bez wyjaśnień, bez żadnego innego tekstu.`,
     'Jeśli znajdziesz: odpowiedz zwięźle po polsku (kilka zdań, bez nagłówków) i podaj nazwę pliku, z którego wiesz.',
   ].filter((l) => l !== null).join('\n');
 }
 
 // null = agent nie zna odpowiedzi (albo pusto) → query zostaje człowiekowi.
+// NO_ANSWER łapiemy GDZIEKOLWIEK w tekście — model potrafi owinąć je prozą
+// („...no note exists. NO_ANSWER"), a wysłanie takiego reply zamyka query u nadawcy
+// błędną odpowiedzią (złapane na teście negatywnym CAVE 23.07).
 export function parseAnswer(stdout) {
   const text = (stdout || '').trim();
-  if (!text || text === NO_ANSWER || text.startsWith(NO_ANSWER)) return null;
+  if (!text || text.includes(NO_ANSWER)) return null;
   return text;
 }
 
