@@ -178,49 +178,45 @@ function plural(n, one, few, many) {
   return many;
 }
 
+// Redesign 07.2026: banner jako callouty Obsidiana ([!inbox] / [!delegated] / [!inbox-ok]),
+// stylowane snippetem `dashboard-todo.css`. Pusty stan = jeden zielony pasek spokoju,
+// nowe wiadomości = karta z listą. Czysty markdown, przeżywa regenerację między markerami.
 function buildBanner({ inboxCount, taskCount, queryCount, topInbox, delegatedCount, staleDelegatedCount, topDelegated }) {
   const lines = [];
 
   // Inbox label — rozbicie na typy gdy są task/query, fallback total dla samych reply/close
   let inboxLabel;
-  if (inboxCount === 0) {
-    inboxLabel = '0 nowych';
-  } else if (taskCount > 0 && queryCount > 0) {
-    inboxLabel = `${taskCount} ${plural(taskCount, 'zadanie', 'zadania', 'zadań')}, ${queryCount} ${plural(queryCount, 'pytanie', 'pytania', 'pytań')}`;
+  if (taskCount > 0 && queryCount > 0) {
+    inboxLabel = `${taskCount} ${plural(taskCount, 'zadanie', 'zadania', 'zadań')} i ${queryCount} ${plural(queryCount, 'pytanie', 'pytania', 'pytań')}`;
   } else if (taskCount > 0) {
     inboxLabel = `${taskCount} ${plural(taskCount, 'zadanie', 'zadania', 'zadań')}`;
   } else if (queryCount > 0) {
     inboxLabel = `${queryCount} ${plural(queryCount, 'pytanie', 'pytania', 'pytań')}`;
   } else {
-    inboxLabel = `${inboxCount} ${plural(inboxCount, 'nowa', 'nowe', 'nowych')}`;
+    inboxLabel = `${inboxCount} ${plural(inboxCount, 'nowa wiadomość', 'nowe wiadomości', 'nowych wiadomości')}`;
   }
 
-  // Delegated label — stale count w nawiasie gdy >0
-  const stalePart = staleDelegatedCount > 0 ? ` (${staleDelegatedCount} stale ⚠️)` : '';
-  const delegatedLabel = `${delegatedCount} w toku${stalePart}`;
+  if (inboxCount === 0 && delegatedCount === 0) {
+    lines.push('> [!inbox-ok] 🌿 Skrzynka pusta, nic nie czeka na innych. · [[Skrzynka|otwórz]]');
+    return lines.join('\n');
+  }
 
-  lines.push(`📥 **Inbox:** ${inboxLabel} · [[Skrzynka|otwórz]]   📤 **Delegowane:** ${delegatedLabel}`);
-
-  if (topInbox.length > 0) {
-    lines.push('');
-    for (const item of topInbox) lines.push(renderDashboardLine(item));
+  if (inboxCount > 0) {
+    lines.push(`> [!inbox] 📥 **Skrzynka** — ${inboxLabel} od zespołu · [[Skrzynka|otwórz →]]`);
+    for (const item of topInbox) lines.push('> ' + renderDashboardLine(item));
     const rest = inboxCount - topInbox.length;
-    if (rest > 0) {
-      lines.push('');
-      lines.push(`_...i ${rest} ${rest === 1 ? 'starsza' : 'starszych'} → [[Skrzynka]]_`);
-    }
+    if (rest > 0) lines.push(`> - _...i ${rest} ${rest === 1 ? 'starsza' : 'starszych'} → [[Skrzynka]]_`);
+  } else {
+    lines.push('> [!inbox-ok] 🌿 Skrzynka pusta. · [[Skrzynka|otwórz]]');
   }
 
-  if (topDelegated.length > 0) {
+  if (delegatedCount > 0) {
+    const stalePart = staleDelegatedCount > 0 ? ` (${staleDelegatedCount} stale ⚠️)` : '';
     lines.push('');
-    lines.push('**📤 Wysłane — czekają na odpowiedź:**');
-    lines.push('');
-    for (const item of topDelegated) lines.push(renderDelegatedLine(item));
+    lines.push(`> [!delegated] 📤 **Delegowane** — ${delegatedCount} w toku${stalePart}`);
+    for (const item of topDelegated) lines.push('> ' + renderDelegatedLine(item));
     const rest = delegatedCount - topDelegated.length;
-    if (rest > 0) {
-      lines.push('');
-      lines.push(`_...i ${rest} ${rest === 1 ? 'starsza' : 'starszych'} → [[Skrzynka|zobacz]]_`);
-    }
+    if (rest > 0) lines.push(`> - _...i ${rest} ${rest === 1 ? 'starsza' : 'starszych'} → [[Skrzynka|zobacz]]_`);
   }
 
   return lines.join('\n');
