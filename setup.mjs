@@ -170,7 +170,10 @@ req.on('timeout', () => {
 // Preferuje process.execPath (dokładnie ten portable Node, który odpalił setup.mjs).
 // Fallback: zbudowanie ścieżki z layoutu .node/, gdy execPath nie wskazuje na .node/.
 export function detectPortableNodeBin(execPath, platform, repoDir, arch) {
-  const nodeBase = path.join(repoDir, '.node');
+  // nodeBase joinem platformy DOCELOWEJ (param), nie runnera — inaczej budowa
+  // ścieżki dla innej platformy miesza separatory (\repo\.node/node-v.../bin/node)
+  const joiner = platform === 'win32' ? path.win32 : path.posix;
+  const nodeBase = joiner.join(repoDir, '.node');
   if (execPath && execPath.includes(`${path.sep}.node${path.sep}`)) {
     return execPath;
   }

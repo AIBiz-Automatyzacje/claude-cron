@@ -211,10 +211,20 @@ test('detectPortableNodeBin zwraca execPath gdy wskazuje na .node/ (portable Nod
 });
 
 test('detectPortableNodeBin fallback buduje ścieżkę z layoutu .node/ gdy execPath spoza .node/', () => {
+  // Oczekiwanie joinem platformy DOCELOWEJ (posix dla darwin), nie runnera —
+  // path.join na Windows dawał backslashe i test failował mimo poprawnego kontraktu
   const result = detectPortableNodeBin('/usr/local/bin/node', 'darwin', '/repo', 'arm64');
   assert.equal(
     result,
-    path.join('/repo', '.node', `node-v${NODE_VERSION}-darwin-arm64`, 'bin', 'node'),
+    path.posix.join('/repo', '.node', `node-v${NODE_VERSION}-darwin-arm64`, 'bin', 'node'),
+  );
+});
+
+test('detectPortableNodeBin fallback dla win32 buduje windowsową ścieżkę z node.exe', () => {
+  const result = detectPortableNodeBin('C:\\Program Files\\nodejs\\node.exe', 'win32', 'C:\\repo', 'x64');
+  assert.equal(
+    result,
+    path.win32.join('C:\\repo', '.node', `node-v${NODE_VERSION}-win-x64`, 'node.exe'),
   );
 });
 
