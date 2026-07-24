@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 // Team OS — inbox push job
 // - Parsuje Skrzynka.md, znajduje odhaczone checkboxy w sekcji 📥 Otrzymane
-// - task z [x] Zrobione → INSERT reply 'Zrobione' + UPDATE task status='done'
-// - query/reply z [x] Zapoznane → UPDATE wiadomości status='done'
-// - Append do Zasoby/inbox-archive/YYYY-MM.md
-// - Idempotentny (sprawdza status='done' w DB przed akcją, pomija)
+// - Każdy odhaczony callout → `client.done({id, action})`; hub robi transakcję
+//   reply+done (task/Zrobione), UPDATE done (Zapoznane) i idempotencję (already_done).
+// - Append do Zasoby/inbox-archive/YYYY-MM.md z nitki zwróconej przez hub.
 // Odpalane co 1 min przez claude-cron. Zero Claude CLI.
 
-import pg from 'pg';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+import * as inboxClient from './inbox-client.mjs';
 import { loadEnv } from './env-loader.mjs';
 
 // ──────── parser ────────
@@ -91,16 +91,6 @@ export function renderArchiveThread(thread, closedBy) {
   ].join('\n');
 }
 
-async function fetchThread(client, row) {
-  if (!row.thread_id) return [row];
-  const res = await client.query(
-    `SELECT id, thread_id, from_user, to_user, type, title, content, status, created_at
-     FROM inbox WHERE thread_id = $1 ORDER BY created_at ASC`,
-    [row.thread_id]
-  );
-  return res.rows.length ? res.rows : [row];
-}
-
 async function appendToArchive(archiveDir, thread, closedBy) {
   await fs.mkdir(archiveDir, { recursive: true });
   const file = archivePath(archiveDir);
@@ -114,14 +104,20 @@ async function appendToArchive(archiveDir, thread, closedBy) {
   await fs.appendFile(file, header + renderArchiveThread(thread, closedBy) + '\n\n', 'utf8');
 }
 
+// Stopka archiwum „archived by @X" = odbiorca zamykanej wiadomości (kotwica ma to_user=me).
+// Wyprowadzamy ją z nitki zwróconej przez hub — zero osobnego żądania o tożsamość.
+function resolveClosedBy(thread, anchorId) {
+  const anchor = thread.find((m) => m.id === anchorId);
+  return anchor ? anchor.to_user : null;
+}
+
 // ──────── main ────────
-export async function main() {
+// client wstrzykiwany dla testowalności (mock huba); domyślnie realny inbox-client.
+// Idempotencja (already_done → zero skutków), transakcja reply+done i granica JSON
+// siedzą po stronie huba — klient robi głupie, bezpiecznie retryowalne żądania.
+export async function main({ client = inboxClient } = {}) {
   await loadEnv();
-  const { INBOX_DB_URL, INBOX_USER, INBOX_SKRZYNKA_PATH, INBOX_ARCHIVE_DIR } = process.env;
-  if (!INBOX_DB_URL || !INBOX_USER) {
-    console.error('Missing INBOX_DB_URL or INBOX_USER');
-    process.exit(1);
-  }
+  const { INBOX_SKRZYNKA_PATH, INBOX_ARCHIVE_DIR } = process.env;
 
   let raw;
   try {
@@ -134,66 +130,29 @@ export async function main() {
   const section = extractInboxSection(raw);
   const checked = parseCheckedCallouts(section);
   if (checked.length === 0) {
-    console.log(`[inbox-push] ${new Date().toISOString()} — user=${INBOX_USER} nothing to push`);
+    console.log(`[inbox-push] ${new Date().toISOString()} — nothing to push`);
     return;
   }
 
-  const client = new pg.Client({ connectionString: INBOX_DB_URL });
-  await client.connect();
-  let stats = { closed: 0, replied: 0, skipped: 0 };
-  try {
-    for (const item of checked) {
-      // Pobierz rekord — sprawdź czy nadal pending/delivered (idempotency)
-      const r = await client.query(
-        `SELECT id, thread_id, from_user, to_user, type, title, content, status, created_at
-         FROM inbox WHERE id = $1`,
-        [item.id]
-      );
-      if (r.rows.length === 0) {
-        stats.skipped++;
-        continue;
-      }
-      const row = r.rows[0];
-      // Walidacja: rekord musi być do mnie i nie zamknięty
-      if (row.to_user !== INBOX_USER || row.status === 'done') {
-        stats.skipped++;
-        continue;
-      }
+  const stats = { closed: 0, replied: 0, skipped: 0 };
+  for (const item of checked) {
+    // Hub zwraca {result, thread?}: replied (task+Zrobione), closed (Zapoznane),
+    // already_done/skipped/not_found (bez thread → brak archiwizacji, brak duplikatu).
+    const res = await client.done({ id: item.id, action: item.action });
 
-      if (row.type === 'task' && item.action === 'Zrobione') {
-        // INSERT reply 'Zrobione' + close task w JEDNEJ transakcji — crash między nimi
-        // zostawiał status!=done i idempotency wstawiała duplikat reply przy następnym runie
-        await client.query('BEGIN');
-        try {
-          await client.query(
-            `INSERT INTO inbox (thread_id, from_user, to_user, type, title, content)
-             VALUES ($1, $2, $3, 'reply', $4, $5)`,
-            [row.thread_id, INBOX_USER, row.from_user, `Re: ${row.title}`, 'Zrobione ✅']
-          );
-          await client.query(`UPDATE inbox SET status='done' WHERE id=$1`, [row.id]);
-          await client.query('COMMIT');
-        } catch (e) {
-          await client.query('ROLLBACK');
-          throw e;
-        }
-        await appendToArchive(INBOX_ARCHIVE_DIR, await fetchThread(client, row), INBOX_USER);
-        stats.replied++;
-      } else if (item.action === 'Zapoznane') {
-        // UPDATE status='done' (query/reply/anything)
-        await client.query(`UPDATE inbox SET status='done' WHERE id=$1`, [row.id]);
-        await appendToArchive(INBOX_ARCHIVE_DIR, await fetchThread(client, row), INBOX_USER);
-        stats.closed++;
-      } else {
-        stats.skipped++;
-      }
+    if ((res.result === 'replied' || res.result === 'closed') && res.thread) {
+      await appendToArchive(INBOX_ARCHIVE_DIR, res.thread, resolveClosedBy(res.thread, item.id));
+      if (res.result === 'replied') stats.replied++;
+      else stats.closed++;
+    } else {
+      stats.skipped++;
     }
-    console.log(
-      `[inbox-push] ${new Date().toISOString()} — user=${INBOX_USER} ` +
-      `replied=${stats.replied} closed=${stats.closed} skipped=${stats.skipped}`
-    );
-  } finally {
-    await client.end();
   }
+
+  console.log(
+    `[inbox-push] ${new Date().toISOString()} — ` +
+    `replied=${stats.replied} closed=${stats.closed} skipped=${stats.skipped}`
+  );
 }
 
 // Run only when executed directly (not when imported by inbox-sync.mjs)

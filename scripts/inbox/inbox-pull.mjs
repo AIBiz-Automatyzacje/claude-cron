@@ -2,13 +2,14 @@
 // Team OS — inbox pull job
 // - Pełne callouts → Zadania/Skrzynka.md (dwie sekcje: Otrzymane + Wysłane, rebuild bloków między markerami)
 // - Banner + top 3 skondensowane → Zadania/to_do.md (rebuild bloku między markerami)
-// - Oznacza pending → delivered w DB
+// - Dane bierze z huba (`client.pull()`); oznaczanie pending → delivered robi hub.
 // Odpalane co 1 min przez launchd/cron. Zero Claude CLI.
 
-import pg from 'pg';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+import * as inboxClient from './inbox-client.mjs';
 import { loadEnv } from './env-loader.mjs';
 
 const TOP_N_IN_DASHBOARD = 3;
@@ -75,7 +76,7 @@ function renderMessage(m) {
 // thread = posortowane chronologicznie wiadomości jednego thread_id (root = pierwsza).
 // anchor = pierwsza aktywna (nie-done) wiadomość DO MNIE — jej id/typ trafiają do markera i checkboxa
 //          (kontrakt push-job: SELECT WHERE id, walidacja to_user + typ → akcja).
-// me = INBOX_USER — kierunek w metadanych („Ty → @x" vs „od @x").
+// me = tożsamość z huba (pole `user` z pull) — kierunek w metadanych („Ty → @x" vs „od @x").
 export function renderThreadCallout(thread, anchor, me) {
   const root = thread[0];
   const threadId = root.thread_id || root.id;
@@ -305,115 +306,53 @@ async function updateDashboard(todoPath, args) {
 }
 
 // ──────── main ────────
-export async function main() {
+// client wstrzykiwany dla testowalności (mock huba); domyślnie realny inbox-client.
+// Ścieżki plików zapewnia env-loader; konfigurację huba (INBOX_HUB_URL/INBOX_TOKEN)
+// waliduje sam klient (fail-fast z czytelnym błędem).
+export async function main({ client = inboxClient } = {}) {
   await loadEnv();
-  const { INBOX_DB_URL, INBOX_USER, INBOX_TODO_PATH, INBOX_SKRZYNKA_PATH } = process.env;
-  if (!INBOX_DB_URL || !INBOX_USER) {
-    console.error('Missing INBOX_DB_URL or INBOX_USER');
-    process.exit(1);
-  }
+  const { INBOX_TODO_PATH, INBOX_SKRZYNKA_PATH } = process.env;
 
-  const client = new pg.Client({ connectionString: INBOX_DB_URL });
-  await client.connect();
-  try {
-    // Auto-close 1: MOJE WYSŁANE query w threadach gdzie ktoś INNY odpisał replym.
-    // S-1 (symulacja 22.07): TYLKO query — dla taska odpowiedź bywa dopytaniem
-    // („którą wersję?"), a auto-close kasował tracking niewykonanej roboty z Delegowanych
-    // i zabierał odbiorcy checkbox „Zrobione" (kotwica przeskakiwała na reply).
-    // Task zamyka się WYŁĄCZNIE checkboxem odbiorcy (inbox-push → reply „Zrobione ✅").
-    const closeSentRes = await client.query(
-      `UPDATE inbox SET status='done'
-       WHERE from_user = $1
-         AND type = 'query'
-         AND status != 'done'
-         AND thread_id IN (
-           SELECT thread_id FROM inbox
-           WHERE type = 'reply' AND from_user != $1
-         )
-       RETURNING id`,
-      [INBOX_USER]
-    );
+  // Hub zwraca: user (tożsamość z tokenu), active (moje otrzymane pending/delivered),
+  // threadRows (pełne nitki tych wątków), delegated (moje wysłane task/query != done).
+  // Oznaczanie pending → delivered i granica JSON payloadu siedzą po stronie huba.
+  const { user: me, active, threadRows, delegated } = await client.pull();
 
-    // F-D (17.06): USUNIĘTO Auto-close 2 (otrzymane task/query → done po moim replym).
-    // Powód: odpowiedź ≠ załatwienie. Auto-zamykanie OTRZYMANYCH gubiło otwarte wątki ze
-    // Skrzynki, mimo że od tego jest ręczny checkbox [x] Zrobione/Zapoznane (→ inbox-push).
-    // Otrzymane znikają teraz WYŁĄCZNIE po ręcznym odhaczeniu. Auto-close zostaje tylko dla
-    // WYSŁANYCH (Auto-close 1 wyżej) — tam zniknięcie po odpowiedzi jest pożądane.
-    const autoClosedTotal = closeSentRes.rows.length;
+  const topItems = active.slice(0, TOP_N_IN_DASHBOARD);
 
-    // Moje aktywne wiadomości (Otrzymane = do mnie, nie-done) — kotwice wątków + liczniki
-    const activeRes = await client.query(
-      `SELECT i.id, i.thread_id, i.from_user, i.type, i.title, i.content, i.status, i.created_at, i.payload
-       FROM inbox i
-       WHERE i.to_user = $1 AND i.status IN ('pending','delivered')
-       ORDER BY i.created_at DESC`,
-      [INBOX_USER]
-    );
-    const active = activeRes.rows;
-    const topItems = active.slice(0, TOP_N_IN_DASHBOARD);
+  // Agregat typów dla bannera (Faza 3 — rozbicie task/query)
+  const taskCount = active.filter(r => r.type === 'task').length;
+  const queryCount = active.filter(r => r.type === 'query').length;
 
-    // Pełne nitki tych wątków (też moje wysłane reply) — render grupuje je w jeden callout
-    const activeThreadIds = [...new Set(active.map(r => r.thread_id || r.id))];
-    let threadRows = active;
-    if (activeThreadIds.length > 0) {
-      const threadRes = await client.query(
-        `SELECT id, thread_id, from_user, to_user, type, title, content, status, created_at, payload
-         FROM inbox
-         WHERE thread_id = ANY($1::uuid[])
-         ORDER BY created_at ASC`,
-        [activeThreadIds]
-      );
-      threadRows = threadRes.rows;
-    }
+  const topDelegated = delegated.slice(0, TOP_N_IN_DASHBOARD);
 
-    // Agregat typów dla bannera (Faza 3 — rozbicie task/query)
-    const taskCount = active.filter(r => r.type === 'task').length;
-    const queryCount = active.filter(r => r.type === 'query').length;
+  // Stale count w Delegowanych (Faza 3 — sygnał kogo trzeba pingnąć)
+  const STALE_HOURS = 48;
+  const staleDelegatedCount = delegated.filter(r => {
+    const hours = (Date.now() - new Date(r.created_at).getTime()) / 3600000;
+    return hours >= STALE_HOURS;
+  }).length;
 
-    // Moje delegowane w toku (task + query wysłane przeze mnie, jeszcze nieobsłużone)
-    const delegRes = await client.query(
-      `SELECT id, thread_id, to_user, title, type, created_at, status
-       FROM inbox
-       WHERE from_user = $1 AND type IN ('task','query') AND status != 'done'
-       ORDER BY created_at ASC`,
-      [INBOX_USER]
-    );
-    const delegated = delegRes.rows;
-    const topDelegated = delegated.slice(0, TOP_N_IN_DASHBOARD);
+  // Write to Skrzynka.md (oba bloki) + to_do.md banner
+  await updateSkrzynkaFile(INBOX_SKRZYNKA_PATH, threadRows, active, delegated, me);
+  await updateDashboard(INBOX_TODO_PATH, {
+    inboxCount: active.length,
+    taskCount,
+    queryCount,
+    topInbox: topItems,
+    delegatedCount: delegated.length,
+    staleDelegatedCount,
+    topDelegated,
+  });
 
-    // Stale count w Delegowanych (Faza 3 — sygnał kogo trzeba pingnąć)
-    const STALE_HOURS = 48;
-    const staleDelegatedCount = delegated.filter(r => {
-      const hours = (Date.now() - new Date(r.created_at).getTime()) / 3600000;
-      return hours >= STALE_HOURS;
-    }).length;
-
-    // Write to Skrzynka.md (oba bloki) + to_do.md banner
-    await updateSkrzynkaFile(INBOX_SKRZYNKA_PATH, threadRows, active, delegated, INBOX_USER);
-    await updateDashboard(INBOX_TODO_PATH, {
-      inboxCount: active.length,
-      taskCount,
-      queryCount,
-      topInbox: topItems,
-      delegatedCount: delegated.length,
-      staleDelegatedCount,
-      topDelegated,
-    });
-
-    // Mark pending → delivered
-    const pendingIds = active.filter(r => r.status === 'pending').map(r => r.id);
-    if (pendingIds.length > 0) {
-      await client.query(`UPDATE inbox SET status='delivered' WHERE id = ANY($1::uuid[])`, [pendingIds]);
-    }
-
-    console.log(
-      `[inbox-pull] ${new Date().toISOString()} — ` +
-      `user=${INBOX_USER} inbox=${active.length} (task=${taskCount} query=${queryCount} new=${pendingIds.length}) ` +
-      `delegated=${delegated.length} (stale=${staleDelegatedCount}) auto-closed=${autoClosedTotal} (sent only; recv auto-close usunięty — F-D)`
-    );
-  } finally {
-    await client.end();
-  }
+  // Hub zachowuje oryginalny status 'pending' w active (detekcja „nowe") mimo że sam
+  // oznaczył je delivered — liczymy „new" z tego pola dla logu.
+  const newCount = active.filter(r => r.status === 'pending').length;
+  console.log(
+    `[inbox-pull] ${new Date().toISOString()} — ` +
+    `user=${me} inbox=${active.length} (task=${taskCount} query=${queryCount} new=${newCount}) ` +
+    `delegated=${delegated.length} (stale=${staleDelegatedCount})`
+  );
 }
 
 // Run only when executed directly (not when imported by inbox-sync.mjs)

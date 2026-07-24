@@ -1,7 +1,7 @@
 # Team OS Hub-API — migracja skrzynki z publicznego Postgresa na hub przez Tailscale Funnel
 
 Branch: `feature/team-os-hub-api`
-Ostatnia aktualizacja: 2026-07-24
+Ostatnia aktualizacja: 2026-07-24 (Faza 2 zrealizowana — implementacja)
 
 ## Podsumowanie wykonawcze
 
@@ -79,7 +79,7 @@ Handler HTTP nad inbox-db: `matchInboxToken` (bliźniak `webhook.js`, parsuje `/
 **IU-1.3 Wpięcie w `server.js` + testy HTTP na żywym procesie (M)**
 Matcher inbox w kontrakcie kolejności (webhook → ask → **inbox** → guard XFF → api/static) + aktualizacja komentarza-kontraktu. Endpoint administracyjny **prywatny** (za guardem XFF): `GET/POST/DELETE /api/inbox/members` — lista (tokeny maskowane: configured + ostatnie 4 znaki, wzorzec settings powiadomień), dodanie członka (zwraca pełny token + gotowy kod zaproszenia JEDNORAZOWO w odpowiedzi), odwołanie. Testy wzorcem `ask.http.test.js`: autoryzacja, kolejność matcherów (inbox działa z XFF, dashboard nie), idempotencja done przez HTTP, rate limit.
 
-### Faza 2 — Klienci: przepięcie transportu (M)
+### Faza 2 — Klienci: przepięcie transportu (M) ✅ zrealizowana (npm test 465/465; miernik 1 spełniony — testy parserów/rendererów bez modyfikacji, `git diff` czysty na `*-pull/push/auto-reply.test.mjs`)
 
 **IU-2.1 `scripts/inbox/inbox-client.mjs` + testy (S)**
 Wrapper `fetch` do huba: baza z `INBOX_HUB_URL`, token z `INBOX_TOKEN`, timeout per request (AbortController), 1 retry na timeout/5xx (API jest idempotentne — bezpieczne), czytelne błędy konfiguracji. Weryfikacja `v:1` w odpowiedzi — mismatch = czytelny błąd „zaktualizuj Pulsa".

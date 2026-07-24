@@ -10,7 +10,7 @@ import path from 'node:path';
 import { loadEnv, readEnvFile } from './env-loader.mjs';
 
 const INBOX_VARS = [
-  'INBOX_ENV_FILE', 'INBOX_DB_URL', 'INBOX_USER',
+  'INBOX_ENV_FILE', 'INBOX_HUB_URL', 'INBOX_TOKEN',
   'INBOX_TODO_PATH', 'INBOX_SKRZYNKA_PATH', 'INBOX_ARCHIVE_DIR',
   'CLAUDE_CRON_WORKSPACE',
 ];
@@ -30,9 +30,9 @@ async function withTmpEnvFile(content, fn) {
   }
 }
 
-test('INBOX_ENV_FILE: ścieżki rozwiązane ZAWSZE, także przy komplecie DB_URL+USER', async () => {
+test('INBOX_ENV_FILE: ścieżki rozwiązane ZAWSZE, także przy komplecie HUB_URL+TOKEN', async () => {
   await withTmpEnvFile(
-    'INBOX_DB_URL=postgres://x\nINBOX_USER=tester\nCLAUDE_CRON_WORKSPACE=/tmp/ws\n',
+    'INBOX_HUB_URL=https://hub.example\nINBOX_TOKEN=tok123\nCLAUDE_CRON_WORKSPACE=/tmp/ws\n',
     async (envPath) => {
       process.env.INBOX_ENV_FILE = envPath;
       await loadEnv();
@@ -45,20 +45,20 @@ test('INBOX_ENV_FILE: ścieżki rozwiązane ZAWSZE, także przy komplecie DB_URL
 
 test('readEnvFile: zdejmuje cudzysłowy podwójne i pojedyncze', async () => {
   await withTmpEnvFile(
-    `INBOX_DB_URL="postgres://user:pass@host/db"\nINBOX_USER='marcin'\n`,
+    `INBOX_HUB_URL="https://hub.example/api"\nINBOX_TOKEN='tok-marcin'\n`,
     async (envPath) => {
       await readEnvFile(envPath);
-      assert.equal(process.env.INBOX_DB_URL, 'postgres://user:pass@host/db');
-      assert.equal(process.env.INBOX_USER, 'marcin');
+      assert.equal(process.env.INBOX_HUB_URL, 'https://hub.example/api');
+      assert.equal(process.env.INBOX_TOKEN, 'tok-marcin');
     }
   );
 });
 
 test('readEnvFile: nie nadpisuje już ustawionych zmiennych', async () => {
-  process.env.INBOX_USER = 'kacper';
-  await withTmpEnvFile('INBOX_USER=intruz\n', async (envPath) => {
+  process.env.INBOX_TOKEN = 'tok-kacper';
+  await withTmpEnvFile('INBOX_TOKEN=intruz\n', async (envPath) => {
     await readEnvFile(envPath);
-    assert.equal(process.env.INBOX_USER, 'kacper');
+    assert.equal(process.env.INBOX_TOKEN, 'tok-kacper');
   });
 });
 

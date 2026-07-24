@@ -32,19 +32,19 @@ export async function loadEnv() {
     await readEnvFile(process.env.INBOX_ENV_FILE);
   }
 
-  const home = process.env.HOME || process.env.USERPROFILE;
-  const workspace = process.env.CLAUDE_CRON_WORKSPACE
-    || (home ? path.resolve(home, 'Documents/kacper_trzepiecinski_workspace') : null);
+  // Workspace WYŁĄCZNIE z konfiguracji (CLAUDE_CRON_WORKSPACE / INBOX_ENV_FILE) —
+  // żadnego zaszytego katalogu konkretnego usera.
+  const workspace = process.env.CLAUDE_CRON_WORKSPACE || null;
 
   // Fallback na .env workspace'u tylko gdy INBOX_ENV_FILE nie dał kompletu
-  if (!(process.env.INBOX_DB_URL && process.env.INBOX_USER) && workspace) {
+  if (!(process.env.INBOX_HUB_URL && process.env.INBOX_TOKEN) && workspace) {
     await readEnvFile(path.join(workspace, '.env'));
   }
 
   // Ścieżki rozwiązywane ZAWSZE — niezależnie od źródła env
   const requireWorkspace = (varName) => {
     if (!workspace) {
-      throw new Error(`Ustaw ${varName} w .env (brak HOME/USERPROFILE/CLAUDE_CRON_WORKSPACE)`);
+      throw new Error(`Ustaw ${varName} w .env (brak CLAUDE_CRON_WORKSPACE / INBOX_ENV_FILE)`);
     }
     return workspace;
   };

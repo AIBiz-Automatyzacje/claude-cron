@@ -12,8 +12,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import pg from 'pg';
-
+import * as inboxClient from './inbox-client.mjs';
 import { loadEnv } from './env-loader.mjs';
 
 const require = createRequire(import.meta.url);
@@ -106,82 +105,51 @@ function runClaude({ prompt, model, cwd }) {
   });
 }
 
-export async function main() {
+// client wstrzykiwany dla testowalności (mock huba); domyślnie realny inbox-client.
+// Atomowy claim jednego query siedzi na hubie (claimQuery: UPDATE...RETURNING) — dwa
+// nakładające się runy nie odpowiedzą podwójnie, a brak kandydata = {query:null}.
+export async function main({ client = inboxClient } = {}) {
   await loadEnv();
-  const { INBOX_DB_URL, INBOX_USER, INBOX_SKRZYNKA_PATH, INBOX_ARCHIVE_DIR } = process.env;
-  if (!INBOX_DB_URL || !INBOX_USER) {
-    console.error('Missing INBOX_DB_URL or INBOX_USER');
-    process.exit(1);
-  }
+  const { INBOX_SKRZYNKA_PATH, INBOX_ARCHIVE_DIR } = process.env;
   const model = process.env.INBOX_ASSISTANT_MODEL || 'sonnet';
   // Vault root z wymuszonej przez env-loader ścieżki Skrzynki (<vault>/Zadania/Skrzynka.md)
   const vaultRoot = path.dirname(path.dirname(INBOX_SKRZYNKA_PATH));
 
-  const client = new pg.Client({ connectionString: INBOX_DB_URL });
-  await client.connect();
-  try {
-    // Kandydat: najstarsze otwarte query do mnie, w którym NIKT jeszcze nie odpisał
-    // i którego asystent jeszcze nie próbował (marker w payload).
-    const candRes = await client.query(
-      `SELECT id, COALESCE(thread_id, id) AS thread_id, from_user, title, content
-       FROM inbox i
-       WHERE to_user = $1
-         AND type = 'query'
-         AND status IN ('pending','delivered')
-         AND COALESCE(payload->>'auto_reply_attempted','') = ''
-         AND NOT EXISTS (
-           SELECT 1 FROM inbox r
-           WHERE r.thread_id = COALESCE(i.thread_id, i.id) AND r.type = 'reply'
-         )
-       ORDER BY created_at ASC
-       LIMIT 1`,
-      [INBOX_USER]
-    );
-    if (candRes.rows.length === 0) {
-      console.log(`[auto-reply] ${new Date().toISOString()} — user=${INBOX_USER} no candidates`);
-      return;
-    }
-    const q = candRes.rows[0];
-
-    // Claim PRZED spawnem — atomowy, nakładające się runy nie odpowiedzą podwójnie.
-    // Jedna próba na query: marker zostaje też po failu spawna (query i tak wisi u człowieka).
-    const claimRes = await client.query(
-      `UPDATE inbox
-       SET payload = COALESCE(payload,'{}'::jsonb) || jsonb_build_object('auto_reply_attempted', now())
-       WHERE id = $1 AND COALESCE(payload->>'auto_reply_attempted','') = ''
-       RETURNING id`,
-      [q.id]
-    );
-    if (claimRes.rows.length === 0) {
-      console.log(`[auto-reply] ${new Date().toISOString()} — query ${q.id} claimed by another run, skipping`);
-      return;
-    }
-
-    console.log(`[auto-reply] ${new Date().toISOString()} — user=${INBOX_USER} answering "${q.title}" from @${q.from_user} (model=${model})`);
-    const result = await runClaude({ prompt: buildPrompt({ fromUser: q.from_user, toUser: INBOX_USER, title: q.title, content: q.content }), model, cwd: vaultRoot });
-    if (!result.ok) {
-      console.error(`[auto-reply] FATAL: spawn failed for query ${q.id}: ${result.error}`);
-      process.exit(1); // alarm Telegram (routine job) — query zostaje człowiekowi
-    }
-
-    const now = new Date();
-    const answer = parseAnswer(result.stdout);
-    if (answer === null) {
-      await appendHistory(INBOX_ARCHIVE_DIR, formatHistoryLine({ date: now, toUser: q.from_user, title: q.title, answer: null }), now);
-      console.log(`[auto-reply] ${new Date().toISOString()} — NO_ANSWER for "${q.title}", zostaje dla człowieka`);
-      return;
-    }
-
-    await client.query(
-      `INSERT INTO inbox (thread_id, from_user, to_user, type, title, content, payload)
-       VALUES ($1, $2, $3, 'reply', $4, $5, '{"auto_reply": true}'::jsonb)`,
-      [q.thread_id, INBOX_USER, q.from_user, `Re: ${q.title}`, formatReplyContent(answer)]
-    );
-    await appendHistory(INBOX_ARCHIVE_DIR, formatHistoryLine({ date: now, toUser: q.from_user, title: q.title, answer }), now);
-    console.log(`[auto-reply] ${new Date().toISOString()} — replied to @${q.from_user} on "${q.title}" (${answer.length} chars)`);
-  } finally {
-    await client.end();
+  // Atomowy claim po stronie huba: zwraca zajętą wiadomość albo null (brak kandydata /
+  // podjęte przez równoległy run). Marker auto_reply_attempted ustawia hub.
+  const { query: q } = await client.claimQuery();
+  if (!q) {
+    console.log(`[auto-reply] ${new Date().toISOString()} — no candidates`);
+    return;
   }
+
+  // Tożsamość odbiorcy pytania (= ja) z zajętej wiadomości — hub claimuje query do mnie.
+  const me = q.to_user;
+  console.log(`[auto-reply] ${new Date().toISOString()} — user=${me} answering "${q.title}" from @${q.from_user} (model=${model})`);
+  const result = await runClaude({ prompt: buildPrompt({ fromUser: q.from_user, toUser: me, title: q.title, content: q.content }), model, cwd: vaultRoot });
+  if (!result.ok) {
+    console.error(`[auto-reply] FATAL: spawn failed for query ${q.id}: ${result.error}`);
+    process.exit(1); // alarm Telegram (routine job) — query zostaje człowiekowi
+  }
+
+  const now = new Date();
+  const answer = parseAnswer(result.stdout);
+  if (answer === null) {
+    await appendHistory(INBOX_ARCHIVE_DIR, formatHistoryLine({ date: now, toUser: q.from_user, title: q.title, answer: null }), now);
+    console.log(`[auto-reply] ${new Date().toISOString()} — NO_ANSWER for "${q.title}", zostaje dla człowieka`);
+    return;
+  }
+
+  await client.send({
+    thread_id: q.thread_id,
+    to_user: q.from_user,
+    type: 'reply',
+    title: `Re: ${q.title}`,
+    content: formatReplyContent(answer),
+    payload: { auto_reply: true },
+  });
+  await appendHistory(INBOX_ARCHIVE_DIR, formatHistoryLine({ date: now, toUser: q.from_user, title: q.title, answer }), now);
+  console.log(`[auto-reply] ${new Date().toISOString()} — replied to @${q.from_user} on "${q.title}" (${answer.length} chars)`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

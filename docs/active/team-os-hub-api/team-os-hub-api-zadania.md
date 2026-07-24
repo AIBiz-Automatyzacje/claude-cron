@@ -1,7 +1,7 @@
 # Team OS Hub-API — zadania
 
 Branch: `feature/team-os-hub-api`
-Ostatnia aktualizacja: 2026-07-24
+Ostatnia aktualizacja: 2026-07-24 (Faza 2 ukończona — implementacja)
 
 ## Faza 0 — przygotowanie
 
@@ -60,20 +60,20 @@ Ostatnia aktualizacja: 2026-07-24
 ## Faza 2 — Klienci (M)
 
 ### IU-2.1 `scripts/inbox/inbox-client.mjs` (S)
-- [ ] Wrapper fetch: `INBOX_HUB_URL`+`INBOX_TOKEN`, timeout (AbortController), 1 retry na timeout/5xx, czytelne błędy konfiguracji
-- [ ] Weryfikacja `v:1` w odpowiedzi — mismatch = czytelny błąd „zaktualizuj Pulsa"
-- [ ] Test: happy + error (timeout, zła wersja, brak konfiguracji)
+- [x] Wrapper fetch: `INBOX_HUB_URL`+`INBOX_TOKEN`, timeout (AbortController), 1 retry na timeout/5xx, czytelne błędy konfiguracji
+- [x] Weryfikacja `v:1` w odpowiedzi — mismatch = czytelny błąd „zaktualizuj Pulsa"
+- [x] Test: happy + error (timeout, zła wersja, brak konfiguracji)
 
 ### IU-2.2 Przepięcie skryptów (M)
-- [ ] `inbox-pull.mjs`: pg → client.pull; `me` z odpowiedzi huba (pole `user`)
-- [ ] `inbox-push.mjs`: pg → client.done; OUT transakcje i sprawdzanie done (robi hub); archiwum z nitki zwróconej przez `done`
-- [ ] `auto-reply.mjs`: pg → client.claimQuery + client.send; OUT własny claim przez UPDATE
+- [x] `inbox-pull.mjs`: pg → client.pull; `me` z odpowiedzi huba (pole `user`)
+- [x] `inbox-push.mjs`: pg → client.done; OUT transakcje i sprawdzanie done (robi hub); archiwum z nitki zwróconej przez `done`
+- [x] `auto-reply.mjs`: pg → client.claimQuery + client.send; OUT własny claim przez UPDATE
 - [ ] Weryfikacja: parsery, renderery, self-heal i ich testy BEZ zmian — `git diff` czysty na testach warstwy plików (wymaganie twarde #6)
 
 ### IU-2.3 Konfiguracja (S)
-- [ ] `env-loader.mjs`: `INBOX_HUB_URL`+`INBOX_TOKEN`; OUT `INBOX_DB_URL`/`INBOX_USER`; OUT hardcoded fallback `Documents/kacper_trzepiecinski_workspace`
-- [ ] `inbox-seed.js`: warunek konfiguracji = HUB_URL && TOKEN
-- [ ] Test: env-loader happy + error po zmianach; inbox-seed `not_configured` bez nowych zmiennych
+- [x] `env-loader.mjs`: `INBOX_HUB_URL`+`INBOX_TOKEN`; OUT `INBOX_DB_URL`/`INBOX_USER`; OUT hardcoded fallback `Documents/kacper_trzepiecinski_workspace`
+- [x] `inbox-seed.js`: warunek konfiguracji = HUB_URL && TOKEN
+- [x] Test: env-loader happy + error po zmianach; inbox-seed `not_configured` bez nowych zmiennych
 - [ ] Weryfikacja: pełna suita zielona
 
 ## Faza 3 — Onboarding (L)
