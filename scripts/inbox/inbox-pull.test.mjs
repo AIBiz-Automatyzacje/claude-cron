@@ -2,7 +2,7 @@
 // wyrenderowany callout po odhaczeniu MUSI być parsowalny (kontrakt id/thread/checkbox).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderThreadCallout, renderDelegatedCallout } from './inbox-pull.mjs';
+import { renderThreadCallout, renderDelegatedCallout, SKRZYNKA_TEMPLATE } from './inbox-pull.mjs';
 import { parseCheckedCallouts } from './inbox-push.mjs';
 
 const T0 = '2026-07-24T07:12:00.000Z';
@@ -68,6 +68,17 @@ test('roundtrip: wyrenderowany i odhaczony callout parsuje się w inbox-push', (
   const parsed = parseCheckedCallouts(rendered);
   assert.equal(parsed.length, 1);
   assert.deepEqual(parsed[0], { id: ID_A, thread_id: THREAD, action: 'Zrobione' });
+});
+
+test('szablon self-heal: markery obu sekcji, liczniki pod regexy, cssclasses', () => {
+  for (const m of ['%% inbox:items:start %%', '%% inbox:items:end %%', '%% delegated:items:start %%', '%% delegated:items:end %%']) {
+    assert.ok(SKRZYNKA_TEMPLATE.includes(m), `brak markera ${m}`);
+    assert.ok(SKRZYNKA_TEMPLATE.indexOf(m) === SKRZYNKA_TEMPLATE.lastIndexOf(m), `zdublowany marker ${m}`);
+  }
+  // liczniki muszą pasować do regexów podmiany w updateSkrzynkaFile
+  assert.match(SKRZYNKA_TEMPLATE, /^\*\d+ now[a-z]+\*$/m);
+  assert.match(SKRZYNKA_TEMPLATE, /^\*\d+ w toku\*$/m);
+  assert.ok(SKRZYNKA_TEMPLATE.includes('cssclasses: [skrzynka]'));
 });
 
 test('delegowane: jeden callout, pill czasu, stale ⚠️, marker thread per wiersz', () => {

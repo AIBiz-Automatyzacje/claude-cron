@@ -7,6 +7,7 @@
 
 import pg from 'pg';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadEnv } from './env-loader.mjs';
 
@@ -180,8 +181,47 @@ function buildThreadCallouts(threadRows, activeForMe, me) {
 }
 
 // ──────── Skrzynka.md writer (oba bloki w jednym pliku) ────────
+// Self-heal: brak pliku (świeży onboarding, zguba po sync/backup) → utwórz z szablonu.
+// Plik istniejący bez markerów NIE jest naprawiany — nie nadpisujemy cudzej treści (throw niżej).
+export const SKRZYNKA_TEMPLATE = `---
+status: w_trakcie
+priorytet: normalne
+termin: 2099-12-31
+tags: [skrzynka, personal-team-os]
+cssclasses: [skrzynka]
+---
+
+# 📬 Skrzynka
+
+## 📥 Otrzymane
+
+*0 nowych*
+
+%% inbox:items:start %%
+%% inbox:items:end %%
+
+## 📤 Wysłane — czekają na odpowiedź
+
+*0 w toku*
+
+%% delegated:items:start %%
+%% delegated:items:end %%
+`;
+
+async function ensureSkrzynkaFile(filePath) {
+  try {
+    return await fs.readFile(filePath, 'utf8');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, SKRZYNKA_TEMPLATE, 'utf8');
+    console.log(`[inbox-pull] created ${filePath} from template (self-heal)`);
+    return SKRZYNKA_TEMPLATE;
+  }
+}
+
 async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedItems, me) {
-  const raw = await fs.readFile(filePath, 'utf8');
+  const raw = await ensureSkrzynkaFile(filePath);
   const inboxCallouts = buildThreadCallouts(threadRows, activeForMe, me);
   const inboxCount = activeForMe.length;
   const delegatedCount = delegatedItems.length;

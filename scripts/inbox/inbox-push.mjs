@@ -56,7 +56,7 @@ export function parseCheckedCallouts(section) {
 }
 
 // ──────── archive ────────
-function archivePath(archiveDir) {
+export function archivePath(archiveDir) {
   const now = new Date();
   const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   return path.join(archiveDir, `${ym}.md`);
@@ -71,7 +71,7 @@ function fmtTime(iso) {
 
 // Archiwizuje CAŁĄ nitkę wątku w jednym callout (nie pojedynczą wiadomość) —
 // zamknięty wątek ma być czytelny bez sięgania do bazy.
-function renderArchiveThread(thread, closedBy) {
+export function renderArchiveThread(thread, closedBy) {
   const root = thread[0];
   const emoji = TYPE_EMOJI[root.type] || '📨';
   const label = TYPE_LABEL[root.type] || 'Wiadomość';
