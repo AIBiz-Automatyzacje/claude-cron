@@ -1,7 +1,7 @@
 # Team OS Hub-API — migracja skrzynki z publicznego Postgresa na hub przez Tailscale Funnel
 
 Branch: `feature/team-os-hub-api`
-Ostatnia aktualizacja: 2026-07-24 (Faza 2 zrealizowana — implementacja)
+Ostatnia aktualizacja: 2026-07-24 (Faza 3 zrealizowana — implementacja)
 
 ## Podsumowanie wykonawcze
 
@@ -90,7 +90,7 @@ Wymiana ~19 wywołań `pg` na `inbox-client`. Z klientów ZNIKA: `BEGIN/COMMIT/R
 **IU-2.3 `env-loader.mjs` + `inbox-seed.js` (S)**
 Nowa konfiguracja: `INBOX_HUB_URL` + `INBOX_TOKEN` (stare `INBOX_DB_URL`/`INBOX_USER` przestają być czytane — czysta wymiana, bez okresu podwójnego wsparcia; migrujemy siebie i Kamila ręcznie w F4). **Usunięcie hardcoded fallbacku** `Documents/kacper_trzepiecinski_workspace` — workspace wyłącznie z `CLAUDE_CRON_WORKSPACE`/`INBOX_ENV_FILE`. `inbox-seed`: warunek konfiguracji = `INBOX_HUB_URL && INBOX_TOKEN`.
 
-### Faza 3 — Onboarding w instalatorach (L)
+### Faza 3 — Onboarding w instalatorach (L) ✅ zrealizowana (npm test 492/492; install-vps.test.sh 110/110; miernik 3 spełniony — onboarding członka = jeden kod zaproszenia w setupie)
 
 **IU-3.1 Komponent „Team OS hub" w `install-vps.sh` + testy (M)**
 Pytanie w pełnym trybie (domyślnie **n** — hub stawia tylko admin zespołu): init `data/inbox.db` robi serwer przy pierwszym żądaniu (migracje leniwe — instalator NIE dłubie w SQLite), instalator dodaje członka-admina przez API lokalnego serwera (`curl` do `127.0.0.1:7777/api/inbox/members`), składa kod zaproszenia z Funnel-URL (guard: hub bez skonfigurowanego Funnela = fail z instrukcją, nie cichy sukces — learned pattern „potwierdzaj stan faktyczny") i drukuje go w podsumowaniu. Idempotentny re-run (członek istnieje → nie duplikuj). Testy w `install-vps.test.sh`.

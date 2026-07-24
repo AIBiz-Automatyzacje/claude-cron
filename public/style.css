@@ -249,6 +249,7 @@ body {
 .trow.disabled .task-name, .trow.disabled .task-tag { opacity: .5; }
 
 .grid-zadania { grid-template-columns: 2.7fr 1.3fr 0.95fr 0.8fr 1.05fr 0.65fr 0.9fr; column-gap: 14px; }
+.grid-zespol { grid-template-columns: 2fr 1.4fr 1.2fr 0.7fr; column-gap: 14px; }
 .thead > div, .trow > div { min-width: 0; }
 
 .task-cell { display: flex; align-items: center; gap: 12px; min-width: 0; padding-right: 16px; }
@@ -619,6 +620,22 @@ body {
 .btn-danger { background: rgba(255, 92, 92, .12); color: var(--red); border-color: rgba(255, 92, 92, .3); }
 .btn-danger:hover { background: rgba(255, 92, 92, .2); }
 
+/* ===== Zespół (Team OS Hub) ===== */
+/* Zamaskowany token w liście — monospace, przygaszony (nie krzyczy, to nie sekret) */
+.token-mask { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--dim); }
+/* Ostrzeżenie o jednorazowości kodu zaproszenia — akcent danger, ale nie panika */
+.invite-warn {
+  margin-top: 14px; padding: 11px 13px;
+  background: rgba(255, 92, 92, .1); border: 1px solid rgba(255, 92, 92, .3);
+  border-radius: var(--r-sm); color: var(--red); font-size: 12.5px; line-height: 1.5;
+}
+/* Błąd walidacji/serwera przy formularzu (409 zajęte imię, 503 brak Funnela) */
+.form-error {
+  margin-top: 9px; padding: 9px 12px;
+  background: rgba(255, 92, 92, .1); border: 1px solid rgba(255, 92, 92, .3);
+  border-radius: var(--r-sm); color: var(--red); font-size: 12.5px; line-height: 1.45;
+}
+
 /* Przełączanie środowiska LOKALNY/VPS — dim treści + spinner, stare dane zostają */
 main { transition: opacity .2s ease; }
 body.env-loading main { opacity: .35; pointer-events: none; }
@@ -668,6 +685,7 @@ select:focus-visible,
   .table { overflow-x: auto; }
   .thead.grid-zadania, .trow.grid-zadania { min-width: 1080px; }
   .thead.grid-historia, .hrow.grid-historia { min-width: 760px; }
+  .thead.grid-zespol, .trow.grid-zespol { min-width: 560px; }
 
   /* Skille: lżejsze siatki na wąskim ekranie */
   .skille-grid { grid-template-columns: 1fr 1fr; }

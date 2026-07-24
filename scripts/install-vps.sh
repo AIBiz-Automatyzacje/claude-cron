@@ -54,6 +54,13 @@ SYNC_POLL_SECONDS=5
 DEFAULT_PORT=7777
 DEFAULT_TZ="Europe/Warsaw"
 
+# Team OS hub: liczba prób i interwał [s] potwierdzenia, że serwer Pulsa
+# odpowiada na 127.0.0.1:$PORT. setup_funnel restartuje serwis (wpis
+# WEBHOOK_BASE_URL), więc dajemy mu chwilę na wstanie — potwierdzamy stan
+# faktyczny (realna odpowiedź HTTP), nie zakładamy, że proces już żyje.
+TEAM_OS_PROBE_ATTEMPTS=5
+TEAM_OS_PROBE_INTERVAL=2
+
 # Wspierany zakres Node — node:sqlite stabilne dopiero od 22.13, górna granica
 # wykluczająca <25 (spójne z package.json "engines >=22.13 <25" i lib/config.js
 # MIN_NODE_VERSION/MAX_NODE_VERSION). Bez górnej granicy instalator/cron-guard
@@ -1414,6 +1421,140 @@ setup_funnel() {
   set_service_webhook_env
 }
 
+# ============ FAZA 6: TEAM OS HUB (opt-in, tylko admin zespołu) ============
+
+# Serwer inicjuje data/inbox.db LENIWIE (migracje przy pierwszym żądaniu) —
+# instalator NIE dłubie w SQLite, tylko woła API lokalnego serwera. Członka-
+# admina dodaje przez POST /api/inbox/members (prywatne, za guardem XFF; z
+# localhost bez X-Forwarded-For i bez Origin przechodzi). Kod zaproszenia
+# z Funnel-URL pojawia się w odpowiedzi JEDNORAZOWO — drukujemy go w podsumowaniu.
+
+# is_valid_member_name <s> — imię idzie do ciała JSON (curl --data) i do
+# komunikatów; ograniczamy do liter/cyfr/spacji/. _ - (bez cudzysłowów, które
+# łamałyby JSON, i bez znaków sterujących).
+is_valid_member_name() {
+  [[ "$1" =~ ^[A-Za-z0-9\ ._-]+$ ]]
+}
+
+# team_os_member_body <name> — czyste ciało JSON dla POST-a (jeden klucz name).
+team_os_member_body() {
+  printf '{"name":"%s"}' "$1"
+}
+
+# team_os_member_exists <name> (stdin: JSON listy członków z GET) — 0 gdy członek
+# o dokładnie tym imieniu już jest. Fixed-string (grep -F): imię nie jest wzorcem
+# regex, a zamykający cudzysłów odcina fałszywe trafienia na prefiksie.
+team_os_member_exists() {
+  grep -qF "\"name\":\"$1\""
+}
+
+# team_os_extract_invite (stdin: JSON odpowiedzi POST) — wyciąga wartość
+# invite_code. Format `puls-inbox:<url>#<token>` nie zawiera cudzysłowu, więc
+# [^"]* bezpiecznie łapie całość. Puste = brak pola (np. inna wersja Pulsa).
+team_os_extract_invite() {
+  { grep -oE '"invite_code":"[^"]*"' || true; } | head -1 | sed 's/^"invite_code":"//; s/"$//'
+}
+
+# team_os_curl <out_file> <curl-args...> — wypisuje KOD HTTP na stdout, ciało
+# do out_file. Rozstrzygamy na kodzie HTTP, nie na exit-code curl (learned
+# pattern „potwierdzaj stan faktyczny"): brak połączenia = curl daje kod 000,
+# który widzimy i traktujemy jak „serwer nie odpowiada".
+team_os_curl() {
+  local out_file="$1"; shift
+  local code=""
+  code="$(curl -sS -o "$out_file" -w '%{http_code}' --max-time 15 "$@" 2>/dev/null)" || true
+  [ -n "$code" ] || code="000"
+  printf '%s' "$code"
+}
+
+# team_os_wait_for_server <api-base> <out_file> — pętla do TEAM_OS_PROBE_ATTEMPTS:
+# GET listy członków (endpoint lekki, NIE wymaga Funnela). 200 = serwer żyje,
+# a out_file zawiera listę do sprawdzenia idempotencji. Zwraca 1, gdy nie wstał.
+team_os_wait_for_server() {
+  local api="$1" out_file="$2" attempt code
+  for (( attempt=1; attempt<=TEAM_OS_PROBE_ATTEMPTS; attempt++ )); do
+    code="$(team_os_curl "$out_file" "$api/api/inbox/members")"
+    if [ "$code" = "200" ]; then
+      return 0
+    fi
+    sleep "$TEAM_OS_PROBE_INTERVAL"
+  done
+  return 1
+}
+
+# Opcjonalny hub skrzynki Team OS — pytanie w PEŁNYM trybie (domyślnie N: hub
+# stawia tylko admin zespołu). Wpięte PO setup_funnel (kod zaproszenia wymaga
+# żywego serwera z ustawionym WEBHOOK_BASE_URL) i PRZED podsumowaniem (drukuje
+# kod). Guard braku Funnela = realny HTTP 503 z API (nie cichy sukces) →
+# instrukcja. Idempotentny re-run po `name`. Pad = warn, nie fail: to opcjonalny
+# krok finału, ERR/exit odwinąłby rollback działającej, zweryfikowanej instalacji.
+setup_team_os_hub() {
+  echo ""
+  local answer=""
+  ask_tty answer "Postawić hub skrzynki Team OS na tym serwerze? (tylko admin zespołu) [t/N]: " "N"
+  if [[ ! "$answer" =~ ^[TtYy]$ ]]; then
+    return 0
+  fi
+
+  local name=""
+  ask_valid name "Imię administratora zespołu (członek-admin skrzynki): " \
+    is_valid_member_name "Imię: tylko litery, cyfry, spacje i . _ - (bez cudzysłowów)." "admin"
+
+  local api="http://127.0.0.1:$PORT" body_file
+  body_file="$(mktemp)"
+
+  # 1. Potwierdź, że serwer FAKTYCZNIE odpowiada (nie zakładaj, że wstał po
+  # restarcie z setup_funnel). Pad = pomiń hub z instrukcją, nie fail całości.
+  if ! team_os_wait_for_server "$api" "$body_file"; then
+    warn "Serwer Pulsa nie odpowiada na $api — hub skrzynki pominięty. Sprawdź: systemctl status $SERVICE_NAME, potem wklej ponownie tę samą komendę instalacji."
+    rm -f "$body_file"
+    return 0
+  fi
+
+  # 2. Idempotencja: członek o tym imieniu już jest → nie duplikuj. GET zwraca
+  # token TYLKO zamaskowany, więc pełny kod zaproszenia (jednorazowy) nie jest
+  # już dostępny — komunikujemy to jasno.
+  if team_os_member_exists "$name" < "$body_file"; then
+    ok "Członek-admin „${name}” już istnieje w skrzynce — pomijam tworzenie."
+    info "Kod zaproszenia pokazywany jest tylko RAZ, przy pierwszym utworzeniu. Nie masz go? Unieważnij i utwórz członka ponownie w dashboardzie (widok Zespół)."
+    rm -f "$body_file"
+    return 0
+  fi
+
+  # 3. Utworzenie członka. Rozstrzygamy na KODZIE HTTP odpowiedzi (nie exit-code
+  # curl): 201 = utworzony (+ jednorazowy kod zaproszenia), 503 = brak Funnela
+  # (twardy błąd komponentu z instrukcją — kod zaproszenia byłby bezużyteczny).
+  local code
+  code="$(team_os_curl "$body_file" -X POST -H 'Content-Type: application/json' \
+    --data "$(team_os_member_body "$name")" "$api/api/inbox/members")"
+
+  if [ "$code" = "503" ]; then
+    warn "Hub skrzynki NIE został skonfigurowany: Tailscale Funnel nie jest ustawiony, więc kod zaproszenia byłby bezużyteczny (członkowie nie mieliby jak połączyć się z hubem)."
+    warn "Włącz Funnel i uruchom instalator ponownie (przy pytaniu o Funnel odpowiedz [t]), potem wróć do pytania o hub skrzynki:"
+    warn "  $RESUME_ONE_LINER"
+    rm -f "$body_file"
+    return 0
+  fi
+  if [ "$code" != "201" ]; then
+    warn "Nie udało się dodać członka-admina skrzynki (HTTP $code) — hub pominięty. Diagnoza: journalctl -u $SERVICE_NAME -n 30."
+    rm -f "$body_file"
+    return 0
+  fi
+
+  local invite
+  invite="$(team_os_extract_invite < "$body_file")"
+  if [ -z "$invite" ]; then
+    warn "API utworzyło członka (HTTP 201), ale odpowiedź nie zawiera kodu zaproszenia — sprawdź wersję Pulsa (git pull) i widok Zespół w dashboardzie."
+    rm -f "$body_file"
+    return 0
+  fi
+
+  TEAM_OS_INVITE_CODE="$invite"
+  TEAM_OS_ADMIN_NAME="$name"
+  ok "Członek-admin „${name}” dodany do skrzynki Team OS."
+  rm -f "$body_file"
+}
+
 # ============ FAZA 6: AUTO-UPDATE (cron 02:00, opt-out --no-auto-update) ============
 
 # build_cron_cmd <vault_git> <install_dir> <guard_script> <cron_log> <only_puls>
@@ -1655,6 +1796,15 @@ print_summary() {
   fi
   if [ -n "$WEBHOOK_BASE_URL" ]; then
     echo -e "  ${BOLD}Webhooki:${NC}   ${CYAN}$WEBHOOK_BASE_URL/webhook/<token>${NC}"
+  fi
+  # Kod zaproszenia do skrzynki Team OS — pokazywany JEDNORAZOWO (API zwraca
+  # pełny token tylko przy utworzeniu; GET już go maskuje).
+  if [ -n "${TEAM_OS_INVITE_CODE:-}" ]; then
+    echo ""
+    echo -e "  ${BOLD}Skrzynka Team OS (hub):${NC}"
+    echo -e "    Kod zaproszenia dla „${TEAM_OS_ADMIN_NAME:-admin}” — ${BOLD}pokazywany TYLKO teraz${NC}:"
+    echo -e "      ${CYAN}${TEAM_OS_INVITE_CODE}${NC}"
+    echo "    Wklej go w instalacji lokalnej (setup) na maszynie tego członka."
   fi
   echo -e "  ${BOLD}Powiadomienia:${NC} skonfigurujesz przy instalacji lokalnej — trafią tu automatycznie"
 
@@ -1953,6 +2103,11 @@ main() {
   verify_services
   [ "$FLAG_ONLY_PULS" = 1 ] || create_welcome_note
   setup_funnel
+  # Hub skrzynki Team OS PO Funnelu (kod zaproszenia wymaga WEBHOOK_BASE_URL
+  # ustawionego w restarcie z setup_funnel) i PRZED podsumowaniem (drukuje kod).
+  # Tylko w pełnym trybie — hub stawia admin zespołu (konwencja rejestratora
+  # wywołań, jak create_welcome_note).
+  [ "$FLAG_ONLY_PULS" = 1 ] || setup_team_os_hub
   print_summary
 }
 

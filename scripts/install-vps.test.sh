@@ -659,7 +659,7 @@ install_claude_cli install_ob install_tailscale login_block \
 configure_obsidian_file_types setup_vault_git link_vault_claude \
 create_obsidian_sync_service clone_repo \
 setup_puls_dependencies create_systemd_service configure_firewall setup_tailscale \
-setup_auto_update verify_services create_welcome_note setup_funnel print_summary"
+setup_auto_update verify_services create_welcome_note setup_funnel setup_team_os_hub print_summary"
 
 write_recorder_snippet() {
   local snippet="$1" main_args="$2"
@@ -1901,6 +1901,217 @@ test_main_final_phase_order() {
   fi
 }
 
+# --- Test 58b: czyste helpery Team OS hub — walidacja imienia, ciało JSON,
+#     dopasowanie po name (idempotencja), ekstrakcja invite_code ---
+test_team_os_helpers() {
+  local snippet="$SANDBOX/t-hub-helpers.sh" out
+  cat > "$snippet" <<'EOF'
+# is_valid_member_name: dozwolone znaki vs cudzysłów/pusty
+v_ok=0;   is_valid_member_name "Ala Kowalska_1.2" || v_ok=$?
+v_quote=0; is_valid_member_name 'zły"input' || v_quote=$?
+v_empty=0; is_valid_member_name "" || v_empty=$?
+echo "VOK=$v_ok VQUOTE=$v_quote VEMPTY=$v_empty"
+# ciało JSON
+echo "BODY=$(team_os_member_body "Ala")"
+# member_exists: dokładne imię trafia, prefiks NIE (zamykający cudzysłów)
+LIST='[{"id":"1","name":"admin","token_masked":"..ab","created_at":"z"}]'
+e_hit=0;  printf '%s' "$LIST" | team_os_member_exists "admin"  || e_hit=$?
+e_miss=0; printf '%s' "$LIST" | team_os_member_exists "adm"    || e_miss=$?
+echo "EHIT=$e_hit EMISS=$e_miss"
+# extract_invite: wyciąga pełny kod z odpowiedzi POST; brak pola = puste
+POST='{"id":"9","name":"admin","token":"dead","invite_code":"puls-inbox:https://srv.ts.net#deadbeef","created_at":"z"}'
+echo "INV=[$(printf '%s' "$POST" | team_os_extract_invite)]"
+echo "INVNONE=[$(printf '%s' '{"id":"9","name":"a"}' | team_os_extract_invite)]"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"VOK=0 VQUOTE=1 VEMPTY=1"* ]] \
+    && [[ "$out" == *'BODY={"name":"Ala"}'* ]] \
+    && [[ "$out" == *"EHIT=0 EMISS=1"* ]] \
+    && [[ "$out" == *"INV=[puls-inbox:https://srv.ts.net#deadbeef]"* ]] \
+    && [[ "$out" == *"INVNONE=[]"* ]]; then
+    pass "team_os helpery: walidacja imienia, ciało JSON, dopasowanie po name, ekstrakcja invite_code"
+  else
+    problem "team_os helpery: zły wynik (output: $out)"
+  fi
+}
+
+# --- Test 58c: setup_team_os_hub — happy path (201 → kod), 503 (Funnel → fail
+#     z instrukcją, NIE cichy sukces), idempotencja (member istnieje → bez POST),
+#     default N (bez tty → zero wywołań API) ---
+test_setup_team_os_hub() {
+  local snippet="$SANDBOX/t-hub.sh" out rc
+
+  # Gałąź default N (bez tty): API nie może być dotknięte.
+  local called="$SANDBOX/hub-curl-called"
+  rm -f "$called"
+  cat > "$snippet" <<EOF
+curl() { echo x >> "$called"; }
+sleep() { :; }
+PORT=7777
+setup_team_os_hub
+echo "INVITE=[\${TEAM_OS_INVITE_CODE:-}]"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -f "$called" ] && [[ "$out" == *"INVITE=[]"* ]]; then
+    pass "setup_team_os_hub: odpowiedź N (default) → zero wywołań API, brak kodu"
+  else
+    problem "setup_team_os_hub: gałąź N zawiodła (rc=$rc, called=$(cat "$called" 2>/dev/null), out: $out)"
+  fi
+
+  # Stub curl wspólny dla gałęzi T: GET → 200 + treść z $GET_BODY; POST → kod
+  # z $POST_CODE + treść z $POST_BODY (znacznik wywołania POST w $POST_MARK).
+  local tty="$SANDBOX/tty-hub"
+  echo "t" > "$tty"
+  local hub_stub="$SANDBOX/hub-curl-stub.sh"
+  cat > "$hub_stub" <<'STUB'
+sleep() { :; }
+curl() {
+  local out="" is_post=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -o) out="$2"; shift 2;;
+      -X) [ "$2" = "POST" ] && is_post=1; shift 2;;
+      *) shift;;
+    esac
+  done
+  if [ "$is_post" = 1 ]; then
+    [ -n "${POST_MARK:-}" ] && echo x >> "$POST_MARK"
+    printf '%s' "$POST_BODY" > "$out"
+    printf '%s' "$POST_CODE"
+  else
+    printf '%s' "$GET_BODY" > "$out"
+    printf '200'
+  fi
+}
+STUB
+
+  # Happy path: GET pusta lista → POST 201 z invite_code → kod w globalu.
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$tty"
+PORT=7777
+GET_BODY='[]'
+POST_CODE='201'
+POST_BODY='{"id":"9","name":"t","token":"deadbeef","invite_code":"puls-inbox:https://srv.ts.net#deadbeefcafe","created_at":"2026-07-24"}'
+source "$hub_stub"
+setup_team_os_hub
+echo "INVITE=[\${TEAM_OS_INVITE_CODE:-}]"
+echo "ADMIN=[\${TEAM_OS_ADMIN_NAME:-}]"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+    && [[ "$out" == *"INVITE=[puls-inbox:https://srv.ts.net#deadbeefcafe]"* ]] \
+    && [[ "$out" == *"ADMIN=[t]"* ]] \
+    && [[ "$out" == *"dodany do skrzynki"* ]]; then
+    pass "setup_team_os_hub: T → 201 → kod zaproszenia w globalu + komunikat sukcesu"
+  else
+    problem "setup_team_os_hub: happy path zawiódł (rc=$rc, out: $out)"
+  fi
+
+  # 503 (brak Funnela): fail z instrukcją, NIE cichy sukces; zero kodu.
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$tty"
+PORT=7777
+GET_BODY='[]'
+POST_CODE='503'
+POST_BODY='{"error":"Funnel URL not configured (set WEBHOOK_BASE_URL)"}'
+source "$hub_stub"
+setup_team_os_hub
+echo "INVITE=[\${TEAM_OS_INVITE_CODE:-}]"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"INVITE=[]"* ]] \
+    && [[ "$out" == *"Funnel nie jest ustawiony"* ]] \
+    && [[ "$out" == *"uruchom instalator ponownie"* ]] \
+    && [[ "$out" != *"dodany do skrzynki"* ]]; then
+    pass "setup_team_os_hub: 503 → fail z instrukcją (Funnel), bez kodu i bez fałszywego sukcesu"
+  else
+    problem "setup_team_os_hub: gałąź 503 zawiodła (rc=$rc, out: $out)"
+  fi
+
+  # Idempotencja: GET zwraca członka „t" → POST NIE jest wołany (znacznik pusty).
+  local post_mark="$SANDBOX/hub-post-called"
+  rm -f "$post_mark"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$tty"
+PORT=7777
+POST_MARK="$post_mark"
+GET_BODY='[{"id":"1","name":"t","token_masked":"..beef","created_at":"z"}]'
+POST_CODE='201'
+POST_BODY='{}'
+source "$hub_stub"
+setup_team_os_hub
+echo "INVITE=[\${TEAM_OS_INVITE_CODE:-}]"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -f "$post_mark" ] \
+    && [[ "$out" == *"już istnieje"* ]] && [[ "$out" == *"INVITE=[]"* ]] \
+    && [[ "$out" == *"tylko RAZ"* ]]; then
+    pass "setup_team_os_hub: członek istnieje → brak POST (idempotencja), komunikat o jednorazowym kodzie"
+  else
+    problem "setup_team_os_hub: idempotencja zawiodła (rc=$rc, post_mark=$([ -f "$post_mark" ] && echo TAK || echo NIE), out: $out)"
+  fi
+}
+
+# --- Test 58d: sekwencja main() — hub PO setup_funnel i PRZED print_summary;
+#     --only-puls pomija hub ---
+test_setup_team_os_hub_sequence() {
+  local snippet="$SANDBOX/t-hub-seq.sh" out calls out2
+  write_recorder_snippet "$snippet" ""
+  out="$(run_snippet "$snippet")"
+  calls="$(grep '^CALL ' <<<"$out" || true)"
+  local p_fun p_hub p_sum
+  p_fun="$(grep -n '^CALL setup_funnel$' <<<"$calls" | cut -d: -f1)"
+  p_hub="$(grep -n '^CALL setup_team_os_hub$' <<<"$calls" | cut -d: -f1)"
+  p_sum="$(grep -n '^CALL print_summary$' <<<"$calls" | cut -d: -f1)"
+  if [ -n "$p_fun" ] && [ -n "$p_hub" ] && [ -n "$p_sum" ] \
+    && [ "$p_fun" -lt "$p_hub" ] && [ "$p_hub" -lt "$p_sum" ]; then
+    pass "main(): setup_team_os_hub PO Funnelu i PRZED podsumowaniem"
+  else
+    problem "main(): zła pozycja setup_team_os_hub (fun=$p_fun hub=$p_hub sum=$p_sum, calls: $calls)"
+  fi
+  write_recorder_snippet "$snippet" "--only-puls"
+  out2="$(run_snippet "$snippet")"
+  if [[ "$out2" != *"CALL setup_team_os_hub"* ]] \
+    && [[ "$out2" == *"CALL print_summary"* ]]; then
+    pass "main --only-puls: setup_team_os_hub pominięty, podsumowanie obecne"
+  else
+    problem "main --only-puls: hub NIE został pominięty (output: $out2)"
+  fi
+}
+
+# --- Test 58e: print_summary — kod zaproszenia Team OS pokazany gdy ustawiony,
+#     nieobecny gdy pusty ---
+test_print_summary_team_os() {
+  local snippet="$SANDBOX/t-summary-hub.sh" out out2
+  cat > "$snippet" <<'EOF'
+TS_IP="100.64.0.1"; PORT=7777; WORKSPACE="/home/claude/vault"
+INSTALL_DIR="/home/claude/claude-cron"; WEBHOOK_BASE_URL="https://srv.ts.net"
+FLAG_ONLY_PULS=0
+TEAM_OS_INVITE_CODE="puls-inbox:https://srv.ts.net#deadbeefcafe"
+TEAM_OS_ADMIN_NAME="Ala"
+print_summary
+EOF
+  out="$(run_snippet "$snippet")"
+  cat > "$snippet" <<'EOF'
+TS_IP="100.64.0.1"; PORT=7777; WORKSPACE="/home/claude/vault"
+INSTALL_DIR="/home/claude/claude-cron"; WEBHOOK_BASE_URL="https://srv.ts.net"
+FLAG_ONLY_PULS=0
+print_summary
+EOF
+  out2="$(run_snippet "$snippet")"
+  if [[ "$out" == *"Skrzynka Team OS"* ]] && [[ "$out" == *"puls-inbox:https://srv.ts.net#deadbeefcafe"* ]] \
+    && [[ "$out" == *"Ala"* ]] && [[ "$out" == *"TYLKO teraz"* ]] \
+    && [[ "$out2" != *"Skrzynka Team OS"* ]] && [[ "$out2" != *"puls-inbox:"* ]]; then
+    pass "print_summary: kod zaproszenia Team OS pokazany gdy ustawiony; nieobecny gdy pusty"
+  else
+    problem "print_summary: zły wariant Team OS (out: $out, out2: $out2)"
+  fi
+}
+
 # --- Test 59: cron-node-guard.sh — WYKONANIE wygenerowanego skryptu z atrapą node (granice wersji) ---
 test_cron_node_guard_behavior() {
   local snippet="$SANDBOX/t-guard-gen.sh" guard="$SANDBOX/guard-inst/cron-node-guard.sh" \
@@ -2490,6 +2701,10 @@ test_setup_auto_update
 test_welcome_note
 test_print_summary_funnel_variants
 test_setup_funnel
+test_team_os_helpers
+test_setup_team_os_hub
+test_setup_team_os_hub_sequence
+test_print_summary_team_os
 test_verify_services_and_sync_wait
 test_main_final_phase_order
 test_cron_node_guard_behavior

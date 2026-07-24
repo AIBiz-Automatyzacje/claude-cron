@@ -5,6 +5,7 @@ const {
   pollSignature, jobsSignature, buildSparkData, groupRecentByJob,
   parseCronForCalendar, computeWeekOccurrences, startOfWeek,
   overlapsMaintenanceWindow,
+  validateMemberName, memberRowData, MEMBER_NAME_MAX,
 } = require('./render-helpers');
 
 const MAINTENANCE_WINDOW = { startHour: 2, startMin: 0, endHour: 2, endMin: 15 };
@@ -311,4 +312,54 @@ test('overlapsMaintenanceWindow: nieobsługiwany kształt → false', () => {
 
 test('overlapsMaintenanceWindow: brak window → false (degradacja cicha)', () => {
   assert.equal(overlapsMaintenanceWindow('0 2 * * *', null), false);
+});
+
+// === validateMemberName ===
+
+test('validateMemberName: poprawne imię → valid + przycięta wartość', () => {
+  const r = validateMemberName('  Kasia  ');
+  assert.equal(r.valid, true);
+  assert.equal(r.value, 'Kasia', 'wartość przycięta z whitespace');
+});
+
+test('validateMemberName: puste/whitespace → invalid z komunikatem', () => {
+  const empty = validateMemberName('');
+  assert.equal(empty.valid, false);
+  assert.equal(typeof empty.error, 'string');
+  assert.equal(validateMemberName('   ').valid, false, 'same spacje = invalid');
+});
+
+test('validateMemberName: nie-string → invalid, nie rzuca', () => {
+  assert.doesNotThrow(() => validateMemberName(undefined));
+  assert.equal(validateMemberName(null).valid, false);
+  assert.equal(validateMemberName(42).valid, false);
+});
+
+test('validateMemberName: przekroczona długość → invalid', () => {
+  const tooLong = 'x'.repeat(MEMBER_NAME_MAX + 1);
+  assert.equal(validateMemberName(tooLong).valid, false);
+  assert.equal(validateMemberName('x'.repeat(MEMBER_NAME_MAX)).valid, true, 'dokładnie max = ok');
+});
+
+// === memberRowData ===
+
+test('memberRowData: komplet pól → poprawna struktura do renderu', () => {
+  const row = memberRowData({ id: 7, name: 'Kasia', token_masked: '…a1b2', created_at: '2026-07-24T10:00:00Z' });
+  assert.equal(row.id, 7);
+  assert.equal(row.name, 'Kasia');
+  assert.equal(row.tokenMasked, '…a1b2');
+  assert.equal(row.createdAt, '2026-07-24T10:00:00Z');
+});
+
+test('memberRowData: braki pól → bezpieczny fallback (myślnik), nie rzuca', () => {
+  assert.doesNotThrow(() => memberRowData(undefined));
+  const row = memberRowData({ id: 3 });
+  assert.equal(row.name, '—', 'brak name → myślnik');
+  assert.equal(row.tokenMasked, '—', 'brak token_masked → myślnik');
+  assert.equal(row.createdAt, null, 'brak created_at → null');
+  assert.equal(row.id, 3);
+});
+
+test('memberRowData: puste/whitespace name → myślnik (nie pusty wiersz)', () => {
+  assert.equal(memberRowData({ name: '   ' }).name, '—');
 });

@@ -22,8 +22,13 @@ import {
   extractChatIdFromUpdates,
   parseNotifyChannelChoice,
   matchJobIdsByName,
+  parseInviteCode,
+  upsertDotenvLine,
+  askInboxInvite,
   NODE_VERSION,
 } from './setup.mjs';
+
+import http from 'node:http';
 
 // === resolveNodeBinPath — layout .node/ spójny z install.sh / install.ps1 ===
 
@@ -494,4 +499,157 @@ test('matchJobIdsByName → [] gdy żadna nazwa nie pasuje albo lista jobów pus
 test('matchJobIdsByName odporny na nie-tablicowy input z API (error case)', () => {
   assert.deepEqual(matchJobIdsByName(null, ['Daily memory update']), []);
   assert.deepEqual(matchJobIdsByName({ error: 'boom' }, ['Daily memory update']), []);
+});
+
+// === parseInviteCode — odwrotnik buildInviteCode (server.js) dla onboardingu skrzynki (IU-3.2) ===
+
+test('parseInviteCode happy path: puls-inbox:<url>#<token> → hubUrl + token', () => {
+  const result = parseInviteCode('puls-inbox:https://kacper.tail-scale.ts.net#tok-abc123');
+  assert.deepEqual(result, { hubUrl: 'https://kacper.tail-scale.ts.net', token: 'tok-abc123' });
+});
+
+test('parseInviteCode trimuje otaczające białe znaki (wklejenie z bufora)', () => {
+  const result = parseInviteCode('  puls-inbox:https://hub.example#tok42  ');
+  assert.deepEqual(result, { hubUrl: 'https://hub.example', token: 'tok42' });
+});
+
+test('parseInviteCode error: zły prefiks → null', () => {
+  assert.equal(parseInviteCode('inbox:https://hub.example#tok'), null);
+  assert.equal(parseInviteCode('https://hub.example#tok'), null);
+});
+
+test('parseInviteCode error: brak `#` (brak separatora tokenu) → null', () => {
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example'), null);
+});
+
+test('parseInviteCode error: pusty token → null', () => {
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example#'), null);
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example#   '), null);
+});
+
+test('parseInviteCode error: pusty URL → null', () => {
+  assert.equal(parseInviteCode('puls-inbox:#tok'), null);
+});
+
+test('parseInviteCode error: URL nie-http (śmieć / zły protokół) → null', () => {
+  assert.equal(parseInviteCode('puls-inbox:ftp://hub.example#tok'), null);
+  assert.equal(parseInviteCode('puls-inbox:nie-url#tok'), null);
+});
+
+test('parseInviteCode error: nie-string / puste wejście → null', () => {
+  assert.equal(parseInviteCode(''), null);
+  assert.equal(parseInviteCode(null), null);
+  assert.equal(parseInviteCode(undefined), null);
+});
+
+// === upsertDotenvLine — idempotentny zapis KEY=value do workspace .env (format env-loader) ===
+
+test('upsertDotenvLine dopisuje KEY="value" gdy klucza nie ma (bez export)', () => {
+  const result = upsertDotenvLine('CLAUDE_CRON_WORKSPACE="/ws"\n', 'INBOX_HUB_URL', 'https://hub.example');
+  assert.ok(result.includes('INBOX_HUB_URL="https://hub.example"'));
+  assert.ok(result.includes('CLAUDE_CRON_WORKSPACE="/ws"'), 'istniejąca treść zachowana');
+  assert.ok(!result.includes('export INBOX_HUB_URL'), 'format .env bez prefiksu export');
+});
+
+test('upsertDotenvLine podmienia istniejącą linię (idempotentny re-run, brak duplikatu)', () => {
+  const initial = upsertDotenvLine('', 'INBOX_TOKEN', 'stary');
+  const updated = upsertDotenvLine(initial, 'INBOX_TOKEN', 'nowy');
+  const occurrences = updated.match(/INBOX_TOKEN=/g) || [];
+  assert.equal(occurrences.length, 1, 'tylko jedna linia — bez duplikatu');
+  assert.ok(updated.includes('INBOX_TOKEN="nowy"'));
+});
+
+test('upsertDotenvLine dokłada brakujący newline przed nową linią', () => {
+  const result = upsertDotenvLine('INBOX_HUB_URL="https://hub"', 'INBOX_TOKEN', 'tok');
+  assert.equal(result, 'INBOX_HUB_URL="https://hub"\nINBOX_TOKEN="tok"\n');
+});
+
+// === askInboxInvite — onboarding skrzynki: probe waliduje ZANIM zapisze (IU-3.2) ===
+// Fake rl zwracający wklejony kod; lokalny serwer HTTP udaje huba (probe przez inbox-client).
+
+function fakeRl(answer) {
+  return { question: async () => answer };
+}
+
+// Snapshot env INBOX_* — probe je tymczasowo ustawia; testy nie mogą zostawić side-effectu.
+function snapshotInboxEnv(t) {
+  const prev = { url: process.env.INBOX_HUB_URL, token: process.env.INBOX_TOKEN };
+  t.after(() => {
+    if (prev.url === undefined) delete process.env.INBOX_HUB_URL;
+    else process.env.INBOX_HUB_URL = prev.url;
+    if (prev.token === undefined) delete process.env.INBOX_TOKEN;
+    else process.env.INBOX_TOKEN = prev.token;
+  });
+}
+
+// Lokalny hub: KAŻDE żądanie → 200 z podanym JSON body (probe trafia /inbox/v1/:token/ping).
+async function startFakeHub(t, responseBody) {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(responseBody));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const { port } = server.address();
+  return `http://127.0.0.1:${port}`;
+}
+
+function makeWorkspace(t) {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-inbox-ws-'));
+  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  return ws;
+}
+
+test('askInboxInvite: puste wejście → pomija, nie tworzy .env', async (t) => {
+  snapshotInboxEnv(t);
+  const ws = makeWorkspace(t);
+
+  await askInboxInvite(fakeRl(''), ws);
+
+  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'brak kodu = brak zapisu');
+});
+
+test('askInboxInvite: zły format kodu → pomija bez rzucania, .env nie powstaje', async (t) => {
+  snapshotInboxEnv(t);
+  const ws = makeWorkspace(t);
+
+  await askInboxInvite(fakeRl('nie-jest-kodem'), ws);
+
+  assert.equal(fs.existsSync(path.join(ws, '.env')), false);
+});
+
+test('askInboxInvite: probe-fail (zła wersja huba) NIE rzuca i NIE zapisuje env', async (t) => {
+  snapshotInboxEnv(t);
+  const ws = makeWorkspace(t);
+  const hubUrl = await startFakeHub(t, { v: 2, user: 'ktoś' }); // mismatch: klient oczekuje v:1
+
+  // Nie rzuca (wzorzec notify-push: warn przy padzie, nie fail setupu).
+  await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-abc`), ws);
+
+  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'pad probe = env NIE zapisany');
+});
+
+test('askInboxInvite: probe OK (v:1) → zapisuje INBOX_HUB_URL/INBOX_TOKEN do .env workspace', async (t) => {
+  snapshotInboxEnv(t);
+  const ws = makeWorkspace(t);
+  const hubUrl = await startFakeHub(t, { v: 1, user: 'kacper', hub: 'puls' });
+
+  await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-xyz`), ws);
+
+  const envContent = fs.readFileSync(path.join(ws, '.env'), 'utf-8');
+  assert.ok(envContent.includes(`INBOX_HUB_URL="${hubUrl}"`), 'hub URL zapisany');
+  assert.ok(envContent.includes('INBOX_TOKEN="tok-xyz"'), 'token zapisany');
+});
+
+test('askInboxInvite: probe nie zostawia INBOX_* w process.env (bez side-effectu)', async (t) => {
+  snapshotInboxEnv(t);
+  delete process.env.INBOX_HUB_URL;
+  delete process.env.INBOX_TOKEN;
+  const ws = makeWorkspace(t);
+  const hubUrl = await startFakeHub(t, { v: 1, user: 'kacper', hub: 'puls' });
+
+  await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-xyz`), ws);
+
+  assert.equal(process.env.INBOX_HUB_URL, undefined, 'probe przywraca env po sobie');
+  assert.equal(process.env.INBOX_TOKEN, undefined);
 });

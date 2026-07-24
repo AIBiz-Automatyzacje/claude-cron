@@ -209,6 +209,62 @@ export function buildVpsUrl(host, port) {
   return `http://${trimmedHost}:${resolvedPort}`;
 }
 
+// Prefiks kodu zaproszenia do skrzynki zespołowej — MUSI być identyczny z
+// INVITE_CODE_PREFIX w server.js (huba). parseInviteCode to dokładny odwrotnik
+// buildInviteCode: `${INVITE_CODE_PREFIX}${funnelUrl}#${token}`.
+export const INVITE_CODE_PREFIX = 'puls-inbox:';
+
+// === Pure helper: kod zaproszenia → { hubUrl, token } albo null (odwrotnik buildInviteCode) ===
+// Format: `puls-inbox:<funnel-url>#<token>` (jeden string do wklejenia). Rozdzielamy po
+// OSTATNIM `#` — token z natury nie zawiera `#`, więc to on jest segmentem po separatorze,
+// a wszystko przed nim to URL (odporne na hipotetyczny `#` w URL-u). Zero I/O — walidacja
+// formatu tu, osiągalność huba sprawdza osobny probe. null przy każdym złym formacie
+// (zły prefiks / brak `#` / pusty URL lub token / URL nie-http) → caller warnuje i pomija.
+export function parseInviteCode(str) {
+  const raw = typeof str === 'string' ? str.trim() : '';
+  if (!raw.startsWith(INVITE_CODE_PREFIX)) {
+    return null;
+  }
+  const body = raw.slice(INVITE_CODE_PREFIX.length);
+  const sepIndex = body.lastIndexOf('#');
+  if (sepIndex === -1) {
+    return null;
+  }
+  const hubUrl = body.slice(0, sepIndex).trim();
+  const token = body.slice(sepIndex + 1).trim();
+  if (!hubUrl || !token) {
+    return null;
+  }
+  // URL musi być parsowalny i http(s) — inaczej probe/fetch dostałby śmieć i rzucił
+  // kryptycznie; łapiemy to jako błąd formatu tutaj (czysto, bez sieci).
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(hubUrl);
+  } catch {
+    return null;
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    return null;
+  }
+  return { hubUrl, token };
+}
+
+// === Pure helper: upsert `KEY=value` w treści workspace .env (format env-loader) ===
+// Zwraca nową treść pliku. Format BEZ `export` (inaczej niż upsertEnvLine dla shell RC) —
+// scripts/inbox/env-loader.mjs czyta `^KEY=...` i stripuje cudzysłowy. Gdy linia `KEY=...`
+// już istnieje — podmienia ją (idempotentny re-run nie duplikuje INBOX_*); inaczej dopisuje
+// na końcu. Wartość w podwójnych cudzysłowach (URL/token nie zawierają `"`).
+export function upsertDotenvLine(envContent, key, value) {
+  const content = typeof envContent === 'string' ? envContent : '';
+  const line = `${key}="${value}"`;
+  const lineRegex = new RegExp(`^${key}=.*$`, 'm');
+  if (lineRegex.test(content)) {
+    return content.replace(lineRegex, line);
+  }
+  const prefix = content.length > 0 && !content.endsWith('\n') ? `${content}\n` : content;
+  return `${prefix}${line}\n`;
+}
+
 // === Pure helper: odpowiedzi setupu → payload state powiadomień ===
 // Klucze zgodne z NOTIFY_STATE_KEYS (lib/notify-config.js) i PUT /api/settings/notifications.
 // Tylko niepuste (po trim) wartości — setup nie czyści istniejącej konfiguracji.
@@ -803,6 +859,76 @@ function registerHook(workspace, hookFile, nodeBin) {
   return added;
 }
 
+// === I/O shell: dopisz INBOX_HUB_URL/INBOX_TOKEN do .env workspace'u (format env-loader) ===
+// Osobny mechanizm od persistEnvVar (shell RC / rejestr Windows), bo joby skrzynki czytają
+// konfigurację z workspace .env przez env-loader — nie z env powłoki. Idempotentnie przez
+// upsertDotenvLine (re-run podmienia, nie duplikuje).
+function writeInboxEnv(workspace, hubUrl, token) {
+  const envFile = path.join(workspace, '.env');
+  let content = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf-8') : '';
+  content = upsertDotenvLine(content, 'INBOX_HUB_URL', hubUrl);
+  content = upsertDotenvLine(content, 'INBOX_TOKEN', token);
+  fs.writeFileSync(envFile, content, 'utf-8');
+  return envFile;
+}
+
+// === I/O shell: probe kodu zaproszenia — ping huba przez inbox-client, weryfikacja v:1 ===
+// Reużywa client.ping() (własny retry + weryfikacja v:1) zamiast dublować logikę. Klient
+// czyta INBOX_HUB_URL/INBOX_TOKEN z process.env w momencie wywołania, więc ustawiamy je
+// TYLKO na czas probe i przywracamy poprzedni stan w finally (probe nie mutuje trwale env —
+// zapis do .env robi osobny krok dopiero PO sukcesie). NIGDY nie rzuca (wzorzec notify-push):
+// pad (timeout / zły kod / zła wersja) → { ok:false, reason }.
+async function probeInviteCode(hubUrl, token) {
+  const prevUrl = process.env.INBOX_HUB_URL;
+  const prevToken = process.env.INBOX_TOKEN;
+  process.env.INBOX_HUB_URL = hubUrl;
+  process.env.INBOX_TOKEN = token;
+  try {
+    const client = await import('./scripts/inbox/inbox-client.mjs');
+    const data = await client.ping();
+    return { ok: true, user: data?.user };
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  } finally {
+    if (prevUrl === undefined) delete process.env.INBOX_HUB_URL;
+    else process.env.INBOX_HUB_URL = prevUrl;
+    if (prevToken === undefined) delete process.env.INBOX_TOKEN;
+    else process.env.INBOX_TOKEN = prevToken;
+  }
+}
+
+// === I/O shell: onboarding członka skrzynki — kod zaproszenia → probe → zapis .env ===
+// Członek zespołu NIE potrzebuje Tailscale/VPS — wkleja jeden string. Puste = pomiń.
+// Kolejność: parse (czysto) → probe (waliduje ZANIM zapiszemy) → zapis .env → hint restartu.
+// Każda porażka (zły format, pad probe) → warn i pominięcie; NIGDY nie przerywa setupu.
+export async function askInboxInvite(rl, workspace) {
+  const code = await ask(rl, 'Masz kod zaproszenia do skrzynki zespołowej? (puste = pomiń): ');
+  if (!code) {
+    console.log('[info] Pominięto skrzynkę zespołową.');
+    return;
+  }
+  const parsed = parseInviteCode(code);
+  if (!parsed) {
+    console.log('[warn] Nieprawidłowy kod zaproszenia (oczekiwano „puls-inbox:<url>#<token>") — pominięto skrzynkę.');
+    return;
+  }
+  console.log('[info] Sprawdzam połączenie z hubem skrzynki...');
+  const probe = await probeInviteCode(parsed.hubUrl, parsed.token);
+  if (!probe.ok) {
+    console.log(
+      `[warn] Hub skrzynki nie odpowiedział poprawnie (${probe.reason}) — nie zapisano konfiguracji. `
+      + 'Sprawdź kod zaproszenia i uruchom setup ponownie.',
+    );
+    return;
+  }
+  const envFile = writeInboxEnv(workspace, parsed.hubUrl, parsed.token);
+  console.log(`[ok] Skrzynka zespołowa połączona jako „${probe.user}" — konfiguracja zapisana w ${envFile}.`);
+  console.log(
+    '[info] Zrestartuj daemona Pulsa, żeby joby skrzynki zobaczyły nową konfigurację '
+    + '(script-joby dziedziczą env daemona — bez restartu INBOX_* nie wejdą).',
+  );
+}
+
 async function main() {
   console.log('\n🕹️  CLAUDE-CRON — Setup\n========================================\n');
 
@@ -854,6 +980,10 @@ async function main() {
     } else {
       console.log('[info] Tryb tylko lokalny — joby działają gdy komputer nie śpi.');
     }
+
+    // Onboarding członka skrzynki zespołowej — PO VPS, bo członek NIE potrzebuje VPS/Tailscale
+    // (wkleja jeden kod zaproszenia). Probe waliduje kod ZANIM zapiszemy do .env workspace'u.
+    await askInboxInvite(rl, workspace);
 
     // Powiadomienia idą do state DB (nie env) — zmiana z dashboardu działa bez restartu,
     // a env DISCORD_WEBHOOK_URL/TELEGRAM_* pozostaje fallbackiem dla starych instalacji (R3).

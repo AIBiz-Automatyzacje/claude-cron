@@ -199,10 +199,41 @@
     return fireMinutes >= startMinutes && fireMinutes <= endMinutes;
   }
 
+  // === Zespół (Team OS Hub) — członkowie skrzynki ===
+  const MEMBER_NAME_MAX = 80;
+
+  // Walidacja imienia członka PRZED POST-em (szybki feedback, zanim uderzy hub).
+  // Zwraca discriminated result: { valid:true, value } albo { valid:false, error }.
+  // Backend i tak waliduje (name required) + zwraca 409 na duplikat — to warstwa UX.
+  function validateMemberName(name) {
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (!trimmed) return { valid: false, error: 'Podaj imię członka' };
+    if (trimmed.length > MEMBER_NAME_MAX) {
+      return { valid: false, error: `Imię za długie (maks. ${MEMBER_NAME_MAX} znaków)` };
+    }
+    return { valid: true, value: trimmed };
+  }
+
+  // Normalizuje wiersz członka z /api/inbox/members do danych do renderu.
+  // Wejście: { id, name, token_masked, created_at } (token ZAWSZE zamaskowany z backendu).
+  // Braki pól nie wywalają renderu — bezpieczny fallback prezentacyjny (myślnik).
+  function memberRowData(member) {
+    const m = member || {};
+    const name = typeof m.name === 'string' && m.name.trim() ? m.name : '—';
+    const tokenMasked = typeof m.token_masked === 'string' && m.token_masked ? m.token_masked : '—';
+    return {
+      id: m.id ?? null,
+      name,
+      tokenMasked,
+      createdAt: m.created_at || null,
+    };
+  }
+
   const api = {
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
     parseCronForCalendar, computeWeekOccurrences, startOfWeek, formatHourMinute,
     overlapsMaintenanceWindow,
+    validateMemberName, memberRowData, MEMBER_NAME_MAX,
   };
 
   if (typeof module !== 'undefined' && module.exports) {

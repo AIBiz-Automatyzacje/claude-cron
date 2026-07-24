@@ -1,7 +1,7 @@
 # Team OS Hub-API — zadania
 
 Branch: `feature/team-os-hub-api`
-Ostatnia aktualizacja: 2026-07-24 (Faza 2 ukończona — implementacja)
+Ostatnia aktualizacja: 2026-07-24 (Faza 3 ukończona — implementacja: onboarding w instalatorach + widok Zespół)
 
 ## Faza 0 — przygotowanie
 
@@ -102,24 +102,24 @@ _Findingów typu OPERATOR (niewykonalne headless) w fazie 2: brak — sekcja Ope
 ## Faza 3 — Onboarding (L)
 
 ### IU-3.1 `install-vps.sh` — komponent „Team OS hub" (M)
-- [ ] Pytanie w pełnym trybie (przez `ask_tty`, domyślnie **n**)
-- [ ] Dodanie członka-admina przez API lokalnego serwera (curl 127.0.0.1:7777); idempotentny re-run
-- [ ] Guard: brak skonfigurowanego Funnela = fail z instrukcją (nie cichy sukces); kod zaproszenia w podsumowaniu instalacji
-- [ ] Test: `install-vps.test.sh` — pytanie, guard Funnela, idempotencja
+- [x] Pytanie w pełnym trybie (przez `ask_tty`, domyślnie **n**)
+- [x] Dodanie członka-admina przez API lokalnego serwera (curl 127.0.0.1:7777); idempotentny re-run
+- [x] Guard: brak skonfigurowanego Funnela = fail z instrukcją (nie cichy sukces); kod zaproszenia w podsumowaniu instalacji
+- [x] Test: `install-vps.test.sh` — pytanie, guard Funnela, idempotencja
 
 ### IU-3.2 `setup.mjs` — blok kodu zaproszenia (M)
-- [ ] Pytanie „Masz kod zaproszenia do skrzynki zespołowej? (puste = pomiń)" po pytaniu o VPS
-- [ ] `parseInviteCode` (`puls-inbox:<url>#<token>`) — czysta funkcja
-- [ ] Probe `GET /ping` przed zapisem; pad → warn i pominięcie, nigdy fail setupu
-- [ ] Zapis `INBOX_HUB_URL`/`INBOX_TOKEN` do `.env` workspace'u + hint o restarcie daemona (stale env)
-- [ ] Test: `setup.test.mjs` — parseInviteCode happy+error, probe-fail nie wywala setupu
+- [x] Pytanie „Masz kod zaproszenia do skrzynki zespołowej? (puste = pomiń)" po pytaniu o VPS
+- [x] `parseInviteCode` (`puls-inbox:<url>#<token>`) — czysta funkcja
+- [x] Probe `GET /ping` przed zapisem; pad → warn i pominięcie, nigdy fail setupu
+- [x] Zapis `INBOX_HUB_URL`/`INBOX_TOKEN` do `.env` workspace'u + hint o restarcie daemona (stale env)
+- [x] Test: `setup.test.mjs` — parseInviteCode happy+error, probe-fail nie wywala setupu
 
 ### IU-3.3 Dashboard — widok „Zespół" (M)
-- [ ] `public/index.html` + `public/app.js`: sekcja Zespół — lista członków (imię, maska tokenu, data), formularz dodania, przycisk unieważnij z potwierdzeniem
-- [ ] Kod zaproszenia po utworzeniu: pokazany jednorazowo + przycisk kopiuj + ostrzeżenie „nie pojawi się drugi raz"
-- [ ] Czyste helpery renderujące w `render-helpers.js` (maska tokenu, wiersz członka)
-- [ ] Widok działa przez proxy `/api/vps/*` (hub = VPS admina) i bezpośrednio na dashboardzie VPS
-- [ ] Test: helpery renderujące happy + error w `render-helpers.test.js`
+- [x] `public/index.html` + `public/app.js`: sekcja Zespół — lista członków (imię, maska tokenu, data), formularz dodania, przycisk unieważnij z potwierdzeniem
+- [x] Kod zaproszenia po utworzeniu: pokazany jednorazowo + przycisk kopiuj + ostrzeżenie „nie pojawi się drugi raz"
+- [x] Czyste helpery renderujące w `render-helpers.js` (maska tokenu, wiersz członka)
+- [x] Widok działa przez proxy `/api/vps/*` (hub = VPS admina) i bezpośrednio na dashboardzie VPS
+- [x] Test: helpery renderujące happy + error w `render-helpers.test.js`
 - [ ] Weryfikacja: pełna suita + testy instalatorów zielone; ręcznie — dodanie/unieważnienie członka z lokalnego dashboardu w widoku vps
 
 ## Faza 4 — Migracja + decommission + docs (M)

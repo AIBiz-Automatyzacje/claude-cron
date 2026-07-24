@@ -1,6 +1,7 @@
 // === State ===
 let allJobs = [];
 let allSkills = [];
+let allMembers = []; // członkowie skrzynki z /api/inbox/members (tokeny ZAWSZE zamaskowane)
 let allRuns = []; // historia z /api/runs (może być filtrowana przez hide_routine)
 let calendarRuns = []; // runy do kropek kalendarza — NIGDY filtrowane przez hide_routine (osobne od historii)
 let jobsMap = {}; // id -> job
@@ -14,12 +15,14 @@ let maintenanceWindow = null; // { startHour, startMin, endHour, endMin } z /api
 // Guard poll() — tanie podpisy payloadu, pomijamy innerHTML gdy bez zmian.
 let lastRunsSig = null;
 let lastJobsSig = null;
+let lastMembersSig = null;
 let lastStatus = {}; // ostatni payload /api/status (część podpisu poll historii)
 
 const { mapStatus, mapTrigger } = EnumMap;
 const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = RenderHelpers;
 const { computeWeekOccurrences, startOfWeek } = RenderHelpers;
 const { overlapsMaintenanceWindow } = RenderHelpers;
+const { validateMemberName, memberRowData } = RenderHelpers;
 
 let zadaniaView = 'lista'; // 'lista' | 'kalendarz'
 
@@ -72,8 +75,9 @@ async function switchEnv(env) {
   expandedRuns.clear();
   lastJobsSig = null; // wymuś re-render po zmianie env (te same ID, inne dane)
   lastRunsSig = null;
+  lastMembersSig = null;
   try {
-    await Promise.allSettled([loadSkills(), loadJobs(), loadStatus(), loadRuns()]);
+    await Promise.allSettled([loadSkills(), loadJobs(), loadStatus(), loadRuns(), loadMembers()]);
   } finally {
     document.body.classList.remove('env-loading');
   }
@@ -87,6 +91,8 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(`view-${tab.dataset.tab}`).classList.add('active');
+    // Zespół ładuje się leniwie — dopiero przy pierwszym wejściu w zakładkę (nie w init).
+    if (tab.dataset.tab === 'team') loadMembers();
   });
 });
 
@@ -1077,6 +1083,177 @@ async function pushNotifyToVps() {
   }
 }
 
+// === Zespół (Team OS Hub) — członkowie skrzynki ===
+// Widok operuje na /api/inbox/members huba przez apiBase() (respektuje przełącznik
+// LOKALNY/VPS — na VPS idzie przez proxy /api/vps/*). Tokeny na liście ZAWSZE
+// zamaskowane (token_masked z GET); pełny token + kod zaproszenia żyją WYŁĄCZNIE
+// w polu modala kodu, czyszczonym przy zamknięciu — zero w długożyjącym stanie.
+
+// Podpis listy członków dla guardu re-renderu. Wiersz jest niemutowalny (imię/token/data),
+// więc zmieni się tylko przy dodaniu/unieważnieniu — wystarczy zbiór id + maska + długość.
+function membersSig(members) {
+  const list = Array.isArray(members) ? members : [];
+  return list.map((m) => `${m.id}:${m.token_masked}`).join(',') + '#' + list.length;
+}
+
+async function loadMembers() {
+  try {
+    const members = await API.get('/api/inbox/members');
+    allMembers = Array.isArray(members) ? members : []; // {error} → pusta lista, empty state
+    renderMembers();
+  } catch {
+    toast('Błąd ładowania członków zespołu', true);
+  }
+}
+
+function renderMembers() {
+  const sig = membersSig(allMembers);
+  if (sig === lastMembersSig) return; // guard — pomiń re-render gdy bez zmian
+  lastMembersSig = sig;
+
+  const body = document.getElementById('members-body');
+  const empty = document.getElementById('members-empty');
+
+  if (allMembers.length === 0) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+
+  empty.style.display = 'none';
+  body.innerHTML = allMembers.map((m) => {
+    const row = memberRowData(m);
+    return `
+    <div class="trow grid-zespol">
+      <div class="task-cell">
+        <span class="task-ico">@</span>
+        <span><span class="task-name">${esc(row.name)}</span></span>
+      </div>
+      <div><span class="token-mask">${esc(row.tokenMasked)}</span></div>
+      <div class="cell-dim">${row.createdAt ? formatDateTime(row.createdAt) : '—'}</div>
+      <div class="actions">
+        <button class="act-btn danger" onclick="revokeMember(${row.id})" title="Unieważnij dostęp" aria-label="Unieważnij dostęp ${esc(row.name)}">✕</button>
+      </div>
+    </div>
+  `;
+  }).join('');
+}
+
+// Status-aware POST — API.post gubi kod odpowiedzi, a tu MUSIMY rozróżnić 201/409/503.
+// Respektuje przełącznik LOKALNY/VPS przez apiBase() (jak reszta widoków).
+async function postMember(name) {
+  const res = await fetch(`${apiBase()}/inbox/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  return { status: res.status, data };
+}
+
+function openAddMemberModal() {
+  document.getElementById('team-name').value = '';
+  clearTeamAddError();
+  document.getElementById('team-add-modal-overlay').hidden = false;
+  setTimeout(() => document.getElementById('team-name').focus(), 0);
+}
+
+function hideTeamAddModal() {
+  document.getElementById('team-add-modal-overlay').hidden = true;
+}
+
+function closeTeamAddModal(e) {
+  if (e.target === document.getElementById('team-add-modal-overlay')) hideTeamAddModal();
+}
+
+function showTeamAddError(msg) {
+  const err = document.getElementById('team-add-error');
+  err.textContent = msg;
+  err.hidden = false;
+}
+
+function clearTeamAddError() {
+  const err = document.getElementById('team-add-error');
+  err.textContent = '';
+  err.hidden = true;
+}
+
+async function submitAddMember(e) {
+  e.preventDefault();
+  const check = validateMemberName(document.getElementById('team-name').value);
+  if (!check.valid) { showTeamAddError(check.error); return; }
+  clearTeamAddError();
+  try {
+    const resp = await postMember(check.value);
+    if (resp.status === 201) {
+      hideTeamAddModal();
+      showInviteModal(resp.data);
+      loadMembers();
+      return;
+    }
+    if (resp.status === 503) {
+      showTeamAddError('Hub nie ma skonfigurowanego Funnela — skonfiguruj Funnel na hubie (VPS), aby generować kody zaproszeń.');
+      return;
+    }
+    if (resp.status === 409) {
+      showTeamAddError('Członek o tym imieniu już istnieje — wybierz inne imię.');
+      return;
+    }
+    showTeamAddError(resp.data && resp.data.error ? resp.data.error : 'Nie udało się dodać członka.');
+  } catch {
+    showTeamAddError('Błąd sieci przy dodawaniu członka.');
+  }
+}
+
+// Modal kodu zaproszenia — JEDNORAZOWY. Pełny kod (z tokenem) trzymamy TYLKO w polu
+// inputu, czyszczonym przy zamknięciu; obiekt odpowiedzi jest lokalny i nie trafia do stanu.
+function showInviteModal(data) {
+  const forEl = document.getElementById('invite-for');
+  forEl.textContent = data && data.name ? `Dla: ${data.name}` : '';
+  document.getElementById('invite-code').value = (data && data.invite_code) ? data.invite_code : '';
+  document.getElementById('invite-modal-overlay').hidden = false;
+}
+
+function hideInviteModal() {
+  // Zero pełnych tokenów w długożyjącym stanie — wymaż pole kodu przy zamknięciu.
+  document.getElementById('invite-code').value = '';
+  document.getElementById('invite-for').textContent = '';
+  document.getElementById('invite-modal-overlay').hidden = true;
+}
+
+function closeInviteModal(e) {
+  if (e.target === document.getElementById('invite-modal-overlay')) hideInviteModal();
+}
+
+function copyInviteCode() {
+  const code = document.getElementById('invite-code').value;
+  if (!code) return;
+  navigator.clipboard.writeText(code).then(() => {
+    toast('Kod zaproszenia skopiowany!');
+  }).catch(() => {
+    // Fallback dla nie-HTTPS/braku Clipboard API
+    const el = document.getElementById('invite-code');
+    el.select();
+    document.execCommand('copy');
+    toast('Kod zaproszenia skopiowany!');
+  });
+}
+
+async function revokeMember(id) {
+  const m = allMembers.find((x) => x.id === id);
+  const label = m ? m.name : `#${id}`;
+  if (!confirm(`Unieważnić dostęp dla „${label}"? Token przestanie działać natychmiast — tej operacji nie można cofnąć.`)) return;
+  try {
+    const res = await API.del(`/api/inbox/members/${id}`);
+    if (res && res.error) { toast('Nie udało się unieważnić: ' + res.error, true); return; }
+    toast('Dostęp unieważniony');
+    loadMembers();
+  } catch {
+    toast('Błąd unieważniania dostępu', true);
+  }
+}
+
 // === Escape HTML ===
 function esc(str) {
   if (!str) return '';
@@ -1254,6 +1431,9 @@ async function poll() {
     if (zadaniaView === 'kalendarz') loadCalendarRuns().then(renderKalendarz);
   }
   if (activeTab === 'history') pollRuns();
+  // Zespół zmienia się rzadko, ale odświeżamy dla spójności — guard podpisu pomija
+  // re-render gdy lista bez zmian (jak reszta zakładek).
+  if (activeTab === 'team') loadMembers();
 }
 
 // Guard historii: pomiń re-render gdy podpis (length + id + statusy) bez zmian.
