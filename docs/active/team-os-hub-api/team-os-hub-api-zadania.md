@@ -69,7 +69,14 @@ Ostatnia aktualizacja: 2026-07-24
 - [ ] Probe `GET /ping` przed zapisem; pad → warn i pominięcie, nigdy fail setupu
 - [ ] Zapis `INBOX_HUB_URL`/`INBOX_TOKEN` do `.env` workspace'u + hint o restarcie daemona (stale env)
 - [ ] Test: `setup.test.mjs` — parseInviteCode happy+error, probe-fail nie wywala setupu
-- [ ] Weryfikacja: pełna suita + testy instalatorów zielone
+
+### IU-3.3 Dashboard — widok „Zespół" (M)
+- [ ] `public/index.html` + `public/app.js`: sekcja Zespół — lista członków (imię, maska tokenu, data), formularz dodania, przycisk unieważnij z potwierdzeniem
+- [ ] Kod zaproszenia po utworzeniu: pokazany jednorazowo + przycisk kopiuj + ostrzeżenie „nie pojawi się drugi raz"
+- [ ] Czyste helpery renderujące w `render-helpers.js` (maska tokenu, wiersz członka)
+- [ ] Widok działa przez proxy `/api/vps/*` (hub = VPS admina) i bezpośrednio na dashboardzie VPS
+- [ ] Test: helpery renderujące happy + error w `render-helpers.test.js`
+- [ ] Weryfikacja: pełna suita + testy instalatorów zielone; ręcznie — dodanie/unieważnienie członka z lokalnego dashboardu w widoku vps
 
 ## Faza 4 — Migracja + decommission + docs (M)
 

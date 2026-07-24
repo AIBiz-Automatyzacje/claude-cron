@@ -98,6 +98,9 @@ Pytanie w pełnym trybie (domyślnie **n** — hub stawia tylko admin zespołu):
 **IU-3.2 Blok Team OS w `setup.mjs` + testy (M)**
 Po pytaniu o VPS: „Masz kod zaproszenia do skrzynki zespołowej? (puste = pomiń)". Czysta funkcja `parseInviteCode` (format `puls-inbox:<url>#<token>`) + probe `GET /ping` (walidacja zanim cokolwiek zapiszemy; pad → czytelny komunikat i pominięcie, nigdy fail setupu — wzorzec notify-push). Zapis `INBOX_HUB_URL`/`INBOX_TOKEN` do `.env` workspace'u. Pliki vaulta: NIE tworzymy w setupie — self-heal `ensureSkrzynkaFile` w pull załatwia to przy pierwszym runie joba (dopisać do kontekstu, że to celowe). Testy w `setup.test.mjs` (parseInviteCode happy+error, probe-fail nie wywala setupu).
 
+**IU-3.3 Dashboard: widok „Zespół" — zarządzanie członkami (M)**
+Prosta sekcja w dashboardzie (vanilla JS, `public/app.js` + czyste helpery renderujące w `render-helpers.js` z testami): lista członków (imię, token zamaskowany, data dodania), formularz „dodaj członka" (imię → po utworzeniu kod zaproszenia pokazany **jednorazowo** z przyciskiem kopiuj + ostrzeżenie, że drugi raz się nie pojawi), przycisk „unieważnij" z potwierdzeniem. Widok operuje na `/api/inbox/members` huba — admin zarządza z lokalnego dashboardu przez **istniejące proxy `/api/vps/*`** (hub = VPS admina; przełącznik local/vps już jest w UI) albo bezpośrednio na dashboardzie VPS przez Tailscale; oba za guardem XFF. Zero pełnych tokenów w stanie frontendowym poza momentem utworzenia. Skill `puls` może dostać te same operacje później — UI jest kanałem pierwszorzędnym.
+
 ### Faza 4 — Migracja danych + decommission + docs (M)
 
 **IU-4.1 Migracja danych (S)**
@@ -138,7 +141,7 @@ Usunięcie `pg` z `package.json` (+ `package-lock.json`), usunięcie `schema.sql
 
 ## Szacunki
 
-Jak zadanie `/ask` +20–30%: **4 fazy z review** (workflow `/dev-docs-execute` → `/dev-docs-review` per faza). F1 ≈ połowa całości (XL), F2 (M), F3 (L), F4 (M).
+Jak zadanie `/ask` +30–40% (doszedł widok członków w dashboardzie): **4 fazy z review** (workflow `/dev-docs-execute` → `/dev-docs-review` per faza). F1 ≈ połowa całości (XL), F2 (M), F3 (L — w tym UI), F4 (M).
 
 ## Źródła
 

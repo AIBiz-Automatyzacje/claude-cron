@@ -19,6 +19,7 @@ Ostatnia aktualizacja: 2026-07-24
 - `lib/config.js` — ścieżka `data/inbox.db` (+ override dla testów HTTP na żywym procesie)
 - `scripts/install-vps.sh` + `install-vps.test.sh` — komponent „Team OS hub"
 - `setup.mjs` + `setup.test.mjs` — blok kodu zaproszenia
+- `public/app.js` + `public/render-helpers.js` (+ testy helperów) + `public/index.html` — widok „Zespół" (IU-3.3)
 - `package.json` — OUT `pg` (dopiero w F4!)
 - `scripts/inbox/schema.sql` — OUT w F4
 - `CLAUDE.md` — sekcja Team OS + kontrakt matcherów
@@ -45,6 +46,7 @@ Ostatnia aktualizacja: 2026-07-24
 10. **Czysta wymiana env bez okresu podwójnego wsparcia** — użytkowników starego trybu jest dwóch (operator + Kamil), migrujemy ręcznie w F4; utrzymywanie dwóch transportów to zbędna złożoność.
 11. **Pliki vaulta tworzy self-heal, nie setup** — `ensureSkrzynkaFile`/`SKRZYNKA_TEMPLATE` w `inbox-pull.mjs` (dodane 24.07) załatwia pierwszy run; setup tylko waliduje kod zaproszenia probe'em `/ping`.
 12. **Kod zaproszenia**: `puls-inbox:<funnel-url>#<token>` — jeden string, czysta funkcja parsująca z testami. Pełny token widoczny JEDNORAZOWO przy tworzeniu członka (potem tylko maska).
+12a. **Zarządzanie członkami przez UI dashboardu, nie skill** (decyzja operatora 24.07): widok „Zespół" — lista z maskami, dodanie z jednorazowym kodem (przycisk kopiuj), unieważnienie z potwierdzeniem. Admin sięga do huba z lokalnego dashboardu przez istniejące proxy `/api/vps/*` (przełącznik local/vps już jest). Skill `puls` może dostać te operacje później jako drugi kanał.
 13. **Token per członek plaintext w SQLite huba** — spójnie z modelem zaufania repo (sekrety w state plaintext, poziom jak shell RC); API listujące zwraca maski.
 
 ## Wymagania twarde operatora (checklist zgodności planu)
