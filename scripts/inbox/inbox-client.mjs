@@ -1,7 +1,10 @@
 // Team OS — klient HTTP huba skrzynki (zastępuje bezpośrednie połączenia `pg`).
 // Robi GŁUPIE, bezpieczne żądania do wersjonowanego API `/inbox/v1/:token/*`.
-// Cała idempotencja i atomowość siedzą po stronie huba (lib/inbox-api.js),
-// więc retry jest bezpieczny (endpointy są idempotentne — patrz plan F1).
+// Retry (1 ponowna próba na timeout/5xx) stosowany TYLKO do akcji idempotentnych
+// po stronie huba: pull, done (already_done), claim-query (marker), ping. `send`
+// jest wyłączony z retry — `sendMessage` robi goły INSERT ze świeżym randomUUID()
+// (lib/inbox-db.js) bez klucza dedup, więc timeout/5xx PO commicie ma nieznany wynik
+// i ponowienie zdublowałoby wiadomość/auto-odpowiedź/delegację.
 //
 // Konfiguracja czytana z process.env W MOMENCIE wywołania (nie przy imporcie modułu):
 // env żyjącego procesu bywa nieświeże, a testy nadpisują zmienne per-case
@@ -16,7 +19,8 @@ const EXPECTED_API_VERSION = 1;
 // bo rytm skrzynki jest rzadki (sync co 1 min), a fałszywy timeout = niepotrzebny retry.
 const REQUEST_TIMEOUT_MS = 15_000;
 
-// 1 próba + 1 retry = 2 (wymaganie: „1 retry na timeout/5xx"). API idempotentne → bezpieczne.
+// 1 próba + 1 retry = 2 (wymaganie: „1 retry na timeout/5xx"). Stosowane wyłącznie do
+// akcji idempotentnych — `send` przekazuje `retry:false` (patrz nagłówek modułu).
 const MAX_ATTEMPTS = 2;
 
 // Typowany błąd klienta — czytelny komunikat dla operatora zamiast kryptycznego fetch-error.
@@ -111,12 +115,15 @@ async function attemptRequest({ url, action, method, body }) {
 
 // Rdzeń: buduje URL, wykonuje próby z 1 retry na awarie retryowalne, zwraca sparsowany
 // obiekt odpowiedzi (z polem `v:1`). NIE dotyka granicy JSON `payload` — hub ją trzyma.
-async function request(action, { method, body } = {}) {
+// `retry:false` (dla nieidempotentnego `send`) wymusza pojedynczą próbę — po awarii
+// wynik jest nieznany, więc czytelny błąd zamiast ryzyka duplikatu.
+async function request(action, { method, body, retry = true } = {}) {
   const { baseUrl, token } = readConfig();
   const url = `${baseUrl}/inbox/v1/${encodeURIComponent(token)}/${action}`;
 
+  const maxAttempts = retry ? MAX_ATTEMPTS : 1;
   let lastMessage = 'brak odpowiedzi';
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const result = await attemptRequest({ url, action, method, body });
     if ('data' in result) return result.data;
     lastMessage = result.message;
@@ -151,6 +158,8 @@ export async function done({ id, action } = {}) {
 
 // POST /send — wysłanie/delegowanie wiadomości. `from_user` hub wyprowadza z tokenu.
 // async: patrz `done` — spójny kontrakt promise'owy również przy walidacji wejścia.
+// `retry:false` — nieidempotentny INSERT bez klucza dedup (patrz nagłówek modułu):
+// ponowienie po timeout/5xx-po-commicie zdublowałoby wiadomość.
 export async function send({ thread_id, to_user, type, title, content, payload } = {}) {
   if (!to_user) throw new InboxClientError('send: wymagane pole "to_user".');
   if (!type) throw new InboxClientError('send: wymagane pole "type".');
@@ -162,7 +171,7 @@ export async function send({ thread_id, to_user, type, title, content, payload }
   if (content != null) body.content = content;
   if (payload != null) body.payload = payload;
 
-  return request('send', { method: 'POST', body });
+  return request('send', { method: 'POST', body, retry: false });
 }
 
 // POST /claim-query — atomowy claim jednego query albo {v:1, query:null}.

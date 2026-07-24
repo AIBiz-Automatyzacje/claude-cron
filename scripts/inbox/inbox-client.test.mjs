@@ -144,6 +144,28 @@ test('timeout: pierwszy AbortError, drugi sukces → retry ratuje żądanie', as
   assert.equal(calls.length, 2);
 });
 
+// === send: NIE-idempotentny → zero retry na timeout/5xx (unikamy zdublowanej wiadomości) ===
+
+test('send: AbortError → BEZ retry (1 próba), czytelny błąd — nie ryzykujemy duplikatu', async () => {
+  const calls = mockFetch([{ throw: abortError() }, { throw: abortError() }]);
+  await assert.rejects(send({ to_user: 'kamil', type: 'reply', title: 'Re: x' }), (err) => {
+    assert.ok(err instanceof InboxClientError);
+    assert.match(err.message, /nie odpowiada/);
+    return true;
+  });
+  assert.equal(calls.length, 1); // send nie jest ponawiany — INSERT bez klucza dedup
+});
+
+test('send: 502 → BEZ retry (1 próba), czytelny błąd', async () => {
+  const calls = mockFetch([{ response: jsonResponse(502, {}) }, { response: jsonResponse(502, {}) }]);
+  await assert.rejects(send({ to_user: 'kamil', type: 'reply', title: 'Re: x' }), (err) => {
+    assert.ok(err instanceof InboxClientError);
+    assert.match(err.message, /nie odpowiada/);
+    return true;
+  });
+  assert.equal(calls.length, 1);
+});
+
 // === 5xx: 1 retry, po drugim niepowodzeniu czytelny błąd ===
 
 test('5xx: dwa razy 502 → 1 retry, potem czytelny błąd', async () => {

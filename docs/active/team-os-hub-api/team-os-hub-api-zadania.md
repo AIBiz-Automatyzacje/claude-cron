@@ -68,13 +68,36 @@ Ostatnia aktualizacja: 2026-07-24 (Faza 2 ukończona — implementacja)
 - [x] `inbox-pull.mjs`: pg → client.pull; `me` z odpowiedzi huba (pole `user`)
 - [x] `inbox-push.mjs`: pg → client.done; OUT transakcje i sprawdzanie done (robi hub); archiwum z nitki zwróconej przez `done`
 - [x] `auto-reply.mjs`: pg → client.claimQuery + client.send; OUT własny claim przez UPDATE
-- [ ] Weryfikacja: parsery, renderery, self-heal i ich testy BEZ zmian — `git diff` czysty na testach warstwy plików (wymaganie twarde #6)
+- [x] Weryfikacja: parsery, renderery, self-heal i ich testy BEZ zmian — `git diff` czysty na testach warstwy plików (wymaganie twarde #6) (PASS — `git diff --name-only 38d304c d108cfd` nie dotyka inbox-pull.test.mjs / inbox-push.test.mjs / auto-reply.test.mjs)
 
 ### IU-2.3 Konfiguracja (S)
 - [x] `env-loader.mjs`: `INBOX_HUB_URL`+`INBOX_TOKEN`; OUT `INBOX_DB_URL`/`INBOX_USER`; OUT hardcoded fallback `Documents/kacper_trzepiecinski_workspace`
 - [x] `inbox-seed.js`: warunek konfiguracji = HUB_URL && TOKEN
 - [x] Test: env-loader happy + error po zmianach; inbox-seed `not_configured` bez nowych zmiennych
-- [ ] Weryfikacja: pełna suita zielona
+- [x] Weryfikacja: pełna suita zielona (PASS — `npm test` exit 0, 465 pass / 0 fail)
+
+## Do poprawy po review fazy 2
+
+Severity gate: ⚠️ ZASTRZEŻENIA (2× P2, 0× P1). Raport: `review-faza-2.md`.
+
+- [x] 🟠 [P2·KOD] **scripts/inbox/inbox-client.mjs:91-129** — retry (1 próba na 5xx/timeout) stosowany do nieidempotentnego `send`: `sendMessage` (inbox-db.js:143) generuje świeży `randomUUID()` bez klucza dedup, więc timeout/5xx PO commicie INSERTa → ponowienie → zdublowana wiadomość/auto-odpowiedź/delegacja. Fix: nie ponawiać `send` na timeout albo idempotency key po stronie huba. → `send` przekazuje `retry:false` (pojedyncza próba, czytelny błąd zamiast duplikatu); testy no-retry na AbortError/502 w inbox-client.test.mjs.
+- [x] 🟠 [P2·TEST] **scripts/inbox/auto-reply.main.test.mjs:38** — brak testu happy-path „kandydat jest → runClaude → client.send → appendHistory" (`runClaude` nie jest wstrzykiwany, wbrew konwencji DI). Fix: wstrzyknąć `runClaude`/fake bin i przetestować, że przy odpowiedzi != NO_ANSWER wołane jest `client.send` z poprawnym body i `payload.auto_reply`. → dodano test happy-path (fake bin przez `setClaudeBin`, asercje na body reply + `payload.auto_reply` + historia) oraz test NO_ANSWER.
+
+### P3 (opcjonalne — do rozważenia)
+
+- [ ] 🟡 [P3·TEST] **scripts/inbox/inbox-push.main.test.mjs:105** — gałąź `result:'closed'` (Zapoznane → archiwizacja) i pętla >1 odhaczonego itemu bez pokrycia.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/inbox-client.mjs:32-46** — brak wymuszenia `https://` na `INBOX_HUB_URL`; token w ścieżce URL → literówka `http://` = wyciek tokenu do logów. Fail-fast/warn poza localhost.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/auto-reply.mjs:30-42** — prompt injection przez treść query huba (agent z Read/Glob/Grep do vaulta); pre-existing, ryzyko rośnie przy sieciowej proweniencji. Auto-reply domyślnie wyłączone.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/inbox-pull.mjs:60-73** — injection HTML do Obsidiana (spany `os-*` bez sanityzacji); renderer nietknięty (#6), dane z sieciowego huba.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/inbox-push.mjs:138** — N+1: sekwencyjne `client.done()` per callout; regres kosztu vs trwałe pg. Świadomy dług (brak batch-endpointu huba).
+- [ ] 🟡 [P3·KOD] **scripts/inbox/inbox-push.mjs:147** — retry `done` po commicie zwraca `already_done` bez `thread` → `stats.skipped++` zamiast `appendToArchive` = luka w archiwum. Ta sama semantyka co P2·KOD retry.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/inbox-client.mjs:96** — komunikat błędu 4xx ignoruje pole `error` z body huba (goły kod HTTP utrudnia diagnozę driftu). Sparsować body i dołączyć `error`.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/inbox-client.mjs:134** — `ping()` bez konsumenta produkcyjnego (YAGNI); planowany caller w niezaznaczonej fazie setupu. Dociągnąć przy IU-3.2 albo usunąć.
+- [ ] 🟡 [P3·TEST] **scripts/inbox/inbox-push.main.test.mjs:20** — martwy `INBOX_USER` w `ENV_KEYS` (tu i w auto-reply.main.test.mjs:13); usunąć leftover z ery pg.
+- [ ] 🟡 [P3·TEST] **scripts/inbox/inbox-client.test.mjs:245** — nietestowane gałęzie fail-fast: `done`(brak action), `send`(brak type/title).
+- [ ] 🟡 [P3·TEST] **scripts/inbox/inbox-pull.main.test.mjs:49** — ścieżka `delegated` niećwiczona na poziomie main (sekcja Wysłane / banner / `staleDelegatedCount`).
+
+_Findingów typu OPERATOR (niewykonalne headless) w fazie 2: brak — sekcja Operator checklist pominięta._
 
 ## Faza 3 — Onboarding (L)
 
