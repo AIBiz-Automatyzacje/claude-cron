@@ -101,7 +101,7 @@ Po pytaniu o VPS: „Masz kod zaproszenia do skrzynki zespołowej? (puste = pomi
 **IU-3.3 Dashboard: widok „Zespół" — zarządzanie członkami (M)**
 Prosta sekcja w dashboardzie (vanilla JS, `public/app.js` + czyste helpery renderujące w `render-helpers.js` z testami): lista członków (imię, token zamaskowany, data dodania), formularz „dodaj członka" (imię → po utworzeniu kod zaproszenia pokazany **jednorazowo** z przyciskiem kopiuj + ostrzeżenie, że drugi raz się nie pojawi), przycisk „unieważnij" z potwierdzeniem. Widok operuje na `/api/inbox/members` huba — admin zarządza z lokalnego dashboardu przez **istniejące proxy `/api/vps/*`** (hub = VPS admina; przełącznik local/vps już jest w UI) albo bezpośrednio na dashboardzie VPS przez Tailscale; oba za guardem XFF. Zero pełnych tokenów w stanie frontendowym poza momentem utworzenia. Skill `puls` może dostać te same operacje później — UI jest kanałem pierwszorzędnym.
 
-### Faza 4 — Migracja danych + decommission + docs (M)
+### Faza 4 — Migracja danych + decommission + docs (M) ✅ zrealizowana headless (npm test 503/503; skrypt migracji + docs). Wykonanie migracji (IU-4.1), decommission (IU-4.2) i usunięcie `pg`/`schema.sql`/skryptu (IU-4.3, gated) = kroki OPERATORA — patrz Operator checklist w `-zadania.md`.
 
 **IU-4.1 Migracja danych (S)**
 Jednorazowy skrypt `scripts/inbox/migrate-pg-to-hub.mjs` (poza seedowanymi jobami): czyta stary Postgres (`pg` jeszcze w dependencies na czas F4), przenosi **otwarte** wątki (`status != 'done'`) przez API huba (`send` z zachowaniem `thread_id`/`created_at` — endpoint send przyjmuje opcjonalne pola tylko z tokenem admina) albo bezpośrednio do SQLite na VPS-ie — decyzja w F4 wg prostoty. Zamknięte wątki żyją w archiwach vaultów — nie migrujemy.

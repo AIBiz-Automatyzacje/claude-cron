@@ -1,7 +1,7 @@
 # Team OS Hub-API — zadania
 
 Branch: `feature/team-os-hub-api`
-Ostatnia aktualizacja: 2026-07-24 (Faza 3 ukończona — implementacja: onboarding w instalatorach + widok Zespół)
+Ostatnia aktualizacja: 2026-07-24 (Faza 4 ukończona headless — migracja pg→hub + docs; decommission/wykonanie migracji = OPERATOR)
 
 ## Faza 0 — przygotowanie
 
@@ -152,17 +152,17 @@ Nie są to zadania do fix — to warunki środowiskowe/ręczne weryfikacje wymag
 ## Faza 4 — Migracja + decommission + docs (M)
 
 ### IU-4.1 Migracja danych (S)
-- [ ] `scripts/inbox/migrate-pg-to-hub.mjs`: otwarte wątki (`status != 'done'`) ze starego Postgresa → hub (z zachowaniem thread_id/created_at)
-- [ ] Wykonanie migracji + ręczne przepięcie `.env` operatora i Kamila
-- [ ] Weryfikacja: skrzynka end-to-end po hubie (wysłanie, odpowiedź, odhaczenie, archiwum, auto-reply)
+- [x] `scripts/inbox/migrate-pg-to-hub.mjs`: otwarte wątki (`status != 'done'`) ze starego Postgresa → hub (z zachowaniem thread_id/created_at) — surowy `INSERT OR IGNORE` do `data/inbox.db` (zachowuje id/thread_id/from_user/to_user/created_at/status, których `handleSend` by nie zachował), DI (`readRows`/`db`), idempotencja po PRIMARY KEY, throwaway serializacja payloadu lokalnie (usuwany w IU-4.3); 11 testów (transformacja + migrate + fail-fast) zielonych
+- [ ] Wykonanie migracji + ręczne przepięcie `.env` operatora i Kamila — **OPERATOR** (wymaga starego Postgresa + VPS-a huba)
+- [ ] Weryfikacja: skrzynka end-to-end po hubie (wysłanie, odpowiedź, odhaczenie, archiwum, auto-reply) — **OPERATOR** (żywy hub + vaulty)
 
 ### IU-4.2 Decommission (S) — wymaganie twarde #5
-- [ ] Kontener Postgresa na 62.72.33.171 zgaszony
-- [ ] Hasło z `INBOX_DB_URL` zrewokowane (spalone — jeździło plaintextem po publicznym internecie)
-- [ ] Weryfikacja: skan z zewnątrz — port 5433 nie odpowiada (`nc -zv` z innej sieci)
-- [ ] Wpis hasła do listy rewokacji w notatce NOW operatora
+- [ ] Kontener Postgresa na 62.72.33.171 zgaszony — **OPERATOR**
+- [ ] Hasło z `INBOX_DB_URL` zrewokowane (spalone — jeździło plaintextem po publicznym internecie) — **OPERATOR**
+- [ ] Weryfikacja: skan z zewnątrz — port 5433 nie odpowiada (`nc -zv` z innej sieci) — **OPERATOR**
+- [ ] Wpis hasła do listy rewokacji w notatce NOW operatora — **OPERATOR**
 
 ### IU-4.3 Sprzątanie + docs (S)
-- [ ] OUT: `pg` z `package.json`+lock, `schema.sql`, `migrate-pg-to-hub.mjs`
-- [ ] CLAUDE.md: sekcja Team OS (hub, kontrakt matcherów z inbox, odrzucona opcja minimalna jako decyzja)
-- [ ] Weryfikacja: `npm install --omit=dev` na czysto + pełna suita zielona
+- [ ] OUT: `pg` z `package.json`+lock, `schema.sql`, `migrate-pg-to-hub.mjs` — **GATED na operatora**: usunięcie ma sens dopiero PO zweryfikowanej migracji (IU-4.1 wykonanie) + decommissionie (IU-4.2); skrypt migracji wciąż importuje `pg`. Nie usuwamy przed uruchomieniem migracji.
+- [x] CLAUDE.md: sekcja Team OS (hub, kontrakt matcherów z inbox, odrzucona opcja minimalna jako decyzja) — nagłówek `## Team OS — Skrzynka (hub lib/inbox-*.js + klienci scripts/inbox/)`, opis hub-and-spoke, `lib/inbox-db.js`/`lib/inbox-api.js`/`inbox-client.mjs`, dedykowany opis prywatnego `/api/inbox/members` (guard XFF + guard cross-origin CSRF), świadomie odrzucona opcja minimalna
+- [ ] Weryfikacja: `npm install --omit=dev` na czysto + pełna suita zielona — pełna suita **503/503 zielona** (`npm test` exit 0); `npm install --omit=dev` na czysto = **OPERATOR** (usunięcie `pg` jest gated, więc czysty install weryfikowalny dopiero po IU-4.2/4.3 cleanup)
