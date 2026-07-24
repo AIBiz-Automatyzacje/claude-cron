@@ -70,6 +70,24 @@ function maskMemberToken(token) {
   return `…${token.slice(-MEMBER_TOKEN_VISIBLE_CHARS)}`;
 }
 
+// CSRF guard dla endpointów zwracających/obsługujących SEKRETY (token, invite_code).
+// Guard XFF NIE chroni przed CSRF: strona z evil.com robi fetch do http://localhost:7777
+// BEZ nagłówka X-Forwarded-For (przechodzi guard), a globalne ACAO:* pozwoliłoby jej
+// ODCZYTAĆ pełny token z odpowiedzi 201 — trwałe mintowanie dostępu do skrzynki.
+// Legalny dashboard jest same-origin (Origin pusty albo == Host); atak z obcej domeny ma
+// Origin tej domeny. Zwraca true, gdy żądanie jest cross-origin (Origin ≠ Host).
+function isCrossOriginRequest(req) {
+  const origin = req.headers['origin'];
+  if (!origin) return false; // brak Origin = nawigacja same-origin / klient nie-przeglądarkowy
+  let originHost;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    return true; // nieparsowalny Origin = traktuj jak obcy
+  }
+  return originHost !== req.headers['host'];
+}
+
 // Duże, stałe assety (logo/favicon) cache'owane 1h. Kod UI (css/js) i HTML: no-cache
 // (rewalidacja przez ETag → 304) — dashboard zawsze serwuje świeży front po deployu.
 const STATIC_MAX_AGE_S = 3600;
@@ -406,6 +424,13 @@ async function handleApi(req, res) {
   // === Inbox (Team OS Hub) — administracja członkami ===
   // PRYWATNE: za guardem XFF (jak cały /api/*) → dostępne wyłącznie przez Tailscale.
   // Request z Funnela (X-Forwarded-For) nigdy tu nie dotrze — guard zwraca 403 wcześniej.
+  // CSRF: te endpointy zwracają/obsługują sekrety (token, invite_code), a XFF nie chroni
+  // przed żądaniem z evil.com do localhost. Odrzucamy cross-origin PRZED dotknięciem DB.
+  if (segments[0] === 'api' && segments[1] === 'inbox' && segments[2] === 'members') {
+    if (isCrossOriginRequest(req)) {
+      return error(res, 'Cross-origin request rejected', 403);
+    }
+  }
 
   // GET /api/inbox/members — lista z tokenami MASKOWANYMI (nigdy pełny token)
   if (method === 'GET' && urlPath === '/api/inbox/members') {

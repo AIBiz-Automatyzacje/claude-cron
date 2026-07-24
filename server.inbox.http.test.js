@@ -189,6 +189,43 @@ test('DELETE /api/inbox/members/:id odwołuje członka; jego token przestaje dzi
   assert.equal((await fetch(url(`/api/inbox/members/${member.id}`), { method: 'DELETE' })).status, 404);
 });
 
+test('CSRF: POST /api/inbox/members z obcym Origin → 403, członek NIE powstaje (token nie wycieka)', async () => {
+  // Arrange — liczba członków przed próbą ataku
+  const before = (await (await fetch(url('/api/inbox/members'))).json()).length;
+
+  // Act — strona z evil.com robi cross-origin POST do lokalnego Pulsa (bez XFF przechodzi
+  // guard, ale Origin ≠ Host). Musi zostać odrzucony PRZED utworzeniem członka.
+  const attack = await fetch(url('/api/inbox/members'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://evil.com' },
+    body: JSON.stringify({ name: 'Napastnik' }),
+  });
+
+  // Assert — 403 i BRAK tokenu w odpowiedzi
+  assert.equal(attack.status, 403, 'cross-origin POST odrzucony');
+  const attackBody = await attack.json();
+  assert.ok(!('token' in attackBody), 'odpowiedź nie zawiera tokenu');
+  assert.ok(!('invite_code' in attackBody), 'odpowiedź nie zawiera kodu zaproszenia');
+
+  // Assert — żaden członek nie powstał (side-effect zablokowany, nie tylko odczyt)
+  const after = (await (await fetch(url('/api/inbox/members'))).json()).length;
+  assert.equal(after, before, 'liczba członków bez zmian — mutacja zablokowana');
+});
+
+test('CSRF: same-origin POST (Origin == Host) przechodzi — dashboard nie jest zablokowany', async () => {
+  // Act — legalny dashboard jest same-origin: Origin pokrywa się z Host
+  const res = await fetch(url('/api/inbox/members'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: `http://localhost:${PORT}` },
+    body: JSON.stringify({ name: 'SameOrigin' }),
+  });
+
+  // Assert — utworzenie działa jak zwykle
+  assert.equal(res.status, 201, 'same-origin mutacja przechodzi');
+  const body = await res.json();
+  assert.equal(body.name, 'SameOrigin');
+});
+
 test('POST /api/inbox/members z duplikatem imienia → 409; bez name → 400', async () => {
   // Arrange
   await createMember('Unikat');

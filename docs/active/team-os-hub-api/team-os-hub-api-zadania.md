@@ -34,7 +34,28 @@ Ostatnia aktualizacja: 2026-07-24
 - [x] Test HTTP (żywy proces, wzorzec ask.http.test.js): inbox działa z nagłówkiem XFF; `/api/inbox/members` z XFF → 403
 - [x] Test HTTP: powtórzony `done` → `already_done`, bez duplikatu reply
 - [x] Test HTTP: `pull` zwraca `payload.auto_reply === true` jako boolean w obiekcie
-- [ ] Weryfikacja: pełna suita `npm test` zielona
+- [x] Weryfikacja: pełna suita `npm test` zielona (PASS — `npm test` exit 0, 433 pass / 0 fail)
+
+## Do poprawy po review fazy 1
+
+- [x] 🟠 [P2] **server.js:611** (endpoint `/api/inbox/members`, ~403-430) — ekspozycja tokenu przez CORS + brak CSRF: globalne `ACAO:*` + preflight obejmują nowy mutujący endpoint zwracający pełny `token`/`invite_code`; guard XFF nie chroni (fetch z evil.com nie ustawia XFF). Fix: ograniczyć `ACAO` dla `/api` lub odrzucać `Origin` na endpointach mutujących. → naprawione: guard `isCrossOriginRequest` (Origin ≠ Host) odrzuca cross-origin na `/api/inbox/members` PRZED dotknięciem DB; 2 testy CSRF w server.inbox.http.test.js.
+
+### P3 (opcjonalne — do rozważenia)
+
+- [ ] 🟡 [P3·TEST] **lib/inbox-api.test.js** — brak testów 4/6 gałęzi walidacji `handleSend` (`invalid_title`/`invalid_content`/`invalid_thread_id`/`invalid_payload`) + zero testów warunków brzegowych `MAX_*_LEN`.
+- [ ] 🟡 [P3·KOD] **lib/inbox-api.js:193-199** — rate limit stosowany PO autoryzacji; nieuwierzytelnione żądania nielimitowane, każde woła synchroniczne `listMembers()`+pętlę `timingSafeEqual`.
+- [ ] 🟡 [P3·E2E] **lib/inbox-db.js:135 / lib/inbox-api.js:152** — brak sanityzacji treści na granicy zapisu (stored-injection defense-in-depth); walidacja end-to-end w Fazie 2.
+- [ ] 🟡 [P3·KOD] **lib/inbox-db.js:118** — `SELECT *` we wszystkich odczytach (ładuje `payload`/token gdy zbędne).
+- [ ] 🟡 [P3·KOD] **lib/inbox-db.js:1** — plik 328 linii, przekracza próg 300; kandydat do podziału member-ops / message-ops.
+- [ ] 🟡 [P3·KOD] **server.js:588** — duplikacja wzorca cap-body-413 (handleAsk + handleInbox); ekstrakcja `readCappedBodyOr413`.
+- [ ] 🟡 [P3·KOD] **lib/inbox-api.js:126-134, server.js:600-603** — implicit flag (`if (result.json)`) zamiast discriminated union.
+- [ ] 🟡 [P3·KOD] **server.js:456-458** — loose parsing id w DELETE (`parseInt('5x')===5`); walidacja `/^\d+$/`.
+- [ ] 🟡 [P3·KOD] **lib/inbox-api.js:152-175** — `to_user` nie walidowany jako istniejący członek (wiadomość-sierota).
+- [ ] 🟡 [P3·KOD] **lib/inbox-api.js:50** — kontrakt „nieznana wersja → 404" realnie zwraca 403 na ścieżce Funnela; poprawić kod lub komentarz/spec.
+- [ ] 🟡 [P3·KOD] **lib/inbox-db.js:292** — `getMemberByToken` martwy kod (konsument tylko w testach); do usunięcia z testami.
+- [ ] 🟡 [P3·KOD] **lib/inbox-api.js:232** — nieużywane eksporty `API_VERSION`/`MESSAGE_TYPES`/`DONE_ACTIONS`.
+- [ ] 🟡 [P3·TEST] **server.inbox.http.test.js** — brak pokrycia guarda 503 „Funnel URL not configured".
+- [ ] 🟡 [P3·TEST] **lib/inbox-api.test.js** — brak testu mapowania `InboxDbError → 400 invalid_input` w dispatchu.
 
 ## Faza 2 — Klienci (M)
 
