@@ -47,6 +47,11 @@ Ostatnia aktualizacja: 2026-07-24
 11. **Pliki vaulta tworzy self-heal, nie setup** — `ensureSkrzynkaFile`/`SKRZYNKA_TEMPLATE` w `inbox-pull.mjs` (dodane 24.07) załatwia pierwszy run; setup tylko waliduje kod zaproszenia probe'em `/ping`.
 12. **Kod zaproszenia**: `puls-inbox:<funnel-url>#<token>` — jeden string, czysta funkcja parsująca z testami. Pełny token widoczny JEDNORAZOWO przy tworzeniu członka (potem tylko maska).
 12a. **Zarządzanie członkami przez UI dashboardu, nie skill** (decyzja operatora 24.07): widok „Zespół" — lista z maskami, dodanie z jednorazowym kodem (przycisk kopiuj), unieważnienie z potwierdzeniem. Admin sięga do huba z lokalnego dashboardu przez istniejące proxy `/api/vps/*` (przełącznik local/vps już jest). Skill `puls` może dostać te operacje później jako drugi kanał.
+12b. **Mockupy Figma dla IU-3.3** (zbudowane 24.07, plik projektu dashboardu):
+   - Ekran „Puls — Zespół": https://www.figma.com/file/LHNwwdO9B0o9Sn82nNrn3W?node-id=128-2
+   - Modal „Kod zaproszenia" (stan po dodaniu członka): https://www.figma.com/file/LHNwwdO9B0o9Sn82nNrn3W?node-id=131-2
+   - Modal „Unieważnij dostęp" (potwierdzenie): https://www.figma.com/file/LHNwwdO9B0o9Sn82nNrn3W?node-id=131-30
+   Konwencje wyciągnięte z istniejących ekranów: bg #0a0a0a, header #121212, karta/tabela #161616 stroke #1d1d1d r14, modal #141414 stroke #2e2e2e r16, input #1c1c1c r9, akcent #fe6f00, danger #ff5c5c, pille h24 r20 fill kolor@13%, fonty Outfit Bold 16-18 (tytuły) / Inter Semi Bold 11.5-13.5 / JetBrains Mono (kody i maski).
 13. **Token per członek plaintext w SQLite huba** — spójnie z modelem zaufania repo (sekrety w state plaintext, poziom jak shell RC); API listujące zwraca maski.
 
 ## Wymagania twarde operatora (checklist zgodności planu)
