@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 12 -->
+<!-- rule-count: 13 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -39,3 +39,6 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **child_process: domykaj cykl życia na `'exit'` z karencją, nie tylko na `'close'`**: `'close'` odpala dopiero gdy zamkną się stdio-streamy dziecka; jeśli spawnowany proces ma wnuka DZIEDZICZĄCEGO `stdout`/`stderr` (np. CLI odpalające podproces), a `killProcessTree` ubija tylko rodzica, wnuk trzyma pipe i `'close'` NIE nadchodzi nigdy → zwolnienie zasobu (slot/lock/licznik) wisiące wyłącznie na `'close'` wycieka na zawsze. Trzymaj release w idempotentnym `settle()` (guard `settled` — `close`/`exit`/`error` mogą przyjść w dowolnej kombinacji), domykaj na `'exit'` (przychodzi ZAWSZE) z krótką karencją dającą `'close'` pierwszeństwo dla pełnego stdout; timer karencji z `unref()`.
   Source: docs/solutions/runtime-errors/2026-07-14-close-nie-odpala-wnuk-dziedziczy-pipe-wyciek-slotu.md
+
+- **Endpoint mutujący zwracający SEKRET = guard CSRF po `Origin`; guard XFF/proxy go NIE chroni**: `fetch` z obcej strony do `http://localhost` NIE ustawia `X-Forwarded-For` (dokłada go dopiero proxy/Tailscale Funnel), więc przechodzi guard sieciowy jak same-origin; a globalne `Access-Control-Allow-Origin: *` pozwala tej stronie ODCZYTAĆ sekret z odpowiedzi (token/invite_code) → CSRF wykrada dostęp. Dołóż osobną warstwę: odrzucaj cross-origin (`Origin` obecny i `!= Host`) PRZED dotknięciem DB; brak `Origin` przepuszczaj (klient nie-przeglądarkowy), nieparsowalny traktuj jak obcy (fail-closed). Guard sieciowy i CORS są ortogonalne — endpoint z sekretem potrzebuje obu.
+  Source: docs/solutions/auth-issues/2026-07-24-cors-acao-wildcard-wyciek-tokenu-guard-xff-nie-chroni.md
