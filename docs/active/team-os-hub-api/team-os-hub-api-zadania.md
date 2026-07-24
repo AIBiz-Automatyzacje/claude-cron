@@ -5,35 +5,35 @@ Ostatnia aktualizacja: 2026-07-24
 
 ## Faza 0 — przygotowanie
 
-- [ ] Commit zastanych zmian z 24.07 (self-heal Skrzynki, testy inbox-push, eksporty archiwum, CLAUDE.md) — osobny commit PRZED startem F1
+- [x] Commit zastanych zmian z 24.07 (self-heal Skrzynki, testy inbox-push, eksporty archiwum, CLAUDE.md) — osobny commit PRZED startem F1
 
 ## Faza 1 — Hub: dane + API + server.js (XL)
 
 ### IU-1.1 `lib/inbox-db.js` (M)
-- [ ] `lib/inbox-db.js`: otwarcie `data/inbox.db` (ścieżka z configu, `setInboxDbPath` dla testów), idempotentne migracje, smoke-test typów agregatów
-- [ ] Tabele: `inbox` (id TEXT uuid, thread_id, from_user, to_user, type, title, content, payload TEXT-JSON, status, created_at/updated_at ISO w kodzie), `members` (name UNIQUE, token, created_at)
-- [ ] Operacje: `pullForUser` (+ pending→delivered), `markDone` (idempotentny; task+Zrobione = transakcja reply+done), `claimQuery` (atomowy UPDATE...RETURNING), `sendMessage`, CRUD członków
-- [ ] Granica JSON: `payload` obiektem powyżej tej warstwy (parse/stringify TYLKO tu)
-- [ ] Test: roundtrip `payload {auto_reply:true}` — zapis i odczyt zwraca obiekt, nie string (wymaganie twarde #1)
-- [ ] Test: `markDone` powtórzony na rekordzie `done` → `already_done`, zero nowych wierszy reply (wymaganie twarde #2)
-- [ ] Test: `claimQuery` dwa wywołania → drugi dostaje null (atomowość)
-- [ ] Test: happy + error case dla każdej operacji publicznej
+- [x] `lib/inbox-db.js`: otwarcie `data/inbox.db` (ścieżka z configu, `setInboxDbPath` dla testów), idempotentne migracje, smoke-test typów agregatów
+- [x] Tabele: `inbox` (id TEXT uuid, thread_id, from_user, to_user, type, title, content, payload TEXT-JSON, status, created_at/updated_at ISO w kodzie), `members` (name UNIQUE, token, created_at)
+- [x] Operacje: `pullForUser` (+ pending→delivered), `markDone` (idempotentny; task+Zrobione = transakcja reply+done), `claimQuery` (atomowy UPDATE...RETURNING), `sendMessage`, CRUD członków
+- [x] Granica JSON: `payload` obiektem powyżej tej warstwy (parse/stringify TYLKO tu)
+- [x] Test: roundtrip `payload {auto_reply:true}` — zapis i odczyt zwraca obiekt, nie string (wymaganie twarde #1)
+- [x] Test: `markDone` powtórzony na rekordzie `done` → `already_done`, zero nowych wierszy reply (wymaganie twarde #2)
+- [x] Test: `claimQuery` dwa wywołania → drugi dostaje null (atomowość)
+- [x] Test: happy + error case dla każdej operacji publicznej
 
 ### IU-1.2 `lib/inbox-api.js` (L)
-- [ ] `matchInboxToken` (`/inbox/v1/:token/<akcja>`) — bliźniak webhook.js, testy happy+error
-- [ ] Autoryzacja: `timingSafeEqual` po wszystkich tokenach członków; kody dla intruzów bez szczegółów (403/404/405/413)
-- [ ] Rate limit 60 req/min per token — stała nazwana z komentarzem wyliczenia (rytm: sync 2–4 + auto-reply 2 req/min + retry, ×10); NIE 10/min z /ask (wymaganie twarde #3)
-- [ ] Cap body 64 KB przed autoryzacją (wzorzec readTextBody z /ask), walidacja inputów na granicy (enum type/action, długości)
-- [ ] Endpointy: `ping`, `pull` (payload jako obiekt w JSON odpowiedzi), `done` (zwraca pełną nitkę do archiwum), `send`, `claim-query`
-- [ ] Pole `v:1` w każdej odpowiedzi; nieznana wersja ścieżki → 404 (wymaganie twarde #4)
-- [ ] Test: autoryzacja (zły token 403, dobry przechodzi), rate limit (61. request w minucie odcięty), walidacja (nieznany type odrzucony)
+- [x] `matchInboxToken` (`/inbox/v1/:token/<akcja>`) — bliźniak webhook.js, testy happy+error
+- [x] Autoryzacja: `timingSafeEqual` po wszystkich tokenach członków; kody dla intruzów bez szczegółów (403/404/405/413)
+- [x] Rate limit 60 req/min per token — stała nazwana z komentarzem wyliczenia (rytm: sync 2–4 + auto-reply 2 req/min + retry, ×10); NIE 10/min z /ask (wymaganie twarde #3)
+- [x] Cap body 64 KB przed autoryzacją (wzorzec readTextBody z /ask), walidacja inputów na granicy (enum type/action, długości)
+- [x] Endpointy: `ping`, `pull` (payload jako obiekt w JSON odpowiedzi), `done` (zwraca pełną nitkę do archiwum), `send`, `claim-query`
+- [x] Pole `v:1` w każdej odpowiedzi; nieznana wersja ścieżki → 404 (wymaganie twarde #4)
+- [x] Test: autoryzacja (zły token 403, dobry przechodzi), rate limit (61. request w minucie odcięty), walidacja (nieznany type odrzucony)
 
 ### IU-1.3 `server.js` + testy HTTP (M)
-- [ ] Matcher inbox w kolejności: webhook → ask → **inbox** → guard XFF → api/static + aktualizacja komentarza-kontraktu
-- [ ] Prywatne `/api/inbox/members` (ZA guardem XFF): GET lista (tokeny maskowane), POST dodanie (pełny token + kod zaproszenia jednorazowo w odpowiedzi), DELETE odwołanie
-- [ ] Test HTTP (żywy proces, wzorzec ask.http.test.js): inbox działa z nagłówkiem XFF; `/api/inbox/members` z XFF → 403
-- [ ] Test HTTP: powtórzony `done` → `already_done`, bez duplikatu reply
-- [ ] Test HTTP: `pull` zwraca `payload.auto_reply === true` jako boolean w obiekcie
+- [x] Matcher inbox w kolejności: webhook → ask → **inbox** → guard XFF → api/static + aktualizacja komentarza-kontraktu
+- [x] Prywatne `/api/inbox/members` (ZA guardem XFF): GET lista (tokeny maskowane), POST dodanie (pełny token + kod zaproszenia jednorazowo w odpowiedzi), DELETE odwołanie
+- [x] Test HTTP (żywy proces, wzorzec ask.http.test.js): inbox działa z nagłówkiem XFF; `/api/inbox/members` z XFF → 403
+- [x] Test HTTP: powtórzony `done` → `already_done`, bez duplikatu reply
+- [x] Test HTTP: `pull` zwraca `payload.auto_reply === true` jako boolean w obiekcie
 - [ ] Weryfikacja: pełna suita `npm test` zielona
 
 ## Faza 2 — Klienci (M)

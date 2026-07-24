@@ -13,7 +13,9 @@ const skills = require('./lib/skills');
 const platform = require('./lib/platform');
 const keepAwake = require('./lib/keep-awake');
 const inboxSeed = require('./lib/inbox-seed');
+const inboxDb = require('./lib/inbox-db');
 const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
+const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
 const { pushNotifySettings, buildPushPayload } = require('./lib/notify-push');
 
@@ -48,6 +50,24 @@ async function parseBody(req) {
       catch { resolve({}); }
     });
   });
+}
+
+// === Inbox (Team OS Hub) — helpery API administracyjnego ===
+
+// Format kodu zaproszenia: jeden string do wklejenia w setupie członka.
+// Kontrakt współdzielony z parseInviteCode po stronie setup.mjs (IU-3.2).
+const INVITE_CODE_PREFIX = 'puls-inbox:';
+
+function buildInviteCode(funnelUrl, token) {
+  return `${INVITE_CODE_PREFIX}${funnelUrl}#${token}`;
+}
+
+// Maskowanie tokenu członka na liście — configured + ostatnie 4 znaki
+// (wzorzec maskSecret z notify-config: pełny token TYLKO w odpowiedzi POST).
+const MEMBER_TOKEN_VISIBLE_CHARS = 4;
+
+function maskMemberToken(token) {
+  return `…${token.slice(-MEMBER_TOKEN_VISIBLE_CHARS)}`;
 }
 
 // Duże, stałe assety (logo/favicon) cache'owane 1h. Kod UI (css/js) i HTML: no-cache
@@ -383,6 +403,61 @@ async function handleApi(req, res) {
     return json(res, db.getRuns({ limit, offset, job_id, hideRoutine }));
   }
 
+  // === Inbox (Team OS Hub) — administracja członkami ===
+  // PRYWATNE: za guardem XFF (jak cały /api/*) → dostępne wyłącznie przez Tailscale.
+  // Request z Funnela (X-Forwarded-For) nigdy tu nie dotrze — guard zwraca 403 wcześniej.
+
+  // GET /api/inbox/members — lista z tokenami MASKOWANYMI (nigdy pełny token)
+  if (method === 'GET' && urlPath === '/api/inbox/members') {
+    const members = inboxDb.listMembers().map((m) => ({
+      id: m.id,
+      name: m.name,
+      token_masked: maskMemberToken(m.token),
+      created_at: m.created_at,
+    }));
+    return json(res, members);
+  }
+
+  // POST /api/inbox/members — dodanie członka. Zwraca PEŁNY token + gotowy kod
+  // zaproszenia JEDNORAZOWO (GET już go zamaskuje). Funnel-URL z WEBHOOK_BASE_URL.
+  if (method === 'POST' && urlPath === '/api/inbox/members') {
+    // Guard: bez skonfigurowanego Funnela kod zaproszenia byłby bezużyteczny.
+    // Fail fast PRZED utworzeniem członka (nie zostawiamy osieroconego wpisu) —
+    // learned pattern „potwierdzaj stan faktyczny, nie cichy sukces".
+    if (!WEBHOOK_BASE_URL) {
+      return error(res, 'Funnel URL not configured (set WEBHOOK_BASE_URL) — invite code cannot be built', 503);
+    }
+    const body = await parseBody(req);
+    if (!body.name || typeof body.name !== 'string') {
+      return error(res, 'name is required');
+    }
+    let member;
+    try {
+      member = inboxDb.addMember(body.name);
+    } catch (e) {
+      if (e instanceof inboxDb.InboxDbError) return error(res, e.message, 409);
+      throw e;
+    }
+    return json(res, {
+      id: member.id,
+      name: member.name,
+      token: member.token, // pełny token — jednorazowo, GET zwróci maskę
+      invite_code: buildInviteCode(WEBHOOK_BASE_URL, member.token),
+      created_at: member.created_at,
+    }, 201);
+  }
+
+  // DELETE /api/inbox/members/:id — odwołanie członka (skasowanie tokenu)
+  if (segments[0] === 'api' && segments[1] === 'inbox' && segments[2] === 'members' && segments[3]) {
+    const id = parseInt(segments[3], 10);
+    if (isNaN(id)) return error(res, 'Invalid member ID');
+    if (method === 'DELETE') {
+      const removed = inboxDb.revokeMember(id);
+      if (!removed) return error(res, 'Member not found', 404);
+      return json(res, { ok: true });
+    }
+  }
+
   error(res, 'Not found', 404);
 }
 
@@ -505,6 +580,30 @@ async function handleAsk(req, res, token) {
   return plainText(res, result.text);
 }
 
+// === Inbox handler (Team OS Hub — publiczne, tokenowe endpointy) ===
+
+// Cienka skorupa I/O nad handleInboxRequest (czysta funkcja w lib/inbox-api.js).
+// Cap body PODCZAS streamowania (413 zanim intruz wypompuje setki MB → OOM; body idzie
+// do parse'a PRZED autoryzacją) — MAX_BODY_SIZE współdzielone z handlerem (defense-in-depth).
+async function handleInbox(req, res, token, action) {
+  const rawBody = await readTextBody(req, INBOX_MAX_BODY_BYTES);
+  if (rawBody === null) {
+    // Limit przekroczony / zerwany stream — goły 413. Destroy po flushu odpowiedzi
+    // (wzorzec /ask): inaczej Node dumpowałby resztę streama w nieskończoność.
+    res.once('finish', () => req.destroy());
+    res.writeHead(413);
+    return res.end();
+  }
+  const result = handleInboxRequest({ token, action, method: req.method, rawBody });
+  // Odpowiedzi z treścią (200/400/429) mają pole `json`; kody intruzów (403/404/405/413)
+  // zwracamy jako goły status bez treści (kontrakt inbox-api — nie zdradzamy szczegółów).
+  if (result.json) {
+    return json(res, result.json, result.status);
+  }
+  res.writeHead(result.status);
+  res.end();
+}
+
 // === Server ===
 
 const server = http.createServer(async (req, res) => {
@@ -526,13 +625,21 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Ask endpoint: /ask/:token — publiczny (dostępny przez Funnel) jak webhook.
-    // KONTRAKT KOLEJNOŚCI matcherów: webhook → ask → guard XFF → api/static.
-    // Ask MUSI stać PRZED guardem X-Forwarded-For (inaczej requesty z Funnela
-    // dostają 403 i endpoint głosowy jest martwy), a guard MUSI zostać przed
-    // api/static (inaczej dashboard robi się publiczny).
+    // KONTRAKT KOLEJNOŚCI matcherów: webhook → ask → inbox → guard XFF → api/static.
+    // Publiczne endpointy (webhook/ask/inbox) MUSZĄ stać PRZED guardem X-Forwarded-For
+    // (ruch z Funnela ma nagłówek XFF — inaczej 403 i endpoint jest martwy), a guard MUSI
+    // zostać przed api/static (inaczej dashboard — w tym prywatne /api/inbox/members — robi
+    // się publiczny). Odwrócenie kolejności = albo martwy publiczny endpoint, albo wyciek.
     const askToken = matchAskToken(req.url);
     if (askToken) {
       return await handleAsk(req, res, askToken);
+    }
+
+    // Inbox endpoint: /inbox/v1/:token/:action — publiczny (Funnel) jak webhook/ask.
+    // Tożsamość członka wyprowadzana z tokenu; matcher przed guardem XFF (kontrakt wyżej).
+    const inboxMatch = matchInboxToken(req.url);
+    if (inboxMatch) {
+      return await handleInbox(req, res, inboxMatch.token, inboxMatch.action);
     }
 
     // Block non-webhook requests from external sources (Tailscale Funnel)

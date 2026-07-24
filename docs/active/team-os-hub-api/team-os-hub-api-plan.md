@@ -68,7 +68,7 @@ Odrzucono także: wspólny tailnet zespołu (dashboard Pulsa bez autoryzacji = R
 
 ## Fazy wdrożenia
 
-### Faza 1 — Hub: dane + API + wpięcie w server.js (XL)
+### Faza 1 — Hub: dane + API + wpięcie w server.js (XL) ✅ zrealizowana (npm test 433/433; mierniki 1–2 spełnione)
 
 **IU-1.1 `lib/inbox-db.js` + testy (M)**
 Warstwa SQLite dla `data/inbox.db` (ścieżka z configu, override `setInboxDbPath` dla testów — wzorzec `db.setDbPath`). Schemat: tabela `inbox` (odwzorowanie z `schema.sql`: `id` TEXT z `crypto.randomUUID()`, `payload` TEXT z JSON-em, `created_at/updated_at` ISO — `updated_at` ustawiane w kodzie, nie triggerem), tabela `members` (`name` UNIQUE, `token`, `created_at`). Idempotentne migracje przy otwarciu (wzorzec `db.migrate`), smoke-test typów agregatów (pułapka BigInt z learned-patterns). **Granica JSON: `payload` wchodzi/wychodzi z tej warstwy jako obiekt** — `JSON.parse/stringify` tylko tutaj, nigdzie wyżej. Operacje: CRUD wiadomości, `pullForUser` (z oznaczeniem delivered), `markDone` (idempotentny, transakcja reply+done dla task), `claimQuery` (atomowy UPDATE...RETURNING), CRUD członków.

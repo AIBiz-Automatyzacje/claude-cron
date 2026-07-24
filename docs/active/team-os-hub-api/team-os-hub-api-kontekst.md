@@ -1,7 +1,13 @@
 # Team OS Hub-API — kontekst
 
 Branch: `feature/team-os-hub-api`
-Ostatnia aktualizacja: 2026-07-24
+Ostatnia aktualizacja: 2026-07-24 (Faza 1 ukończona)
+
+## Postęp
+
+- **Faza 0** — commit zastanych zmian z 24.07 (self-heal Skrzynki + testy inbox-push): `9830119`.
+- **Faza 1 — Hub: dane + API + server.js** ✅ (IU-1.1/1.2/1.3): `lib/inbox-db.js` (warstwa SQLite `data/inbox.db`, granica JSON, idempotentny `markDone`, atomowy `claimQuery`), `lib/inbox-api.js` (czysty handler `/inbox/v1/:token/*`, rate limit 60/min per token, `timingSafeEqual`, cap 64 KB, pole `v:1`), `server.js` (matcher inbox w kontrakcie webhook→ask→inbox→guard XFF, prywatne `/api/inbox/members` za guardem, kod zaproszenia `puls-inbox:<url>#<token>`). Pełna suita `npm test`: **433/433 zielone**.
+  - Odchylenia builderów utrwalone: `thread_id` = `id` dla roota (NOT NULL, brak COALESCE); `markDone`/`pullForUser`/`claimQuery` zwracają sygnały ustrukturyzowane (`not_found|skipped|already_done|replied|closed`) zamiast rzucać — idempotencja/autoryzacja to normalne stany; `InboxDbError` tylko przy naruszeniu kontraktu wejścia. `pullForUser` NIE zawiera auto-close (logika renderująco-biznesowa — ew. F2). Handler przyjmuje `method` (dla 405) i surowy `rawBody` string (parse JSON w czystej funkcji). Kod zaproszenia budowany w `server.js` (`INVITE_CODE_PREFIX='puls-inbox:'`, kontrakt z `parseInviteCode` z IU-3.2); źródło Funnel-URL = istniejący `WEBHOOK_BASE_URL` (brak dedykowanej zmiennej); POST członka robi fail-fast 503 gdy `WEBHOOK_BASE_URL` puste PRZED `addMember` (brak osieroconego wpisu). Zero nowych zależności npm.
 
 ## Powiązane pliki
 
