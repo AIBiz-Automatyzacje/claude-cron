@@ -16,7 +16,7 @@ import { loadEnv } from './env-loader.mjs';
 // ──────── parser ────────
 // Wyciąga z Skrzynki tylko sekcję 📥 Otrzymane (między markerami).
 // Rozdziela ją na bloki callout (każdy zaczyna od `> [!`), dla każdego sprawdza czy ma odhaczony checkbox.
-function extractInboxSection(content) {
+export function extractInboxSection(content) {
   const startMarker = '%% inbox:items:start %%';
   const endMarker = '%% inbox:items:end %%';
   const startIdx = content.indexOf(startMarker);
@@ -25,7 +25,7 @@ function extractInboxSection(content) {
   return content.slice(startIdx + startMarker.length, endIdx);
 }
 
-function parseCheckedCallouts(section) {
+export function parseCheckedCallouts(section) {
   // Każdy callout to blok kolejnych linii zaczynających się od `> `
   const lines = section.split('\n');
   const blocks = [];

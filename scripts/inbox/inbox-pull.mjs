@@ -13,15 +13,24 @@ import { loadEnv } from './env-loader.mjs';
 const TOP_N_IN_DASHBOARD = 3;
 
 // ──────── rendering ────────
+// Redesign 07.2026 (mockup-skrzynka.html): karty wątków stylowane snippetem `skrzynka.css`
+// (cssclasses: skrzynka). Renderer emituje inline HTML spany (os-av/os-who/os-tag/...) —
+// Obsidian renderuje je w preview i live preview; kontrakt inbox-push (bloki `> `,
+// marker %% id/thread %%, checkbox `- [x] Zrobione|Zapoznane`) pozostaje nietknięty.
 const TYPE_EMOJI = { task: '📝', query: '❓', reply: '💬', close: '✅' };
-const TYPE_LABEL = { task: 'Zadanie', query: 'Pytanie', reply: 'Odpowiedź', close: 'Zamknięcie' };
-// Callout tag per typ — task wymaga akcji wykonawczej, query wymaga odpowiedzi, reply jest info
-const CALLOUT_TAG = {
-  task: '[!todo]-',
-  query: '[!question]-',
-  reply: '[!tip]-',
-  close: '[!note]-',
-};
+const TYPE_LABEL = { task: 'zadanie', query: 'pytanie', reply: 'odpowiedź', close: 'zamknięcie' };
+// Callout name per typ — task wymaga akcji wykonawczej, query wymaga odpowiedzi, reply jest info
+const CALLOUT_NAME = { task: 'todo', query: 'question', reply: 'tip', close: 'note' };
+const AUTO_REPLY_PREFIX = /^🤖 auto-odpowiedź asystenta:?\s*/;
+
+function isAutoReply(m) {
+  return m.payload?.auto_reply === true || AUTO_REPLY_PREFIX.test(m.content || '');
+}
+function avatarSpan(user, { small = false, bot = false } = {}) {
+  const slug = bot ? 'bot' : String(user).toLowerCase().replace(/[^a-z0-9-]/g, '');
+  const initial = bot ? '🤖' : String(user).charAt(0).toUpperCase();
+  return `<span class="os-av${small ? ' s' : ''} u-${slug}">${initial}</span>`;
+}
 
 function fmtTime(iso) {
   return new Date(iso).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -44,45 +53,59 @@ function delegateIcon(iso) {
   return hours >= 48 ? '⚠️' : '⏳';
 }
 
+// Renderuje JEDNĄ wiadomość nitki jako li z awatarem: człowiek = inicjał w kolorze osoby,
+// agent (payload.auto_reply) = 🤖 + badge AUTO + prefix zdjęty z treści + linia „Źródło:" jako pill.
+function renderMessage(m) {
+  const auto = isAutoReply(m);
+  const raw = auto ? (m.content || '').replace(AUTO_REPLY_PREFIX, '') : (m.content || '');
+  const lines = raw.trim().split('\n').map(l => {
+    const src = l.match(/^Źródło:\s*(.+)$/);
+    return src ? `<span class="os-src">📄 ${src[1]}</span>` : l;
+  });
+  const who = auto
+    ? `<span class="os-who">Asystent @${m.from_user}</span> <span class="os-time">· ${fmtTimeShort(m.created_at)}</span> <span class="os-auto">AUTO</span>`
+    : `<span class="os-who">@${m.from_user}</span> <span class="os-time">· ${fmtTimeShort(m.created_at)}</span>`;
+  const head = `> - ${avatarSpan(m.from_user, { bot: auto })}${who}<br>${lines[0] || ''}`;
+  const cont = lines.slice(1).map(l => `>   ${l}`);
+  return [head, ...cont].join('\n');
+}
+
 // Renderuje JEDEN callout na cały wątek — nitka chronologicznie w środku.
 // thread = posortowane chronologicznie wiadomości jednego thread_id (root = pierwsza).
 // anchor = pierwsza aktywna (nie-done) wiadomość DO MNIE — jej id/typ trafiają do markera i checkboxa
 //          (kontrakt push-job: SELECT WHERE id, walidacja to_user + typ → akcja).
-function renderThreadCallout(thread, anchor) {
+// me = INBOX_USER — kierunek w metadanych („Ty → @x" vs „od @x").
+export function renderThreadCallout(thread, anchor, me) {
   const root = thread[0];
   const threadId = root.thread_id || root.id;
-  const emoji = TYPE_EMOJI[root.type] || '📝';
-  const label = TYPE_LABEL[root.type] || 'Wiadomość';
-  const tag = CALLOUT_TAG[root.type] || '[!note]-';
+  const name = CALLOUT_NAME[root.type] || 'note';
   const isFresh = thread.some(r => r.status === 'pending');
-  const badge = isFresh ? '🆕 ' : '';
 
-  // Checkbox wg typu kotwicy — task czeka na "Zrobione", reszta na "Zapoznane"
+  const tags = [
+    isFresh ? '<span class="os-tag t-new">🆕 nowe</span>' : null,
+    `<span class="os-tag t-${root.type}">${TYPE_EMOJI[root.type] || '📝'} ${TYPE_LABEL[root.type] || 'wiadomość'}</span>`,
+  ].filter(Boolean).join(' ');
+  const dir = root.from_user === me ? `Ty → @${root.to_user}` : `od @${root.from_user}`;
+  const meta = `<span class="os-meta">${dir} · ${fmtTime(root.created_at)}</span>`;
+
+  // Checkbox wg typu kotwicy — task czeka na "Zrobione", reszta na "Zapoznane";
+  // hint w tej samej linii (regex pusha matchuje prefix, span mu nie przeszkadza)
   const checkboxLabel = anchor.type === 'task' ? 'Zrobione' : 'Zapoznane';
+  const hint = anchor.type === 'task'
+    ? '<span class="os-hint">odhaczenie odsyła potwierdzenie i zamyka wątek</span>'
+    : '<span class="os-hint">dopytaj: `/deleguj reply --thread-id <id z dołu>` albo odhacz ✅</span>';
 
-  // Cała nitka chronologicznie: autor · czas — treść (treść może być wieloliniowa)
-  const messages = thread.map(m => {
-    const body = (m.content || '').split('\n');
-    const head = `> - **@${m.from_user}** · ${fmtTimeShort(m.created_at)} — ${body[0] || ''}`;
-    const cont = body.slice(1).map(l => `>   ${l}`);
-    return [head, ...cont].join('\n');
-  }).join('\n');
-
-  // Query w nitce: hint jak odpowiedzieć
-  const queryHint = thread.some(m => m.type === 'query')
-    ? '> _Odpowiedz przez `/deleguj reply --thread-id <id z dołu>` lub czeknij ✅ Zapoznane._'
-    : null;
+  const messages = thread.map(renderMessage).join('\n');
 
   return [
-    `> ${tag} ${badge}${emoji} @${root.from_user} · ${fmtTime(root.created_at)}`,
-    `> **${label}:** ${root.title}`,
+    `> [!${name}${isFresh ? '|fresh' : ''}]- ${root.title}`,
+    `> ${tags} ${meta}`,
     '>',
     messages,
-    queryHint ? '>\n' + queryHint : null,
     '>',
-    `> - [ ] ${checkboxLabel}`,
+    `> - [ ] ${checkboxLabel} ${hint}`,
     `> %% id:${anchor.id} thread:${threadId} %%`,
-  ].filter(Boolean).join('\n');
+  ].join('\n');
 }
 
 function renderDashboardLine(row) {
@@ -92,17 +115,25 @@ function renderDashboardLine(row) {
 function renderDelegatedLine(row) {
   return `- ${delegateIcon(row.created_at)} @${row.to_user} · czeka ${ago(row.created_at)} — **${row.title}**`;
 }
-function renderDelegatedCallout(row) {
-  const icon = delegateIcon(row.created_at);
-  const threadId = row.thread_id || row.id;
-  const stale = icon === '⚠️';
-  const tag = stale ? '[!warning]-' : '[!note]-';
-  return [
-    `> ${tag} ${icon} @${row.to_user} · czeka ${ago(row.created_at)} · od ${fmtTime(row.created_at)}`,
-    `> **${row.title}**`,
-    `>`,
-    `> %% thread:${threadId} %%`,
-  ].join('\n');
+// Wszystkie delegacje w JEDNYM callout — wiersze jak w mockupie (pill czasu, awatar, tytuł),
+// marker %% thread %% per wiersz (ukryty w preview, do skopiowania dla /deleguj reply).
+export function renderDelegatedCallout(rows) {
+  const items = rows.map(row => {
+    const icon = delegateIcon(row.created_at);
+    const stale = icon === '⚠️';
+    const threadId = row.thread_id || row.id;
+    return `> - <span class="os-wait${stale ? ' stale' : ''}">${icon} czeka ${ago(row.created_at)}</span> ` +
+      `${avatarSpan(row.to_user, { small: true })}<span class="os-who">@${row.to_user}</span> — ` +
+      `**${row.title}** <span class="os-since">wysłane ${fmtTime(row.created_at)}</span> %% thread:${threadId} %%`;
+  }).join('\n');
+  return `> [!delegated]- w toku\n${items}`;
+}
+
+// Link do archiwum bieżącego miesiąca — jedyne „drzwi" do zamkniętych wątków w pustym stanie
+function archiveLink() {
+  const now = new Date();
+  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return `[[Zasoby/inbox-archive/${ym}|📁 archiwum wątków →]]`;
 }
 
 // ──────── generic marker replace ────────
@@ -120,7 +151,7 @@ function replaceBetweenMarkers(source, startMarker, endMarker, newContent) {
 // Grupuje płaskie wiersze po thread_id w nitki posortowane chronologicznie.
 // threadRows = WSZYSTKIE wiadomości aktywnych wątków; activeForMe = moje nie-done (kotwice).
 // Kolejność wątków: malejąco wg czasu kotwicy (najświeższe rozmowy na górze).
-function buildThreadCallouts(threadRows, activeForMe) {
+function buildThreadCallouts(threadRows, activeForMe, me) {
   const byThread = new Map();
   for (const row of threadRows) {
     const key = row.thread_id || row.id;
@@ -142,25 +173,25 @@ function buildThreadCallouts(threadRows, activeForMe) {
   const callouts = [];
   for (const [key, anchor] of anchors) {
     const thread = byThread.get(key) || [anchor];
-    callouts.push({ anchorTime: new Date(anchor.created_at).getTime(), text: renderThreadCallout(thread, anchor) });
+    callouts.push({ anchorTime: new Date(anchor.created_at).getTime(), text: renderThreadCallout(thread, anchor, me) });
   }
   callouts.sort((a, b) => b.anchorTime - a.anchorTime);
   return callouts.map(c => c.text);
 }
 
 // ──────── Skrzynka.md writer (oba bloki w jednym pliku) ────────
-async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedItems) {
+async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedItems, me) {
   const raw = await fs.readFile(filePath, 'utf8');
-  const inboxCallouts = buildThreadCallouts(threadRows, activeForMe);
+  const inboxCallouts = buildThreadCallouts(threadRows, activeForMe, me);
   const inboxCount = activeForMe.length;
   const delegatedCount = delegatedItems.length;
 
   const inboxBody = inboxCallouts.length
     ? inboxCallouts.join('\n\n')
-    : '_Brak nowych wiadomości._';
+    : `> [!inbox-ok] 🌿 Pusto. Nikt nic od Ciebie nie chce. · ${archiveLink()}`;
   const delegatedBody = delegatedItems.length
-    ? delegatedItems.map(renderDelegatedCallout).join('\n\n')
-    : '_Brak wysłanych delegacji._';
+    ? renderDelegatedCallout(delegatedItems)
+    : '> [!inbox-ok] 🌿 Nic nie wisi na innych.';
 
   let updated = replaceBetweenMarkers(raw, '%% inbox:items:start %%', '%% inbox:items:end %%', inboxBody);
   updated = replaceBetweenMarkers(updated, '%% delegated:items:start %%', '%% delegated:items:end %%', delegatedBody);
@@ -272,7 +303,7 @@ export async function main() {
 
     // Moje aktywne wiadomości (Otrzymane = do mnie, nie-done) — kotwice wątków + liczniki
     const activeRes = await client.query(
-      `SELECT i.id, i.thread_id, i.from_user, i.type, i.title, i.content, i.status, i.created_at
+      `SELECT i.id, i.thread_id, i.from_user, i.type, i.title, i.content, i.status, i.created_at, i.payload
        FROM inbox i
        WHERE i.to_user = $1 AND i.status IN ('pending','delivered')
        ORDER BY i.created_at DESC`,
@@ -286,7 +317,7 @@ export async function main() {
     let threadRows = active;
     if (activeThreadIds.length > 0) {
       const threadRes = await client.query(
-        `SELECT id, thread_id, from_user, to_user, type, title, content, status, created_at
+        `SELECT id, thread_id, from_user, to_user, type, title, content, status, created_at, payload
          FROM inbox
          WHERE thread_id = ANY($1::uuid[])
          ORDER BY created_at ASC`,
@@ -318,7 +349,7 @@ export async function main() {
     }).length;
 
     // Write to Skrzynka.md (oba bloki) + to_do.md banner
-    await updateSkrzynkaFile(INBOX_SKRZYNKA_PATH, threadRows, active, delegated);
+    await updateSkrzynkaFile(INBOX_SKRZYNKA_PATH, threadRows, active, delegated, INBOX_USER);
     await updateDashboard(INBOX_TODO_PATH, {
       inboxCount: active.length,
       taskCount,
