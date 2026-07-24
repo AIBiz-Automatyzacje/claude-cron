@@ -1132,7 +1132,7 @@ function renderMembers() {
       <div><span class="token-mask">${esc(row.tokenMasked)}</span></div>
       <div class="cell-dim">${row.createdAt ? formatDateTime(row.createdAt) : '—'}</div>
       <div class="actions">
-        <button class="act-btn danger" onclick="revokeMember(${row.id})" title="Unieważnij dostęp" aria-label="Unieważnij dostęp ${esc(row.name)}">✕</button>
+        <button class="act-btn danger" onclick="revokeMember(${row.id})" title="Unieważnij dostęp" aria-label="Unieważnij dostęp ${escAttr(row.name)}">✕</button>
       </div>
     </div>
   `;
@@ -1260,6 +1260,15 @@ function esc(str) {
   const el = document.createElement('span');
   el.textContent = String(str);
   return el.innerHTML;
+}
+
+// === Escape HTML attribute (kontekst atrybutu) ===
+// esc() (textContent→innerHTML) NIE escapuje cudzysłowów, więc wstawienie
+// jego wyniku do atrybutu w podwójnych cudzysłowach pozwala nazwie typu
+// `x" onmouseover="…` złamać atrybut i wstrzyknąć handler. W kontekście
+// atrybutu dodatkowo escapujemy " i ' (dane mogą przyjść z proxy /api/vps/*).
+function escAttr(str) {
+  return esc(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // === Truncate ===

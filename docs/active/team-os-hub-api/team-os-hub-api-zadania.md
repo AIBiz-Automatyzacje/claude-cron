@@ -120,7 +120,34 @@ _Findingów typu OPERATOR (niewykonalne headless) w fazie 2: brak — sekcja Ope
 - [x] Czyste helpery renderujące w `render-helpers.js` (maska tokenu, wiersz członka)
 - [x] Widok działa przez proxy `/api/vps/*` (hub = VPS admina) i bezpośrednio na dashboardzie VPS
 - [x] Test: helpery renderujące happy + error w `render-helpers.test.js`
-- [ ] Weryfikacja: pełna suita + testy instalatorów zielone; ręcznie — dodanie/unieważnienie członka z lokalnego dashboardu w widoku vps
+- [ ] Weryfikacja: pełna suita + testy instalatorów zielone; ręcznie — dodanie/unieważnienie członka z lokalnego dashboardu w widoku vps — część CLI PASS (npm test 492/492 exit 0, install-vps.test.sh 110/110 exit 0); część ręczna — wymaga operatora (checklist)
+
+## Do poprawy po review fazy 3
+
+Severity gate: ⚠️ ZASTRZEŻENIA (2× P2, 0× P1). Raport: `review-faza-3.md`.
+
+- [x] 🟠 [P2·KOD] **public/app.js:1135** — Attribute-context XSS: `esc()` (app.js:1258) nie escapuje cudzysłowów, a `renderMembers` wstawia `esc(row.name)` do `aria-label="Unieważnij dostęp ${esc(row.name)}"`. Nazwa członka niewalidowana znakowo (addMember lib/inbox-db.js:271 sprawdza tylko `!name`, validateMemberName tylko długość ≤80) → `x" onmouseover="alert(...)` wstrzykuje handler; w trybie VPS dane z proxy `/api/vps/*`, nie tylko self-XSS. Fix: escapuj `"`/`'` (dedykowany escAttr) albo nie wstawiaj nazwy do atrybutu.
+- [x] 🟠 [P2·KOD] **scripts/install-vps.sh:1436** — `is_valid_member_name` whitelist ASCII `^[A-Za-z0-9 ._-]+$` odrzuca polskie diakrytyki (ł/ą/ć/ę/ó/ś/ż/ź/ń). Admin o polskim imieniu → `ask_valid` ponawia → `ASK_MAX_ATTEMPTS` → `fail`/`exit 1` PRZERYWA skonfigurowaną instalację przed `print_summary`, jednorazowy `TEAM_OS_INVITE_CODE` przepada. Niespójne z dashboardem (dowolne znaki) i server.js (brak walidacji). Fix: rozszerzyć klasę o Unicode/diakrytyki, wykluczyć tylko `"` `\` i control chars.
+
+### P3 (opcjonalne — do rozważenia)
+
+- [ ] 🟡 [P3·KOD] **public/app.js:1135** — `row.id` interpolowane bez koercji do `onclick="revokeMember(${row.id})"` (memberRowData: `m.id ?? null`). Fix: `Number(row.id)` / data-atrybut + delegacja.
+- [ ] 🟡 [P3·KOD] **public/app.js:1436** — poll() re-fetchuje pełną listę członków co 3 s (na VPS round-trip do wspólnego Postgresa) mimo że roster zmienia się rzadko; transient `{error}` powoduje flicker empty-state. Usunąć team z poll() albo wydłużyć interwał.
+- [ ] 🟡 [P3·KOD] **public/app.js:1155-1180** — niespójny prefix nazewnictwa modala: `AddMember` vs `TeamAdd` dla tego samego widoku. Ujednolicić.
+- [ ] 🟡 [P3·KOD] **public/app.js:80** — switchEnv woła `loadMembers()` eager wbrew komentarzowi lazy-load (linia 94); pokryte tab-click i poll. Usunąć z allSettled albo zaktualizować komentarz.
+- [ ] 🟡 [P3·KOD] **setup.mjs** — `probeInviteCode` catch zakłada Error (`error.message`); nie-Error → „(undefined)". Użyć `error?.message ?? String(error)`.
+- [ ] 🟡 [P3·KOD] **public/app.js** — `membersSig` pomija `name` w podpisie guardu (tylko `id:token_masked`+długość); gap latentny na wypadek rename po tym samym id.
+- [ ] 🟡 [P3·KOD] **docs/active/team-os-hub-api/team-os-hub-api-kontekst.md** — under-implementacja instrukcji IU-3.2: brak wzmianki, że celowe niedotworzenie plików Skrzynki w setupie pokrywa self-heal `ensureSkrzynkaFile` przy pierwszym runie pull.
+- [ ] 🟡 [P3·KOD] **public/render-helpers.js:222** — defensive fallbacki `'—'` dla gwarantowanych pól name/token_masked (regula #10) + zdublowana logika fallbacku `createdAt` (helper + renderMembers app.js:1131). Ujednolicić.
+- [ ] 🟡 [P3·TEST] **public/app.js:1093** — `membersSig()` (bliźniak testowanych pollSignature/jobsSignature) bez testu; brzegowe: unieważnienie członka vs brak zmian. Przenieść do render-helpers + test.
+- [ ] 🟡 [P3·TEST] **scripts/install-vps.test.sh:1938** — nietestowane gałęzie błędu `setup_team_os_hub`: (a) brak odpowiedzi serwera → warn+skip (:1518), (b) HTTP != 201/503 → warn+skip (:1538), (c) 201 bez invite_code → warn (:1546).
+
+## Operator checklist faza 3
+
+Nie są to zadania do fix — to warunki środowiskowe/ręczne weryfikacje wymagające żywego dashboardu + huba na VPS z Funnelem (niewykonalne headless).
+
+- [ ] Operator: ręczna weryfikacja dodania i unieważnienia członka z LOKALNEGO dashboardu w widoku VPS przez proxy `/api/vps/*` (jedyny otwarty checkbox IU-3.3) — Operator action: 1) postaw hub na VPS admina ze skonfigurowanym Tailscale Funnel; 2) z lokalnego dashboardu przełącz widok na VPS; 3) w zakładce Zespół dodaj testowego członka (sprawdź jednorazowy invite_code + kopiuj + ostrzeżenie); 4) unieważnij go z potwierdzeniem; 5) potwierdź, że lista odświeża się poprawnie i mutacja przeszła przez proxy.
+- [ ] Operator: smoke-test pełnej ścieżki onboardingu huba (install-vps.sh `setup_team_os_hub` + setup.mjs `askInboxInvite`/`probeInviteCode`) na realnym VPS z Tailscale Funnel — Operator action: 1) odpal `install-vps.sh` w pełnym trybie, odpowiedz T na „Team OS hub"; 2) potwierdź, że przy braku Funnela pojawia się 503 z instrukcją (guard), a przy skonfigurowanym Funnelu POST `/api/inbox/members` zwraca 201 + invite_code z `WEBHOOK_BASE_URL`; 3) na drugiej maszynie odpal `setup.mjs`, wklej invite_code, potwierdź probe `client.ping` do żywego huba i zapis `INBOX_HUB_URL`/`INBOX_TOKEN` do `.env`.
 
 ## Faza 4 — Migracja + decommission + docs (M)
 

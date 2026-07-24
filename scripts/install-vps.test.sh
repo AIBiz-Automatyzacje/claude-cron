@@ -1906,11 +1906,13 @@ test_main_final_phase_order() {
 test_team_os_helpers() {
   local snippet="$SANDBOX/t-hub-helpers.sh" out
   cat > "$snippet" <<'EOF'
-# is_valid_member_name: dozwolone znaki vs cudzysłów/pusty
+# is_valid_member_name: dozwolone znaki vs cudzysłów/backslash/pusty
 v_ok=0;   is_valid_member_name "Ala Kowalska_1.2" || v_ok=$?
+v_pl=0;   is_valid_member_name "Łukasz Święcicki" || v_pl=$?
 v_quote=0; is_valid_member_name 'zły"input' || v_quote=$?
+v_bslash=0; is_valid_member_name 'a\b' || v_bslash=$?
 v_empty=0; is_valid_member_name "" || v_empty=$?
-echo "VOK=$v_ok VQUOTE=$v_quote VEMPTY=$v_empty"
+echo "VOK=$v_ok VPL=$v_pl VQUOTE=$v_quote VBSLASH=$v_bslash VEMPTY=$v_empty"
 # ciało JSON
 echo "BODY=$(team_os_member_body "Ala")"
 # member_exists: dokładne imię trafia, prefiks NIE (zamykający cudzysłów)
@@ -1924,7 +1926,7 @@ echo "INV=[$(printf '%s' "$POST" | team_os_extract_invite)]"
 echo "INVNONE=[$(printf '%s' '{"id":"9","name":"a"}' | team_os_extract_invite)]"
 EOF
   out="$(run_snippet "$snippet")"
-  if [[ "$out" == *"VOK=0 VQUOTE=1 VEMPTY=1"* ]] \
+  if [[ "$out" == *"VOK=0 VPL=0 VQUOTE=1 VBSLASH=1 VEMPTY=1"* ]] \
     && [[ "$out" == *'BODY={"name":"Ala"}'* ]] \
     && [[ "$out" == *"EHIT=0 EMISS=1"* ]] \
     && [[ "$out" == *"INV=[puls-inbox:https://srv.ts.net#deadbeef]"* ]] \

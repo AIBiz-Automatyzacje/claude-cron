@@ -1430,10 +1430,16 @@ setup_funnel() {
 # z Funnel-URL pojawia się w odpowiedzi JEDNORAZOWO — drukujemy go w podsumowaniu.
 
 # is_valid_member_name <s> — imię idzie do ciała JSON (curl --data) i do
-# komunikatów; ograniczamy do liter/cyfr/spacji/. _ - (bez cudzysłowów, które
-# łamałyby JSON, i bez znaków sterujących).
+# komunikatów. Blacklist zamiast whitelisty ASCII: whitelist ^[A-Za-z0-9 ._-]+$
+# odrzucał polskie diakrytyki (Łukasz, Święcicki) i przerywał skonfigurowaną
+# instalację. Dopuszczamy dowolny Unicode, blokujemy tylko cudzysłów i backslash
+# (łamią JSON) oraz znaki sterujące. Pusty = odrzucony.
 is_valid_member_name() {
-  [[ "$1" =~ ^[A-Za-z0-9\ ._-]+$ ]]
+  [[ -n "$1" ]] || return 1
+  [[ "$1" == *'"'* ]] && return 1
+  [[ "$1" == *'\'* ]] && return 1
+  [[ "$1" =~ [[:cntrl:]] ]] && return 1
+  return 0
 }
 
 # team_os_member_body <name> — czyste ciało JSON dla POST-a (jeden klucz name).
