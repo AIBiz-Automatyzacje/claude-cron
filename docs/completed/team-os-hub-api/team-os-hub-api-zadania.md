@@ -1,7 +1,7 @@
 # Team OS Hub-API — zadania
 
 Branch: `feature/team-os-hub-api`
-Ostatnia aktualizacja: 2026-07-24 (Faza 4 ukończona headless — migracja pg→hub + docs; decommission/wykonanie migracji = OPERATOR)
+Ostatnia aktualizacja: 2026-07-24 (Review fazy 4 — CZYSTE: 0× P1, 0× P2, 12× P3, 2× OPERATOR; raport review-faza-4.md)
 
 ## Faza 0 — przygotowanie
 
@@ -166,3 +166,31 @@ Nie są to zadania do fix — to warunki środowiskowe/ręczne weryfikacje wymag
 - [ ] OUT: `pg` z `package.json`+lock, `schema.sql`, `migrate-pg-to-hub.mjs` — **GATED na operatora**: usunięcie ma sens dopiero PO zweryfikowanej migracji (IU-4.1 wykonanie) + decommissionie (IU-4.2); skrypt migracji wciąż importuje `pg`. Nie usuwamy przed uruchomieniem migracji.
 - [x] CLAUDE.md: sekcja Team OS (hub, kontrakt matcherów z inbox, odrzucona opcja minimalna jako decyzja) — nagłówek `## Team OS — Skrzynka (hub lib/inbox-*.js + klienci scripts/inbox/)`, opis hub-and-spoke, `lib/inbox-db.js`/`lib/inbox-api.js`/`inbox-client.mjs`, dedykowany opis prywatnego `/api/inbox/members` (guard XFF + guard cross-origin CSRF), świadomie odrzucona opcja minimalna
 - [ ] Weryfikacja: `npm install --omit=dev` na czysto + pełna suita zielona — pełna suita **503/503 zielona** (`npm test` exit 0); `npm install --omit=dev` na czysto = **OPERATOR** (usunięcie `pg` jest gated, więc czysty install weryfikowalny dopiero po IU-4.2/4.3 cleanup)
+
+## Do poprawy po review fazy 4
+
+Severity gate: ✅ CZYSTE (0× P1, 0× P2). Raport: `review-faza-4.md`. Wszystkie findingi KOD/TEST to nity (P3) na jednorazowym, throwaway skrypcie migracji (usuwanym w IU-4.3).
+
+### P3 (opcjonalne — do rozważenia)
+
+- [ ] 🟡 [P3·KOD] **scripts/inbox/migrate-pg-to-hub.mjs:77** — no-op ternary `content: row.content == null ? null : row.content` (obie gałęzie zwracają `row.content`); uprość do `content: row.content` (dead code).
+- [ ] 🟡 [P3·KOD] **scripts/inbox/migrate-pg-to-hub.mjs:111** — pętla `migrate()` bez transakcji i bez mapowania błędów INSERT na `MigrateError`; wiersz spoza CHECK/NOT NULL rzuci surowy błąd node:sqlite w połowie → częściowa migracja + nieczytelny komunikat. Ryzyko łagodzone `INSERT OR IGNORE` przy re-runie.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/migrate-pg-to-hub.mjs:111** — batch INSERT bez transakcji = fsync per wiersz (N commitów zamiast 1); `BEGIN`/`COMMIT` z rollbackiem w catch. Wpływ minimalny (zbiór bounded, throwaway).
+- [ ] 🟡 [P3·KOD] **scripts/inbox/migrate-pg-to-hub.mjs:117** — `type`/`status` do raw INSERT bez walidacji względem CHECK huba; wartość spoza whitelisty → surowy błąd SQLite CHECK w połowie, przeczy celowi MigrateError. Walidacja przed INSERT = spójny fail-fast.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/migrate-pg-to-hub.mjs:117** — `stmt.run()` nie owinięty w `MigrateError`; `undefined` w wymaganym polu → kryptyczne „cannot bind" zamiast MigrateError. try/catch mapujący, spójnie z `pgRowToHubRow`/`readSourceUrl`.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/migrate-pg-to-hub.mjs:112,143** — filtr `status != 'done'` per-WIERSZ, choć spec mówi o „otwartych WĄTKACH"; root `done` + reply `pending` → sierota bez roota w hubie. Rozważ filtr per-thread albo udokumentuj akceptację sierot.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/migrate-pg-to-hub.mjs:103,132** — `INSERT OR IGNORE` tłumi CICHO każdy constraint (nie tylko PK), a odrzucony wiersz liczony jako `skippedDuplicate` = fałszywe poczucie sukcesu; migracja powinna być głośna o niewstawionych wierszach.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/migrate-pg-to-hub.mjs:112** — podwójny filtr `status != 'done'` (SQL WHERE + kod); gałąź `skippedDone++` nieosiągalna w prod (anti-pattern #10). Jedno źródło prawdy — usuń WHERE albo filtr w kodzie.
+- [ ] 🟡 [P3·KOD] **scripts/inbox/migrate-pg-to-hub.mjs:54** — `toIso` string-branch to martwy kod w prod (pg dla timestamptz zawsze zwraca Date); scaffolding testowy w ścieżce produkcyjnej.
+- [ ] 🟡 [P3·TEST] **scripts/inbox/migrate-pg-to-hub.test.mjs:155** — brak error-case dla gałęzi fail-fast: `migrate()` z `db` bez `getInboxDb` (linia 98) oraz `toIso()` dla nie-Date/nie-string (linia 61); test pokrywa tylko zły `readRows` i string `'nie-data'`.
+- [ ] 🟡 [P3·TEST] **scripts/inbox/migrate-pg-to-hub.test.mjs:155** — gałąź „migrate: db musi być modułem inbox-db" (linia 98) nieprzetestowana; `assert.rejects` dla `db=null` domknęłoby kontrakt DI.
+- [ ] 🟡 [P3·TEST] **scripts/inbox/migrate-pg-to-hub.test.mjs:72** — `toIso()` dla `updated_at` niepokryty (test tylko `created_at`); brak też testu `created_at` jako STRING ISO (kontrakt fake source z komentarza linia 53).
+
+## Operator checklist faza 4
+
+Nie są to zadania do fix — to warunki środowiskowe/ręczne weryfikacje wymagające realnego dostępu do starego Postgresa + VPS-a huba + skanu z zewnątrz (niewykonalne headless).
+
+- [ ] Operator: wykonanie migracji danych ze starego Postgresa do huba (`main()`/`readOpenRowsFromPg` wymagają realnego `pg.Client.connect` do produkcyjnej bazy przez `INBOX_DB_URL`) — Operator action: 1) ustaw `INBOX_DB_URL` na connection string starego Postgresa; 2) odpal `node scripts/inbox/migrate-pg-to-hub.mjs` na VPS-ie huba; 3) sprawdź podsumowanie (`total`/`migrated`/`skippedDuplicate`/`skippedDone`); 4) potwierdź w hubie, że otwarte wątki mają zachowane id/thread_id/created_at/status; 5) przepnij `.env` operatora i Kamila na `INBOX_HUB_URL`/`INBOX_TOKEN`.
+- [ ] Operator: weryfikacja skrzynki end-to-end po hubie (linia 157) — Operator action: na żywym hubie + vaultach przejdź pełny cykl: wysłanie wiadomości, odpowiedź, odhaczenie `[x]`, archiwizacja nitki, auto-reply — potwierdź, że każdy krok działa po migracji na hub.
+- [ ] Operator: decommission starego Postgresa (IU-4.2, wymaganie twarde #5) — Operator action: 1) zgaś kontener Postgresa na 62.72.33.171; 2) zrewokuj hasło z `INBOX_DB_URL` (spalone — jeździło plaintextem po publicznym internecie); 3) skan z zewnątrz — potwierdź, że port 5433 nie odpowiada (`nc -zv`/nmap z innej sieci, linia 162); 4) dopisz hasło do listy rewokacji w notatce NOW operatora.
+- [ ] Operator: `npm install --omit=dev` na czysto + IU-4.3 cleanup (gated) — Operator action: dopiero PO zweryfikowanej migracji (IU-4.1) i decommissionie (IU-4.2) usuń `pg` z `package.json`+lock, `schema.sql` i `migrate-pg-to-hub.mjs`, następnie zweryfikuj `npm install --omit=dev` na czysto + pełną suitę zieloną (część CLI `npm test` już potwierdzona headless: 503/503 exit 0).
