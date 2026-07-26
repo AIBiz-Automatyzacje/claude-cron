@@ -20,6 +20,12 @@ import {
   writeInboxEnv,
 } from './invite.mjs';
 
+// Bity uprawnień POSIX — na Windows `chmod` to najwyżej flaga read-only, więc asercja
+// trybu 0600 nie ma tam sensu (ta sama konwencja co lib/ask.test.js).
+const SKIP_WIN = process.platform === 'win32'
+  ? 'uprawnienia POSIX nieobecne na Windows — sekret chroniony ACL-em katalogu użytkownika'
+  : false;
+
 function makeWorkspace(t) {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-invite-'));
   t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
@@ -120,6 +126,39 @@ test('parseInviteCode: URL z `#` w środku rozdzielany po OSTATNIM separatorze',
   });
 });
 
+// === parseInviteCode — WROGIE wejścia (kod zaproszenia przychodzi kanałem czatu) ===
+// Kod wkleja człowiek ze źródła, którego moduł nie kontroluje, a wartości lądują w `.env`
+// czytanym przez env-loader → `process.env` script-jobów → spawn `claude`. Dziedzina musi
+// być zamknięta PRZED `new URL`, bo parser WHATWG po cichu wycina CR/LF/TAB i po nim string
+// wygląda niewinnie. Te testy pilnują, żeby cofnięcie walidacji nie przeszło na zielono.
+
+test('parseInviteCode wróg: token z newline (wstrzyknięcie linii do .env) → null', () => {
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example#tok\nNODE_OPTIONS=--require /tmp/evil.js'), null);
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example#tok\r\nEVIL=1'), null);
+});
+
+test('parseInviteCode wróg: URL z CR/LF/TAB (URL wycina je po cichu) → null', () => {
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example\nEVIL_VAR=1#tok'), null);
+  assert.equal(parseInviteCode('puls-inbox:https://hub.exa\tmple#tok'), null);
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example\rEVIL_VAR=1#tok'), null);
+});
+
+test('parseInviteCode wróg: cudzysłów lub backslash (ucieczka spod KEY="…") → null', () => {
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example#tok"EVIL="1'), null);
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example#tok\\'), null);
+  assert.equal(parseInviteCode('puls-inbox:https://hub.exa"mple#tok'), null);
+});
+
+test('parseInviteCode wróg: znak sterujący w tokenie lub URL-u → null', () => {
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example#tok\x00evil'), null);
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example#tok\x7f'), null);
+  assert.equal(parseInviteCode('puls-inbox:https://hub.exa\x1bmple#tok'), null);
+});
+
+test('parseInviteCode wróg: spacja w tokenie (drugi argument w linii .env) → null', () => {
+  assert.equal(parseInviteCode('puls-inbox:https://hub.example#tok evil'), null);
+});
+
 // === upsertDotenvLine — idempotentny zapis KEY=value (format env-loader, bez `export`) ===
 
 test('upsertDotenvLine dopisuje KEY="value" gdy klucza nie ma (bez export)', () => {
@@ -139,6 +178,53 @@ test('upsertDotenvLine podmienia istniejącą linię (idempotentny re-run, brak 
 test('upsertDotenvLine dokłada brakujący newline przed nową linią', () => {
   const result = upsertDotenvLine('INBOX_HUB_URL="https://hub"', 'INBOX_TOKEN', 'tok');
   assert.equal(result, 'INBOX_HUB_URL="https://hub"\nINBOX_TOKEN="tok"\n');
+});
+
+// === upsertDotenvLine — WROGIE wejścia: druga warstwa fail-closed na granicy zapisu ===
+// parseInviteCode nie jest jedynym wołającym (setup/onboard mogą dojść), więc sam zapis
+// też musi odmawiać — inaczej regresja w parse od razu produkuje wstrzyknięcie do `.env`.
+
+test('upsertDotenvLine wróg: wartość z CR/LF rzuca zamiast rozerwać linię', () => {
+  assert.throws(
+    () => upsertDotenvLine('', 'INBOX_TOKEN', 'tok\nNODE_OPTIONS=--require /tmp/evil.js'),
+    /Niedozwolona wartość/,
+  );
+  assert.throws(() => upsertDotenvLine('', 'INBOX_HUB_URL', 'https://hub\r\nEVIL=1'), /Niedozwolona wartość/);
+});
+
+test('upsertDotenvLine wróg: wartość z cudzysłowem, backslashem lub znakiem sterującym rzuca', () => {
+  assert.throws(() => upsertDotenvLine('', 'INBOX_TOKEN', 'tok"EVIL="1'), /Niedozwolona wartość/);
+  assert.throws(() => upsertDotenvLine('', 'INBOX_TOKEN', 'tok\\'), /Niedozwolona wartość/);
+  assert.throws(() => upsertDotenvLine('', 'INBOX_TOKEN', 'tok\x00'), /Niedozwolona wartość/);
+  assert.throws(() => upsertDotenvLine('', 'INBOX_TOKEN', ''), /Niedozwolona wartość/);
+});
+
+test('upsertDotenvLine wróg: komunikat błędu NIE zawiera wartości (to bywa sekret w logu)', () => {
+  const secret = 'sekret-abc123\nEVIL=1';
+  assert.throws(
+    () => upsertDotenvLine('', 'INBOX_TOKEN', secret),
+    (error) => {
+      assert.ok(!error.message.includes('sekret-abc123'), 'wartość nie wycieka do komunikatu');
+      assert.ok(error.message.includes('INBOX_TOKEN'), 'nazwa zmiennej wystarcza do diagnozy');
+      return true;
+    },
+  );
+});
+
+test('upsertDotenvLine wróg: klucz spoza dziedziny env-loadera rzuca (klucz idzie do RegExp)', () => {
+  assert.throws(() => upsertDotenvLine('', 'INBOX.*', 'tok'), /Niedozwolona nazwa zmiennej/);
+  assert.throws(() => upsertDotenvLine('', 'inbox_token', 'tok'), /Niedozwolona nazwa zmiennej/);
+  assert.throws(() => upsertDotenvLine('', '', 'tok'), /Niedozwolona nazwa zmiennej/);
+});
+
+test('upsertDotenvLine: wartość ze wzorcem `$&` zapisana DOSŁOWNIE przy podmianie linii', () => {
+  // String.replace ze stringiem-replacerem rozwinąłby `$&` do całego dopasowania,
+  // cicho przekłamując zapisany sekret. Replacer funkcyjny musi to wykluczyć.
+  const initial = upsertDotenvLine('', 'INBOX_TOKEN', 'stary');
+  const updated = upsertDotenvLine(initial, 'INBOX_TOKEN', 'tok$&$1$`');
+
+  assert.ok(updated.includes('INBOX_TOKEN="tok$&$1$`"'), 'wartość dosłowna, bez rozwinięcia wzorców');
+  assert.equal((updated.match(/INBOX_TOKEN=/g) || []).length, 1);
 });
 
 // === writeInboxEnv — zapis do <workspace>/.env bez ruszania pozostałych kluczy ===
@@ -167,6 +253,49 @@ test('writeInboxEnv tworzy .env gdy pliku jeszcze nie ma', (t) => {
   const content = fs.readFileSync(path.join(ws, '.env'), 'utf-8');
   assert.ok(content.includes('INBOX_HUB_URL="https://hub.example"'));
   assert.ok(content.includes('INBOX_TOKEN="tok-1"'));
+});
+
+test('writeInboxEnv: nowy .env z tokenem powstaje z trybem 0600 (nie world-readable)', { skip: SKIP_WIN }, (t) => {
+  const ws = makeWorkspace(t);
+
+  const envFile = writeInboxEnv(ws, 'https://hub.example', 'tok-1');
+
+  assert.equal(fs.statSync(envFile).mode & 0o777, 0o600, 'sekret czytelny tylko dla właściciela');
+});
+
+test('writeInboxEnv: istniejący .env w 0644 zostaje ZAWĘŻONY do 0600', { skip: SKIP_WIN }, (t) => {
+  // `mode` w writeFileSync działa wyłącznie przy TWORZENIU pliku — plik po starszej
+  // instalacji zostałby przy 0644 z tokenem w środku, gdyby zabrakło chmodSync.
+  const ws = makeWorkspace(t);
+  const envFile = path.join(ws, '.env');
+  fs.writeFileSync(envFile, 'CLAUDE_CRON_WORKSPACE="/ws"\n', { encoding: 'utf-8', mode: 0o644 });
+  fs.chmodSync(envFile, 0o644);
+
+  writeInboxEnv(ws, 'https://hub.example', 'tok-2');
+
+  assert.equal(fs.statSync(envFile).mode & 0o777, 0o600, 'uprawnienia domykane też na istniejącym pliku');
+});
+
+test('writeInboxEnv wróg: token z newline rzuca i NIE zostawia zapisanego pliku', (t) => {
+  const ws = makeWorkspace(t);
+
+  assert.throws(
+    () => writeInboxEnv(ws, 'https://hub.example', 'tok\nNODE_OPTIONS=--require /tmp/evil.js'),
+    /Niedozwolona wartość/,
+  );
+  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'zero zapisu przy wrogiej wartości');
+});
+
+test('writeInboxEnv wróg: wrogi token nie dopisuje linii do ISTNIEJĄCEGO .env', (t) => {
+  const ws = makeWorkspace(t);
+  const envFile = path.join(ws, '.env');
+  fs.writeFileSync(envFile, 'CLAUDE_CRON_WORKSPACE="/ws"\n', 'utf-8');
+
+  assert.throws(() => writeInboxEnv(ws, 'https://hub.example', 'tok\nEVIL=1'), /Niedozwolona wartość/);
+
+  const content = fs.readFileSync(envFile, 'utf-8');
+  assert.equal(content, 'CLAUDE_CRON_WORKSPACE="/ws"\n', 'plik nietknięty');
+  assert.ok(!content.includes('EVIL'), 'zero wstrzykniętej zmiennej');
 });
 
 // === planGitignoreFix — czysta decyzja o naprawie (każda gałąź bez zakładania repo) ===
@@ -202,6 +331,13 @@ test('planGitignoreFix: wzorzec już w pliku, a git nadal nie ignoruje → unfix
     planGitignoreFix({ isRepo: true, isIgnored: false, gitignoreContent: `${GITIGNORE_PATTERN}\n!.env\n` }),
     { status: 'unfixable', nextContent: null },
   );
+});
+
+test('planGitignoreFix: stan nierozstrzygnięty (git niedostępny) → unknown, nic do zapisania', () => {
+  assert.deepEqual(planGitignoreFix({ isRepo: 'unknown', isIgnored: false, gitignoreContent: '' }), {
+    status: 'unknown',
+    nextContent: null,
+  });
 });
 
 // === ensureEnvIgnored — guard na żywym repo: rozstrzyganie na exit-code + ponowna weryfikacja ===
@@ -284,6 +420,24 @@ test('ensureEnvIgnored: .env już śledzony w indeksie → po dopisaniu wzorca p
   // Dopiero DRUGA odpowiedź gita rozstrzyga wynik — sam zapis wzorca nie jest dowodem.
   assert.equal(result.status, 'unfixable');
   assert.ok(fs.readFileSync(path.join(ws, '.gitignore'), 'utf-8').split('\n').includes(GITIGNORE_PATTERN));
+});
+
+test('ensureEnvIgnored: git niedostępny (pusty PATH) → unknown, .gitignore nietknięty', { skip: SKIP_WIN }, (t) => {
+  // Realna topologia zadania: VPS bez gita, a workspace to klon repo pushowanego z laptopa.
+  // Brak binarki NIE znaczy „to nie repo" — guard musi odmówić potwierdzenia (fail-closed),
+  // inaczej instalator po cichu zapisuje token do nieignorowanego `.env`.
+  const ws = makeGitRepo(t, '');
+  const prevPath = process.env.PATH;
+  process.env.PATH = '';
+  t.after(() => {
+    process.env.PATH = prevPath;
+  });
+
+  const result = ensureEnvIgnored(ws);
+
+  process.env.PATH = prevPath;
+  assert.equal(result.status, 'unknown', 'brak wiarygodnej odpowiedzi gita → fail-closed');
+  assert.equal(fs.readFileSync(path.join(ws, '.gitignore'), 'utf-8'), '', 'guard nie mutuje pliku, gdy nie wie');
 });
 
 // === probeInviteCode — ping huba przez inbox-client, nigdy nie rzuca ===
