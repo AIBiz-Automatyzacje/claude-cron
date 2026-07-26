@@ -1,7 +1,7 @@
 # Team OS — onboarding członka w instalatorach — zadania
 
 Branch: `feature/team-os-onboarding-instalatory` (odbity z `main` po `024653f`)
-Ostatnia aktualizacja: 2026-07-26 (faza 1 zaimplementowana — IU-1.1 i IU-1.2 completed, `npm test` 533/533)
+Ostatnia aktualizacja: 2026-07-26 (review fazy 1 — gate **BLOKUJE**: 1 × P1, 3 × P2; raport `review-faza-1.md`, sekcja „Do poprawy po review fazy 1")
 
 > **Uwaga o `Delegate to:`** — tabela doboru subagentów w `/dev-plan` zakłada stack React/Supabase.
 > Ten projekt to czysty Node (CommonJS + ESM), bash i vanilla JS bez buildu, więc **wszystkie IU trafiają
@@ -69,9 +69,9 @@ Ostatnia aktualizacja: 2026-07-26 (faza 1 zaimplementowana — IU-1.1 i IU-1.2 c
 - [Unit] `writeInboxEnv` upsertuje `INBOX_HUB_URL`/`INBOX_TOKEN` nie ruszając pozostałych kluczy w `.env`
 
 **Weryfikacja:**
-- `node --test scripts/inbox/invite.test.mjs` przechodzi bez błędów
-- `node --test setup.test.mjs` przechodzi bez błędów (dowód, że ekstrakcja nie zepsuła istniejących importów)
-- `npm test` zielone (pełna suita)
+- [x] `node --test scripts/inbox/invite.test.mjs` przechodzi bez błędów — ✅ review fazy 1: exit 0, `# tests 28 / # pass 28 / # fail 0`
+- [x] `node --test setup.test.mjs` przechodzi bez błędów (dowód, że ekstrakcja nie zepsuła istniejących importów) — ✅ review fazy 1: exit 0, `# tests 71 / # pass 71 / # fail 0`
+- [x] `npm test` zielone (pełna suita) — ✅ review fazy 1: exit 0, `# tests 533 / # pass 533 / # fail 0`
 
 ---
 
@@ -120,9 +120,56 @@ Ostatnia aktualizacja: 2026-07-26 (faza 1 zaimplementowana — IU-1.1 i IU-1.2 c
 - [Unit] `loadEnv` mutujący `process.env` → po wywołaniu `process.env` wraca do stanu sprzed seeda
 
 **Weryfikacja:**
-- `node --test lib/inbox-seed.test.js` przechodzi bez błędów
-- `npm test` zielone (pełna suita)
-- Grep potwierdza brak `updateJob`/`UPDATE` w `lib/inbox-seed.js` (kontrakt R9 nienaruszony)
+- [x] `node --test lib/inbox-seed.test.js` przechodzi bez błędów — ✅ review fazy 1: exit 0, `# tests 8 / # pass 8 / # fail 0`
+- [x] `npm test` zielone (pełna suita) — ✅ review fazy 1: exit 0, `# tests 533 / # pass 533 / # fail 0`
+- [x] Grep potwierdza brak `updateJob`/`UPDATE` w `lib/inbox-seed.js` (kontrakt R9 nienaruszony) — ✅ review fazy 1: jedyne trafienie to komentarz `lib/inbox-seed.js:84` („NIGDY updateJob"), zero wywołań w kodzie
+
+## Do poprawy po review fazy 1
+
+> Raport: `docs/active/team-os-onboarding-instalatory/review-faza-1.md`. Severity gate: **BLOKUJE** (1 × P1).
+> Bookkeeping `Weryfikacja:` fazy 1: CLI 5 PASS / 0 FAIL, Grep 1 PASS / 0 FAIL — zero dodatkowych findingów.
+
+### P1 — blokujące
+
+- [ ] 🔴 [P1] **scripts/inbox/invite.mjs:51** — wstrzyknięcie dowolnych zmiennych do `.env` z kodu zaproszenia (brak walidacji kształtu + brak escapowania). `parseInviteCode` zwraca SUROWY `hubUrl` (nie `parsedUrl.href`), a WHATWG `URL` po cichu usuwa CR/LF/TAB przy parsowaniu — string z newline'em przechodzi walidację protokołu i trafia nietknięty do `upsertDotenvLine`, który skleja `KEY="<wartość>"` bez escapowania. Token nie jest walidowany w ogóle (hub emituje `randomBytes(32).toString('hex')`, więc `/^[0-9a-f]{64}$/` byłoby dokładne). ZWERYFIKOWANE uruchomieniem modułu: `parseInviteCode('puls-inbox:https://hub.example#tok\nNODE_OPTIONS=--require /tmp/evil.js')` → `writeInboxEnv` produkuje plik z osobną linią `NODE_OPTIONS=…`; wariant po stronie URL daje `hubUrl` z newline. `env-loader.mjs` wpisuje to do `process.env` skryptów skrzynki, a te przekazują env do spawnu `claude` → wykonanie dowolnego kodu z uprawnieniami daemona. FIX: zwracać `parsedUrl.href`/`origin`, walidować charset tokenu, a `upsertDotenvLine` ma odrzucać wartości z `"`, CR, LF i znakami sterującymi (fail-closed).
+
+### P2 — poważne
+
+- [ ] 🟠 [P2] **scripts/inbox/invite.mjs:79** — `writeInboxEnv` zapisuje sekret (`INBOX_TOKEN`) plikiem o domyślnych uprawnieniach; ZWERYFIKOWANE: nowo utworzony `.env` ma tryb 0644 (world-readable). Brak `{ mode: 0o600 }` przy tworzeniu i brak `chmodSync` dla pliku już istniejącego. To JEDYNA ścieżka zapisu tokenu dla obu instalatorów, a faza powstała po to, by domknąć incydent wycieku z 25/26.07. Token to CAŁA tożsamość w hubie (`/inbox/v1/:token/*`) — pozwala czytać cudze wątki, domykać zadania i podszywać się pod ofiarę.
+- [ ] 🟠 [P2] **scripts/inbox/invite.mjs:139** — guard `.gitignore` fail-OPEN na sygnale niejednoznacznym: `queryGitignoreState` traktuje `result.error` (brak binarki gita, ENOENT/EACCES) ORAZ `status === 128` jako `isRepo:false` → `not_a_repo` → sekret zapisywany po cichu. 128 to generyczny kod fatalny gita, a brak gita nie znaczy, że katalog nie jest repo — vault bywa commitowany z DRUGIEJ maszyny (topologia tego zadania: laptop + VPS). Sprzeczne z doktryną modułu i z learned-patterns 2026-07-03 / 2026-07-24. FIX: odróżnić „git niedostępny/błąd" od „poza repo" (`git rev-parse --git-dir` albo obecność `.git` w górę drzewa) i przy nierozstrzygalności blokować zapis.
+- [ ] 🟠 [P2] **scripts/inbox/invite.test.mjs:76** — suita nazywa siebie „siatka bezpieczeństwa ekstrakcji", ale nie ma ANI JEDNEGO przypadku wrogiego wejścia. Brakuje: (a) tokenu/URL-a z CR/LF (wektor P1 wyżej), (b) wartości z `"` i znakami sterującymi, (c) wartości ze wzorcem `$&` (rozwijanie w `String.replace`), (d) asercji uprawnień utworzonego `.env`, (e) przypadku niedostępnego `git check-ignore` (fail-open guardu). Zielone 533/533 nie jest dowodem bezpieczeństwa modułu, mimo że IU-1.1 deklaruje skill „security (materialnie)".
+
+### P3 — opcjonalne (pełne opisy w raporcie)
+
+- [ ] 🟡 [P3] **scripts/inbox/invite.mjs:161** — `unfixable` zostawia zapisany `.gitignore` z dopisanym wzorcem i nie informuje o tym wołającego; brak rollbacku do stanu sprzed próby.
+- [ ] 🟡 [P3] **setup.mjs:836** — `probe.reason` drukowany dosłownie; część trybów awarii undici osadza pełny URL (z tokenem w ścieżce) w komunikacie → token w logu instalacji.
+- [ ] 🟡 [P3] **setup.mjs:841** — guard nie jest wpięty w `askInboxInvite` (R6 niespełnione lokalnie; plan przypisuje wpięcie do IU-2.3). Konstrukcja „guard obok zapisu" pozwala kolejnym miejscom zapisu o nim zapomnieć — `writeInboxEnv` powinien sam odmawiać zapisu przy `unfixable`.
+- [ ] 🟡 [P3] **lib/inbox-seed.js:86** — `getAllJobs()` materializuje pełną kolekcję, by sprawdzić istnienie jednej nazwy; właściwe `SELECT 1 FROM jobs WHERE name = ?` (reguła 12).
+- [ ] 🟡 [P3] **scripts/inbox/invite.mjs:133** — brak wczesnego wyjścia z sond `spawnSync` (do 4 procesów gita na wywołanie guardu) + zbędne `encoding: 'utf-8'` przy nieczytanym stdout.
+- [ ] 🟡 [P3] **scripts/inbox/invite.mjs:136** — `spawnSync` bez `timeout`: git na nieodpowiadającym montażu zawiesza instalator bez komunikatu.
+- [ ] 🟡 [P3] **scripts/inbox/invite.test.mjs:207** — gałąź `result.error` w `queryGitignoreState` bez testu (wykonalna headless przez pusty `PATH`).
+- [ ] 🟡 [P3] **lib/inbox-seed.js:19** — `ROLE_AGENT` prywatny, porównanie strict equality; pisarz z IU-2.1 zapisze literał na ślepo. Eksportuj `ROLE_AGENT`/`ROLE_CLIENT` (lub `isValidRole`) zanim powstanie pisarz.
+- [ ] 🟡 [P3] **server.js:709** — wiedza „status → nazwa joba" wyciekła z `inbox-seed.js` do mapy `SEEDED_JOB_NAMES`; czystszy kontrakt to zwrot `{ status, jobName }`.
+- [ ] 🟡 [P3] **setup.mjs:34** — komentarz twierdzi „publiczna powierzchnia bez zmian", a `INVITE_CODE_PREFIX` przestał być eksportem; dopisz, że to celowe.
+- [ ] 🟡 [P3] **server.js:59** — zgodność `INVITE_CODE_PREFIX` hub ↔ konsument trzyma się wyłącznie na komentarzu; brak testu szwu mimo deklarowanego R8.
+- [ ] 🟡 [P3] **scripts/inbox/invite.mjs:83** — moduł łączy dwie domeny (rdzeń kodu zaproszenia + guard higieny sekretów, ~85 linii i zależność od gita); guard prosi się o osobny `gitignore-guard.mjs`.
+- [ ] 🟡 [P3] **lib/inbox-seed.js:81** — odczyt `db.getState(ROLE_STATE_KEY)` poza blokiem `try`, a `server.js:714` woła seed bez `.catch()` → wyjątek z DB przy starcie ubija daemona; komentarz stracił frazę „Nigdy nie rzuca".
+- [ ] 🟡 [P3] **lib/inbox-seed.js:81** — brak walidacji wartości roli: każda wartość ≠ `'agent'` (np. `'Agent'`, `'agent\n'`) cicho degraduje maszynę do `client`, bez sygnału w logu.
+- [ ] 🟡 [P3] **scripts/inbox/invite.mjs:104** — defensive optional chaining w `planGitignoreFix` na scenariusz, który nie może wystąpić (anty-pattern #10).
+- [ ] 🟡 [P3] **scripts/inbox/invite.mjs:79** — nieatomowy read-modify-write `.env` przy czytelniku co minutę (cron sync) → okno na niekompletny plik; `renameSync` z pliku tymczasowego.
+- [ ] 🟡 [P3] **setup.test.mjs:504** — 11 testów to kopia 1:1 z `invite.test.mjs`; jedyny powód istnienia re-eksportu w `setup.mjs:36`. Usunięcie kopii + re-eksportu nie traci pokrycia.
+- [ ] 🟡 [P3] **lib/inbox-seed.test.js:106** — testowana tylko połowa kontraktu snapshot/restore `process.env` (brak wariantu „klucz był ustawiony wcześniej").
+- [ ] 🟡 [P3] **scripts/inbox/invite.test.mjs:311** — gałąź restore poprzedniej wartości `INBOX_*` w `probeInviteCode` bez asercji.
+- [ ] 🟡 [P3] **scripts/inbox/invite.test.mjs:291** — brak testu huba NIEOSIĄGALNEGO (ECONNREFUSED/timeout/DNS) — najczęstszy realny pad onboardingu, inna ścieżka niż v-mismatch (retry w `inbox-client`).
+- [ ] 🟡 [P3] **server.js:710** — mapa `SEEDED_JOB_NAMES` bez testu spójności ze zbiorem statusów `seeded:*`.
+- [ ] 🟡 [P3] **scripts/inbox/invite.test.mjs:209** — brak wariantu „vault jako podkatalog repo" (reguła `.env*` w `.gitignore` rodzica).
+- [ ] 🟡 [P3] **docs/active/team-os-onboarding-instalatory/team-os-onboarding-instalatory-zadania.md:25** — bookkeeping podaje „26 testów" (powtórzone w `-plan.md:110`, `-kontekst.md:12` i `:96`), a `invite.test.mjs` ma 28 (potwierdzone przebiegiem `# tests 28`); „192 linie" `invite.mjs` vs faktyczne 191.
+
+## Operator checklist faza 1
+
+- [ ] Operator: guard działa wyłącznie na NOWYCH zapisach przez `invite.mjs` — nie dotyka maszyn już skonfigurowanych (produkcyjny VPS „kacper" + laptop), gdzie `.env` z `INBOX_TOKEN` powstał przed guardem, w trybie 0644 i bez weryfikacji `git check-ignore`; incydent 25/26.07 dotyczył wariantu `.env.bak`. Bez tego kroku faza 1 zostaje uznana za domykającą incydent, a produkcyjny vault dalej trzyma aktywny token w repo / na 0644, a token z wycieku nigdy nie zostaje odwołany — Operator action: na KAŻDEJ istniejącej instalacji uruchomić `git -C <workspace> check-ignore -q -- .env` oraz `... -- .env.bak.x`, sprawdzić historię (`git log --all -- '.env*'`), ustawić `chmod 600 <workspace>/.env`, a dla tokenów, które mogły wyciec — rotacja przez `revokeMember` + nowy kod zaproszenia.
+- [ ] Operator: ustawienie `inbox_role='agent'` na VPS-ie, który przed tą zmianą dostał zaseedowany i WŁĄCZONY job sync, da OBA joby aktywne naraz (seed nie robi `UPDATE` — R9, słusznie) — czyli dwie maszyny synchronizujące Skrzynkę, przed czym chroni R5. Checklist zadania nie ma kroku weryfikacyjnego ani odpowiadającej asercji w Operator checklist IU-2.2 — Operator action: po ustawieniu roli na każdej istniejącej maszynie wypisać joby Team OS (`GET /api/jobs`), ręcznie WYŁĄCZYĆ job niepasujący do roli (na `agent` — „Team OS — inbox sync"; na `client` — „Team OS — asystent auto-reply") i potwierdzić stan po restarcie daemona.
+- [ ] Operator: skutek ustawienia `inbox_role` na ISTNIEJĄCYCH maszynach jest niesprawdzalny headless — wymaga realnego laptopa i produkcyjnego VPS-a; test jednostkowy nie zastąpi odczytu stanu produkcyjnej bazy — Operator action: na laptopie ustawić `inbox_role='client'`, na VPS-ie `'agent'`, zrestartować daemony, po restarcie potwierdzić w dashboardzie/API, że laptop ma wyłącznie job sync (włączony), a VPS wyłącznie auto-reply (włączony), i że żaden job nie został włączony wbrew wcześniejszej ręcznej decyzji.
 
 ## Faza 2 — Instalatory (L)
 
