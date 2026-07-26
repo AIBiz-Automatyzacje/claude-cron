@@ -1,7 +1,7 @@
 # Team OS — onboarding członka w instalatorach — kontekst
 
 Branch: `feature/team-os-onboarding-instalatory` (odbity z `main` po `024653f`)
-Ostatnia aktualizacja: 2026-07-26 (faza 2 zaimplementowana — instalatory)
+Ostatnia aktualizacja: 2026-07-26 (faza 3 zaimplementowana — dokumentacja; wszystkie fazy planu zamknięte)
 
 ## Postęp implementacji
 
@@ -37,9 +37,23 @@ Ostatnia aktualizacja: 2026-07-26 (faza 2 zaimplementowana — instalatory)
 - **Redakcja tokenu w komunikatach** (`redactToken`): część trybów awarii `undici` osadza pełny URL żądania w `reason`, a token siedzi w ŚCIEŻCE `/inbox/v1/:token/ping` — surowy tekst oddałby sekret każdemu, kto zobaczy log instalacji.
 - **Onboarding odpalany jako user `claude`, nie root** — `.env` ma należeć do właściciela vaulta, a `data/claude-cron.db` (tam ląduje rola) do usera daemona; plik przejęty przez roota wywróciłby zapisy schedulera przy najbliższym starcie.
 - **`askInboxInvite` przyjmuje trzeci, opcjonalny argument `deps`** (`ensureIgnored`, `setRole`) — guard i DB sięgają do świata zewnętrznego; istniejące wywołania dwuargumentowe działają bez zmian.
-- **Duplikacja dwóch stringów komunikatu odmowy guardu** (`describeGuardRefusal` w `onboard.mjs` ↔ `describeGitignoreRefusal` w `setup.mjs`) zamiast importu: `onboard.mjs` ciągnie `lib/db` (`node:sqlite`) już przy imporcie, a `setup.mjs` nie ma powodu tego wciągać.
+- ~~**Duplikacja dwóch stringów komunikatu odmowy guardu** (`describeGuardRefusal` w `onboard.mjs` ↔ `describeGitignoreRefusal` w `setup.mjs`) zamiast importu~~ — **cofnięte po review fazy 2 (P2-3)**: uzasadnienie („`onboard.mjs` ciągnie `lib/db` przy imporcie") było nieprawdziwe, bo `setup.mjs` sam robi `require('./lib/db')` w czterech miejscach. `askInboxInvite` deleguje dziś całą sekwencję do `runOnboard` — porządek bezpieczeństwa parse → probe → guard → zapis → rola istnieje w **jednym** egzemplarzu.
 
-**Do świadomej weryfikacji w fazie 3:** `CLAUDE.md` nadal twierdzi, że asystent auto-reply jest „seedowany WYŁĄCZONY" i nie zna flagi `inbox_role` ani ścieżki członka w instalatorze VPS — to treść IU-3.1.
+**Poprawki po review fazy 2 (commit `20afbb5`):**
+- **P2-1** — `setup_team_os_member` ostrzega, gdy VPS członka kończy w roli `client`: ta maszyna zacznie renderować `Skrzynka.md`, a drugi synchronizator pod Obsidian Sync gubi odhaczenia `[x]`.
+- **P2-2** — `runOnboard` czyta **poprzednią** rolę PRZED zapisem i przy zmianie wskazuje job z poprzedniej instalacji do ręcznego wyłączenia (seed nigdy nie robi `UPDATE` — R9, więc sam się nie posprząta).
+- **P2-3** — koniec drugiego egzemplarza porządku bezpieczeństwa w `setup.mjs` (patrz wyżej).
+- **P2-4** — testy obu gałęzi porażki restartu (`systemctl` ≠ 0 oraz HTTP 000): stub parametryzuje `SYSTEMCTL_RC` i `HTTP_CODE`; `install-vps.test.sh` 119 → **123 PASS**.
+
+### Faza 3 — ✅ ukończona (IU-3.1)
+
+**Co powstało:** wyłącznie aktualizacja `CLAUDE.md` (zero zmian w kodzie, zero nowych zależności). Opisane: flaga `state.inbox_role` (`client` | `agent`, brak flagi = `client`, ustawiana tylko przez instalatory, **nigdy** backfillowana w `migrate()`), docelowa topologia (sync = maszyna człowieka, auto-reply = maszyna 24/7) wraz z uzasadnieniem rozproszonego *lost update* pod Obsidian Sync, ścieżka członka w `install-vps.sh` (odpowiedź „t" na pytanie o hub stawia WŁASNY hub), rdzeń `invite.mjs` + most `onboard.mjs` (kontrakt kodów wyjścia, redakcja tokenu), guard `.gitignore` jako część kontraktu zapisu sekretów (`git check-ignore` na EFEKT, sonda `.env` + `.env.bak.x`, fail-closed przy `unfixable`/`unknown`).
+
+**Sprostowane:** zdanie „asystent auto-reply **seedowany WYŁĄCZONY**" — nieaktualne od fazy 1. Dziś seed jest **rozłączny wg roli**: `agent` → tylko auto-reply (od razu włączony), `client`/brak flagi → tylko sync.
+
+**Odchylenie:** zakres opisu szerszy niż lista w „Podejście" planu — dopisane akapity o `invite.mjs`/`onboard.mjs` i o dwóch niezależnych komponentach Team OS w instalatorze VPS. Bez nich opis samej flagi wisiałby w próżni (czytelnik nie wie, skąd rola się bierze).
+
+**Walidacja fazy:** `npm test` **584/584** zielone, `bash scripts/install-vps.test.sh` **123 PASS / 0 FAIL**. Grep w `CLAUDE.md`: `inbox_role` obecne, nieaktualne zdanie o auto-reply nie występuje.
 
 ## Skąd to zadanie
 
@@ -122,8 +136,8 @@ Rotacja tokenu `kacper`, czyszczenie historii gita repo vaulta, decommission Pos
 | `lib/db.js` | `getState`:369, `setState`:374 — nośnik flagi `inbox_role` | potwierdzone |
 | `lib/notify-push.js` | wzorzec kontraktu `{ok, reason}` — nigdy nie wywraca wołającego | istnieje |
 | `scripts/install-vps.sh` | `setup_team_os_member` + helpery `team_os_*` obok nietkniętego `setup_team_os_hub` (IU-2.2) | **zmieniony** (faza 2) |
-| `scripts/install-vps.test.sh` | harness lib-only (`CLAUDE_CRON_LIB_ONLY=1`), sandbox `mktemp`, rejestrator wywołań; 119 PASS | **zmieniony** (faza 2) |
-| `CLAUDE.md` | sprostowanie zapisu o auto-reply + opis roli maszyny (IU-3.1) | do aktualizacji |
+| `scripts/install-vps.test.sh` | harness lib-only (`CLAUDE_CRON_LIB_ONLY=1`), sandbox `mktemp`, rejestrator wywołań; 123 PASS | **zmieniony** (faza 2 + fix po review) |
+| `CLAUDE.md` | sprostowanie zapisu o auto-reply + opis roli maszyny, topologii, ścieżki członka i guardu `.gitignore` (IU-3.1) | **zmieniony** (faza 3) |
 
 ## Decyzje techniczne i zależności
 

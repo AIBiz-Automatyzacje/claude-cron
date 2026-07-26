@@ -34,33 +34,8 @@
       "nazwa": "Instalatory (L)",
       "execute": "done",
       "review": "done",
-      "fix": "pending",
-      "otwarteFindingi": [
-        {
-          "severity": "P2",
-          "typ": "KOD",
-          "plik": "scripts/install-vps.sh:1685",
-          "opis": "P2-1 w review-faza-2.md. Granica rol lamie R5 na sciezce czlonka z VPS-em: odmowa auto-reply ustawia role 'client', a 'client' seeduje job „Team OS — inbox sync\" (lib/inbox-seed.js:96). Ten sam czlowiek ma zwykle laptopa skonfigurowanego przez setup.mjs, ktory TEZ zapisuje 'client' — obie maszyny widza ten sam vault przez Obsidian Sync (WORKSPACE=~/vault na VPS) i obie regeneruja Skrzynka.md co minute. To dokladnie scenariusz, przed ktorym ostrzega komentarz lib/inbox-seed.js:13-15 (dwie maszyny synchronizujace Skrzynke pod Obsidian Sync gubia odhaczenia [x]). Instalator nie pyta ani nie ostrzega, ze ta maszyna zacznie renderowac Skrzynke — jedyne pytanie dotyczy auto-reply. Brakuje albo trzeciego wariantu (rola pasywna 'client bez sync'), albo warnu przy roli client na VPS-ie, albo swiadomej decyzji w dokumencie zadania, ze VPS czlonka przejmuje sync od laptopa."
-        },
-        {
-          "severity": "P2",
-          "typ": "KOD",
-          "plik": "scripts/install-vps.sh:1685",
-          "opis": "P2-2 w review-faza-2.md. Zmiana roli przy PONOWNYM uruchomieniu instalatora nie rekoncyliuje wczesniej zaseedowanego joba i nie ostrzega. Instalator sam kieruje uzytkownika na re-run przy kazdej porazce ($RESUME_ONE_LINER w team_os_warn_onboard_failure), a przy re-runie pytanie o auto-reply zadawane jest od nowa. Jesli odpowiedz sie zmieni (pierwszy raz Enter -> 'client', drugi raz 't' -> 'agent'), onboard.mjs nadpisuje state.inbox_role, a lib/inbox-seed.js:93-97 z zalozenia NIGDY nie robi UPDATE (R9), wiec stary job „Team OS — inbox sync\" zostaje utworzony i WLACZONY, a obok powstaje wlaczony „Team OS — asystent auto-reply\". Maszyna konczy z obydwoma jobami naraz — stan, ktory R4 i R5 maja sie wzajemnie wykluczac. Ten sam hazard zapisano w fazie 1 jako Operator checklist (-zadania.md:171), ale faza 2 czyni go osiagalnym normalna sciezka instalatora, a nie recznym setState; brak warnu w setup_team_os_member przy wykrytej zmianie roli."
-        },
-        {
-          "severity": "P2",
-          "typ": "KOD",
-          "plik": "setup.mjs:855",
-          "opis": "P2-3 w review-faza-2.md. Zduplikowany porzadek bezpieczenstwa onboardingu: askInboxInvite powtarza krok po kroku to samo co runOnboard w scripts/inbox/onboard.mjs (parse -> probe -> guard .gitignore -> writeInboxEnv -> zapis roli, ta sama obsluga unfixable/unknown), plus blizniaczy describeGitignoreRefusal (setup.mjs:829) vs describeGuardRefusal (onboard.mjs:115) rozniacy sie jednym slowem, plus blizniaczy zestaw 7 testow w setup.test.mjs vs onboard.test.mjs. Komentarz uzasadniajacy duplikacje (setup.mjs:835: onboard.mjs ciagnie lib/db przy imporcie) jest NIEPRAWDZIWY — setup.mjs sam robi require('./lib/db') w czterech miejscach (307, 665, 703, 826), wiec koszt importu jest zerowy; naturalnym domem wspolnej sekwencji jest invite.mjs, ktory oba pliki i tak importuja. Uproszczenie bez utraty funkcji: askInboxInvite = pytanie + runOnboard({code, role:'client', workspace}) + wypisanie message + hint restartu (~50 linii i 7 testow mniej). To nie jest prosta duplikacja z reguly 11 — to zduplikowany porzadek bezpieczenstwa, ktory przy kolejnej korekcie rozjedzie sie w jednym z dwoch miejsc."
-        },
-        {
-          "severity": "P2",
-          "typ": "TEST",
-          "plik": "scripts/install-vps.sh:1643",
-          "opis": "P2-4 w review-faza-2.md. team_os_restart_after_onboard ma dwie galezie porazki i zadna nie ma asercji: (a) systemctl restart zwraca != 0 -> warn z instrukcja recznego restartu, (b) restart sie udal, ale team_os_wait_for_server nie doczekal sie HTTP 200 -> warn „joby skrzynki mogly nie wstac\". Stub testowy (write_member_stub, install-vps.test.sh:2110-2130) ma systemctl() zawsze konczace sie sukcesem i curl zawsze zwracajace 200, wiec wszystkie trzy testy sciezki czlonka ida happy-path. To sedno learned patternu „zrestartowalem != wstal\" — regresja (np. odwrocony warunek if team_os_wait_for_server) dawalaby falszywe „gotowe\" przy martwym daemonie i przeszlaby suite. FIX (tani): stub juz parametryzuje HTTP_CODE (dzis nieuzywane) — dodac przypadki HTTP_CODE=000 oraz systemctl zwracajace 1."
-        }
-      ],
+      "fix": "done",
+      "otwarteFindingi": [],
       "metryki": {
         "liczniki": {
           "p1": 0,

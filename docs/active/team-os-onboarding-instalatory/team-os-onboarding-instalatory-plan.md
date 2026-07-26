@@ -128,9 +128,11 @@ Nowa funkcja `setup_team_os_member`: pytanie o kod zaproszenia (`ask_tty`, puste
 **IU-2.3 `setup.mjs` — guard `.gitignore` w ścieżce lokalnej + rola `client` (S)** — ✅
 `askInboxInvite` woła guard **przed** `writeInboxEnv` (R6); przy wyniku „nienaprawialne" pomija zapis z czytelną instrukcją i nie przerywa setupu. Po udanym zapisie ustawia `state.inbox_role = 'client'`. Kolejność parse → probe → guard → zapis zachowana (probe waliduje kod, zanim dotkniemy plików).
 
-### Faza 3 — Dokumentacja (S)
+### Faza 3 — Dokumentacja (S) — ✅ ukończona
 
-**IU-3.1 Aktualizacja `CLAUDE.md` (S)**
+> **Stan po implementacji:** IU-3.1 completed, zmieniony wyłącznie `CLAUDE.md` (zero zmian w kodzie, zero nowych zależności). Walidacja: `npm test` **584/584** zielone, `bash scripts/install-vps.test.sh` **123 PASS / 0 FAIL**. Weryfikacja greppem: `inbox_role` obecne w `CLAUDE.md`, nieaktualne zdanie o auto-reply „seedowanym WYŁĄCZONYM" nie występuje. Odchylenie: zakres opisu szerszy niż lista w „Podejście" (dopisany `invite.mjs`/`onboard.mjs` i podział komponentów Team OS w instalatorze VPS) — szczegóły w `-zadania.md`, sekcja IU-3.1.
+
+**IU-3.1 Aktualizacja `CLAUDE.md` (S)** — ✅
 Sekcja Team OS: opis roli maszyny i flagi `inbox_role`, docelowa topologia (sync = laptop, auto-reply = VPS) wraz z uzasadnieniem wyścigu Obsidian Sync, ścieżka członka w instalatorze VPS, guard `.gitignore` jako część kontraktu zapisu sekretów. Sprostowanie zapisu o auto-reply seedowanym wyłączonym.
 
 ## Wpływ systemowy

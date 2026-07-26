@@ -383,7 +383,13 @@ Brak.
 
 ## Faza 3 — Dokumentacja (S)
 
-### IU-3.1 Aktualizacja `CLAUDE.md` (S)
+### IU-3.1 Aktualizacja `CLAUDE.md` (S) — ✅ completed
+
+**Zrealizowane:** sekcja Team OS w `CLAUDE.md` opisuje stan faktyczny po fazach 1–2: flaga `state.inbox_role` (`client` | `agent`, brak flagi = `client`, ustawiana wyłącznie przez instalatory, nigdy backfillowana w `migrate()`), docelowa topologia (sync = maszyna człowieka, auto-reply = maszyna 24/7) z uzasadnieniem rozproszonego *lost update* pod Obsidian Sync, ścieżka członka w `install-vps.sh` (`setup_team_os_member`, odpowiedź „t" na pytanie o hub stawia WŁASNY hub), rdzeń `scripts/inbox/invite.mjs` i most `scripts/inbox/onboard.mjs` (kontrakt kodów wyjścia, redakcja tokenu), guard `.gitignore` jako część kontraktu zapisu sekretów (`git check-ignore` na EFEKT, sonda `.env` + `.env.bak.x`, fail-closed przy `unfixable`/`unknown`). Sprostowane zdanie o auto-reply „seedowanym WYŁĄCZONYM" → seed rozłączny wg roli. Uzupełniona sekcja instalatorów (dwa niezależne komponenty Team OS + świadomy brak ścieżki członka w `install.ps1`) i lista trwale odrzuconych wariantów topologii. Zero zmian w kodzie, zero nowych zależności npm.
+
+**Odchylenia od planu:**
+- **Zakres opisu szerszy niż lista w „Podejście"** — dopisane akapity o `invite.mjs` / `onboard.mjs` (kontrakt `EXIT`, redakcja tokenu) oraz o dwóch niezależnych komponentach Team OS w `install-vps.sh`. Bez nich czytelnik nie zrozumiałby, skąd bierze się rola i dlaczego bash nie parsuje tekstu; opis samej flagi byłby wiszący.
+- **`typecheck` / `lint` zaraportowane jako n/a** — projekt świadomie nie ma buildu, lintera ani typecheckera (udokumentowane w `CLAUDE.md`); walidacją jest pełna suita `node:test` + `scripts/install-vps.test.sh`.
 
 **Cel:** dokumentacja opisuje stan faktyczny — rolę maszyny, docelową topologię i guard zapisu sekretów.
 
