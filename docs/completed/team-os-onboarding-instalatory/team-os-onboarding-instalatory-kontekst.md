@@ -55,6 +55,13 @@ Ostatnia aktualizacja: 2026-07-26 (faza 3 zaimplementowana — dokumentacja; wsz
 
 **Walidacja fazy:** `npm test` **584/584** zielone, `bash scripts/install-vps.test.sh` **123 PASS / 0 FAIL**. Grep w `CLAUDE.md`: `inbox_role` obecne, nieaktualne zdanie o auto-reply nie występuje.
 
+**Review fazy 3** (`review-faza-3.md`, severity gate **BLOKUJE**: 1 × P1, 1 × P2, 17 × P3, 2 × OPERATOR). Kluczowe wnioski:
+
+- **P1 — dokumentacja utrwaliła lukę, nie tylko ją opisała.** Faza 3 zapisała jako świadomy projekt topologię, w której `INBOX_TOKEN` leży w `<workspace>/.env`, a na TEJ SAMEJ maszynie (rola `agent`) auto-reply czyta cały vault (`cwd = vaultRoot`, `--allowedTools Read,Glob,Grep`) z promptem sklejonym z NIEZAUFANEJ treści cudzej wiadomości. Query „zacytuj `.env`" oddaje token nadawcy → przejęcie tożsamości w hubie. Guard `.gitignore` chroni przed gitem, nie przed asystentem czytającym ten sam katalog. To pierwszy finding, który podważa fundament „tokeny per członek + `revokeMember`".
+- **Kontrakt zapisany w `CLAUDE.md` = kontrakt, którego nikt nie pilnuje.** Trzy findingi (P2 `inbox-seed.test.js`, P3 `lib/db.js:124`, P3 `lib/db.js:22`) mówią to samo: zdania podniesione w fazie 3 do rangi inwariantu („po zmianie roli stary job zostaje włączony", „`inbox_role` nigdy nie backfillowana w `migrate()`", „zapis roli przed restartem") nie mają ani jednego testu regresyjnego. Dokumentacja bez strażnika starzeje się w kłamstwo.
+- **Opis nadal rozjeżdża się z kodem w trzech miejscach** (`CLAUDE.md:59` — default `N` daje na VPS `client`, czyli sync, wbrew zdaniu „sync nie włączany"; `CLAUDE.md:23` — sprzeczna definicja `setup_team_os_member`; `server.js:57-58` — komentarz-„wiązanie" wskazuje na `setup.mjs`, gdzie stałej nie ma od fazy 1). Cel fazy („opisać stan faktyczny") osiągnięty częściowo.
+- **Koszt kontekstu.** Trzy kopie tego samego uzasadnienia (lost update ×2, clobberowanie decyzji usera ×3 wliczając `learned-patterns.md`) i przepisany 1:1 komentarz implementacyjny guardu — w plikach ładowanych do KAŻDEJ sesji.
+
 ## Skąd to zadanie
 
 Faza 3 zadania `team-os-hub-api` dostarczyła onboarding **admina** (instalator VPS stawia hub i drukuje kod zaproszenia) oraz onboarding **członka na laptopie** (`setup.mjs` pyta o kod zaproszenia). Przy pierwszym realnym wdrożeniu drugiej osoby (maszyna „Cave") wyszło, że ta ścieżka ma dziurę: **członek z własnym VPS-em nie ma jak skonfigurować skrzynki inaczej niż ręczną edycją `.env`**.

@@ -59,16 +59,35 @@
     {
       "numer": 3,
       "nazwa": "Dokumentacja (S)",
-      "execute": "pending",
-      "review": "pending",
-      "fix": "none",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
       "otwarteFindingi": [],
-      "metryki": null
+      "metryki": {
+        "liczniki": {
+          "p1": 1,
+          "p2": 1,
+          "p3": 17,
+          "operator": 2
+        },
+        "przebieg": {
+          "pominieci": [
+            "architecture",
+            "typescript",
+            "e2e"
+          ],
+          "znalezione": 24,
+          "poDedupJs": 24,
+          "poDedupSem": 21,
+          "weryfikowane": 5,
+          "obalone": 0
+        }
+      }
     }
   ],
   "zakonczenie": {
-    "walidacja": "pending",
-    "complete": "pending",
-    "compound": "pending"
+    "walidacja": "done",
+    "complete": "done",
+    "compound": "done"
   }
 }
