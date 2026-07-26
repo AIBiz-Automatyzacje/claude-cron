@@ -1,7 +1,7 @@
 # Team OS — onboarding członka w instalatorach — zadania
 
 Branch: `feature/team-os-onboarding-instalatory` (odbity z `main` po `024653f`)
-Ostatnia aktualizacja: 2026-07-26 (faza 2 zaimplementowana — IU-2.1, IU-2.2, IU-2.3; `npm test` 579/579, `install-vps.test.sh` 119/119)
+Ostatnia aktualizacja: 2026-07-26 (review fazy 2 — gate ZASTRZEŻENIA: 0 × P1, 4 × P2, 20 × P3, 2 × OPERATOR; `npm test` 579/579, `install-vps.test.sh` 119/119)
 
 > **Uwaga o `Delegate to:`** — tabela doboru subagentów w `/dev-plan` zakłada stack React/Supabase.
 > Ten projekt to czysty Node (CommonJS + ESM), bash i vanilla JS bez buildu, więc **wszystkie IU trafiają
@@ -222,9 +222,9 @@ Ostatnia aktualizacja: 2026-07-26 (faza 2 zaimplementowana — IU-2.1, IU-2.2, I
 - [Unit] Powtórne wywołanie z tym samym kodem → idempotentne (upsert nie duplikuje linii w `.env`)
 
 **Weryfikacja:**
-- `node --test scripts/inbox/onboard.test.mjs` przechodzi bez błędów
-- `npm test` zielone (pełna suita)
-- Grep potwierdza brak logowania `INBOX_TOKEN`/kodu zaproszenia w `scripts/inbox/onboard.mjs`
+- [x] `node --test scripts/inbox/onboard.test.mjs` przechodzi bez błędów — ✅ review fazy 2: exit 0, `# tests 23 / # pass 23 / # fail 0`
+- [x] `npm test` zielone (pełna suita) — ✅ review fazy 2: exit 0, `# tests 579 / # pass 579 / # fail 0`
+- [x] Grep potwierdza brak logowania `INBOX_TOKEN`/kodu zaproszenia w `scripts/inbox/onboard.mjs` — ✅ review fazy 2: `grep -nE "console\.(log|error|warn).*(INBOX_TOKEN|token|code)"` → 0 trafień
 
 ---
 
@@ -281,15 +281,11 @@ Ostatnia aktualizacja: 2026-07-26 (faza 2 zaimplementowana — IU-2.1, IU-2.2, I
 - [Unit] Pad CLI nie wywraca instalatora (brak `trap ERR` w tej strefie)
 
 **Weryfikacja:**
-- `bash scripts/install-vps.test.sh` przechodzi (0 FAIL), licznik testów wzrósł względem stanu sprzed zmiany
-- `npm test` zielone (pełna suita)
-- Grep potwierdza brak gołego `read ` w nowej funkcji (wszystkie pytania przez `ask_tty`)
+- [x] `bash scripts/install-vps.test.sh` przechodzi (0 FAIL), licznik testów wzrósł względem stanu sprzed zmiany — ✅ review fazy 2: exit 0, `Wynik: 119 PASS / 119 total` (przed zmianą 110)
+- [x] `npm test` zielone (pełna suita) — ✅ review fazy 2: exit 0, `# tests 579 / # pass 579 / # fail 0`
+- [x] Grep potwierdza brak gołego `read ` w nowej funkcji (wszystkie pytania przez `ask_tty`) — ✅ review fazy 2: `grep -nE "^\s*read " scripts/install-vps.sh` → 0 trafień w całym pliku, 19 wywołań `ask_tty`
 
-**Operator checklist:**
-- [ ] Na świeżym VPS-ie: pełna instalacja, odpowiedź „N" na hub, wklejenie kodu zaproszenia → skrzynka działa bez dotykania `.env`
-- [ ] Zgoda na auto-reply → po restarcie job „Team OS — asystent auto-reply" istnieje i jest włączony, joba sync **nie ma**
-- [ ] Odmowa auto-reply → job auto-reply nie powstaje
-- [ ] Instalacja admina (odpowiedź „t") → maszyna admina skonfigurowana jako klient bez ponownego wklejania kodu
+**Operator checklist:** → przeniesiona do sekcji `## Operator checklist faza 2` (poz. 3, format z prefiksem `Operator:` wymagany przez bookkeeping).
 
 ---
 
@@ -339,8 +335,51 @@ Ostatnia aktualizacja: 2026-07-26 (faza 2 zaimplementowana — IU-2.1, IU-2.2, I
 - [Unit] Zły format kodu → warn, setup kontynuowany (zachowanie dzisiejsze nienaruszone)
 
 **Weryfikacja:**
-- `node --test setup.test.mjs` przechodzi bez błędów
-- `npm test` zielone (pełna suita)
+- [x] `node --test setup.test.mjs` przechodzi bez błędów — ✅ review fazy 2: exit 0, `# tests 78 / # pass 78 / # fail 0`
+- [x] `npm test` zielone (pełna suita) — ✅ review fazy 2: exit 0, `# tests 579 / # pass 579 / # fail 0`
+
+## Do poprawy po review fazy 2
+
+> Raport: `docs/active/team-os-onboarding-instalatory/review-faza-2.md`. Severity gate: **ZASTRZEŻENIA** (0 × P1, 4 × P2).
+> Bookkeeping `Weryfikacja:` fazy 2: CLI 6 PASS / 0 FAIL, Grep 2 PASS / 0 FAIL — zero dodatkowych findingów.
+
+### P1 — blokujące
+
+Brak.
+
+### P2 — poważne
+
+- [ ] 🟠 [P2] **scripts/install-vps.sh:1685** — granica ról łamie R5 na ścieżce członka z VPS-em: odmowa auto-reply ustawia rolę `client`, a `client` seeduje job „Team OS — inbox sync" (`lib/inbox-seed.js:96`). Ten sam człowiek ma zwykle laptopa skonfigurowanego przez `setup.mjs`, który TEŻ zapisuje `client` (`persistInboxRole`) — obie maszyny widzą ten sam vault przez Obsidian Sync (`WORKSPACE=~/vault` na VPS) i obie regenerują `Skrzynka.md` co minutę. To dokładnie scenariusz, przed którym ostrzega komentarz w `lib/inbox-seed.js:13-15` („dwie maszyny synchronizujące Skrzynkę pod Obsidian Sync gubią odhaczenia `[x]`"). Instalator nie pyta ani nie ostrzega, że ta maszyna zacznie renderować Skrzynkę — jedyne pytanie dotyczy auto-reply. FIX: albo trzeci wariant („client bez sync" / rola pasywna), albo warn przy roli `client` na VPS-ie, albo świadoma decyzja w dokumencie zadania, że VPS członka przejmuje sync od laptopa.
+- [ ] 🟠 [P2] **scripts/install-vps.sh:1685** — zmiana roli przy PONOWNYM uruchomieniu instalatora nie rekoncyliuje wcześniej zaseedowanego joba i nie ostrzega. Instalator sam kieruje na re-run przy każdej porażce (`$RESUME_ONE_LINER` w `team_os_warn_onboard_failure`), a przy re-runie pytanie o auto-reply pada od nowa. Jeśli odpowiedź się zmieni (Enter → `client`, potem „t" → `agent`), `onboard.mjs` nadpisuje `state.inbox_role`, a `lib/inbox-seed.js:93-97` z założenia NIGDY nie robi `UPDATE` (R9), więc stary job sync zostaje WŁĄCZONY, a obok powstaje włączony auto-reply. Maszyna kończy z obydwoma jobami naraz — stan, który R4 i R5 mają się wzajemnie wykluczać. Ten sam hazard wisi jako Operator checklist fazy 1, ale faza 2 czyni go osiągalnym normalną ścieżką instalatora. FIX: warn w `setup_team_os_member` przy wykrytej zmianie roli (odczyt `state.inbox_role` przed zapisem) + instrukcja wyłączenia joba niepasującego do roli.
+- [ ] 🟠 [P2] **setup.mjs:855** — zduplikowana sekwencja onboardingu: `askInboxInvite` powtarza krok po kroku to samo, co `runOnboard` w `scripts/inbox/onboard.mjs` (parse → probe → guard `.gitignore` → `writeInboxEnv` → zapis roli, ta sama obsługa `unfixable`/`unknown`), plus bliźniaczy `describeGitignoreRefusal` (`setup.mjs:829`) vs `describeGuardRefusal` (`onboard.mjs:115`) różniący się jednym słowem, plus bliźniaczy zestaw 7 testów w `setup.test.mjs` vs `onboard.test.mjs`. Komentarz uzasadniający duplikację (`setup.mjs:835`: „`onboard.mjs` to CLI, którego moduł ciągnie `lib/db` (`node:sqlite`) już przy imporcie") jest nieprawdziwy — `setup.mjs` sam robi `require('./lib/db')` w czterech miejscach (307, 665, 703, 826). To nie „prosta duplikacja" z reguły 11, tylko zduplikowany porządek bezpieczeństwa, który przy kolejnej korekcie rozjedzie się w jednym z dwóch miejsc. FIX: `askInboxInvite` = pytanie + `runOnboard({code, role:'client', workspace})` + wypisanie zwróconego `message` + hint restartu (~50 linii i 7 testów mniej); wspólny dom to `invite.mjs` (właściciel `GITIGNORE_PATTERN`).
+- [ ] 🟠 [P2] **scripts/install-vps.sh:1643** (TEST) — `team_os_restart_after_onboard` ma dwie gałęzie porażki i żadna nie ma asercji: (a) `systemctl restart` ≠ 0 → warn z instrukcją ręcznego restartu, (b) restart się udał, ale `team_os_wait_for_server` nie doczekał się HTTP 200 → warn „joby skrzynki mogły nie wstać". Stub testowy (`write_member_stub`, `install-vps.test.sh:2110-2130`) ma `systemctl()` zawsze kończące się sukcesem i `curl` zawsze zwracające 200, więc wszystkie trzy testy ścieżki członka idą happy-path. To sedno learned patternu „zrestartowałem ≠ wstał" — odwrócony warunek `if team_os_wait_for_server` dawałby fałszywe „gotowe" przy martwym daemonie i przeszedłby suitę. FIX tani: stub już parametryzuje `HTTP_CODE` (nieużywane) — dodać przypadki `HTTP_CODE=000` oraz `systemctl` zwracające 1.
+
+### P3 — opcjonalne (pełne opisy w raporcie)
+
+- [ ] 🟡 [P3] **scripts/install-vps.sh:1587** — token skrzynki (cały kod zaproszenia) idzie do CLI jako ARGUMENT wiersza poleceń przez `su - claude -c "<string z tokenem>"`; `/proc/<pid>/cmdline` na Linuksie jest czytelne dla każdego konta (brak `hidepid`), więc token widać w `ps aux` przez cały onboarding — słabiej niż 0644, przed którym broni `invite.mjs`. FIX: kod na STDIN (`--code-stdin`).
+- [ ] 🟡 [P3] **scripts/inbox/onboard.mjs:154** — `runOnboard` deklaruje „NIGDY nie rzuca", ale `ensureIgnored(workspace)` stoi POZA `try/catch` (owinięte są tylko `writeEnv` i `setRole`). `ensureEnvIgnored` robi realne I/O (`readFileSync`/`writeFileSync` na `.gitignore`) — EACCES/read-only/ENOSPC wychodzi z `runOnboard`, wpada do `main().catch` i kończy proces kodem 1, zarezerwowanym dla „CLI się wywróciło". Bash trafia w gałąź `*)` zamiast dostać `EXIT.WRITE=6` — rozłączność kodów, która jest sednem IU-2.1, przestaje obowiązywać dokładnie w scenariuszu uprawnień. FIX: objąć `ensureIgnored` tym samym `try/catch` + test „ensureIgnored rzuca → EXIT.WRITE, zero zapisów".
+- [ ] 🟡 [P3] **setup.mjs:878** — bliźniaczy problem lokalnie: `ensureIgnored(workspace)` i `writeInboxEnv` (linia 887) bez `try/catch`, a `askInboxInvite` wołane w `try { … } finally { rl.close() }` BEZ `catch` (`setup.mjs:964`). Rzut przerywa całą instalację po zapisie `CLAUDE_CRON_WORKSPACE`/`VPS_URL`, ale PRZED powiadomieniami, autostartem, smoke-testem DB i starter-taskami — wprost wbrew kontraktowi „NIGDY nie przerywa setupu". Zero testów (testy wstrzykują wyłącznie guardy zwracające status, nigdy rzucający).
+- [ ] 🟡 [P3] **setup.mjs:873** — `probe.reason` drukowany dosłownie, podczas gdy bliźniacza ścieżka w `scripts/inbox/onboard.mjs:150` przepuszcza tę samą wartość przez `redactToken` (undici osadza pełny URL, a token siedzi w ŚCIEŻCE `/inbox/v1/:token/ping`). To ten sam finding, który wisi NIEODHACZONY z review fazy 1 (poz. `setup.mjs:836`) — faza 2 modyfikowała tę funkcję i go nie domknęła. FIX: wyeksportować `redactToken` z `onboard.mjs` (albo przenieść do `invite.mjs`) i użyć w obu miejscach.
+- [ ] 🟡 [P3] **scripts/inbox/onboard.mjs:185** — `result.user` (string sterowany przez HUB, do którego wskazuje wklejony kod) wypisywany surowo do outputu instalatora (to samo `setup.mjs:903`); hub kontrolowany przez atakującego może wstrzyknąć sekwencje ANSI i nowe linie, podszywając się pod komunikaty instalatora. FIX: przyciąć długość i odfiltrować znaki sterujące (dziedzina jak `UNSAFE_ENV_VALUE` w `invite.mjs`).
+- [ ] 🟡 [P3] **scripts/inbox/onboard.mjs:28** — top-level `require('../../lib/db')` ładuje `node:sqlite` przy KAŻDYM wywołaniu CLI, także na ścieżkach nietykających bazy; łamie regułę „guard wersji Node PRZED pierwszym top-level importem `node:sqlite`" (`lib/runtime-guard.js` nie jest wołany) i psuje własny kontrakt kodów wyjścia (pad w fazie importu → 1). FIX: leniwy `require` w `setRoleInState` + `runtime-guard` jako pierwszy import.
+- [ ] 🟡 [P3] **scripts/inbox/onboard.mjs:112** — `setRoleInState` → `db.setState` pisze do `data/claude-cron.db` z DRUGIEGO procesu przy żywym demonie (restart dopiero PO zapisie). `node:sqlite` nie ustawia `busy_timeout` — przy zajętym write-locku `DatabaseSync` rzuca `ERR_SQLITE_ERROR` natychmiast → `EXIT.WRITE` mimo poprawnie zapisanego `.env`, brak restartu, rola nieustawiona (agent cicho degraduje się do klienta). FIX jednoliniowy: `PRAGMA busy_timeout` w `lib/db.js` `getDb()` (korzysta z tego też `setup.mjs`).
+- [ ] 🟡 [P3] **scripts/inbox/onboard.mjs:59** — `FLAGS[eq === -1 ? arg : arg.slice(0, eq)]` odpytuje obiekt literalny bez `Object.hasOwn`/null-prototype: argument `--toString`/`--valueOf`/`--constructor` daje truthy `key`, przechodzi guard `if (!key)` i cicho konsumuje kolejny element `argv`. Łamie kontrakt „argumenty pozycyjne odrzucane bez echa wartości" i regułę walidacji na granicy.
+- [ ] 🟡 [P3] **scripts/inbox/onboard.mjs:207** — entry point robi `console.log(message)` i natychmiast `process.exit(exitCode)`; przy stdout na pipe (`curl … | bash 2>&1 | tee install.log`) zapis jest asynchroniczny i ostatnia linia potrafi zostać ucięta, a komunikaty bash-a odsyłają wprost do niej („szczegóły w komunikacie powyżej"). FIX: `process.exitCode = exitCode` i naturalne wyjście.
+- [ ] 🟡 [P3] **scripts/install-vps.sh:1629** — `EXIT.BAD_USAGE` zlepia „instalator zawołał CLI źle" (parseArgs) i „katalog workspace nie istnieje" (`onboard.mjs:198`), a komunikat naprawczy opisuje wyłącznie pierwszą przyczynę („to niezgodność wersji. Zaktualizuj kod: `git pull`"). Przy nieukończonym syncu vaulta operator dostaje instrukcję prowadzącą w złą stronę. FIX: osobny kod „środowisko" albo doprecyzowanie warna.
+- [ ] 🟡 [P3] **scripts/inbox/onboard.mjs:75** — YAGNI: fallback `env.CLAUDE_CRON_WORKSPACE` w `parseArgs` nie ma konsumenta (`team_os_onboard_cmd` ZAWSZE przekazuje `--workspace %q`, a zmienna jest ustawiana tylko w unicie systemd, nie w środowisku `su - claude`). Utrzymuje osobną gałąź, komunikat i test.
+- [ ] 🟡 [P3] **scripts/inbox/onboard.mjs:168** — defensive code (anty-pattern #10): `redactToken(error.message, parsed.token)` w gałęziach WRITE — `upsertDotenvLine` z założenia nigdy nie umieszcza wartości w komunikacie, a do `setRole` token w ogóle nie trafia. Ten sam nadmiar w helperze (`onboard.mjs:95`): `typeof text !== 'string' ? String(text ?? '')`.
+- [ ] 🟡 [P3] **lib/inbox-seed.js:104** — eksport bez konsumenta: `ROLE_AGENT` dodany do `module.exports`, ale żaden pisarz go nie używa (`onboard.mjs` bierze `ROLE_STATE_KEY` + `isValidRole`, `setup.mjs` `ROLE_CLIENT` + `ROLE_STATE_KEY`). Usuń albo dodaj przy pierwszym użyciu.
+- [ ] 🟡 [P3] **scripts/install-vps.test.sh:2086** (TEST) — brak testu szwu bash↔Node dla kontraktu kodów wyjścia. `TEAM_OS_EXIT_*` (`install-vps.sh:65-70`) to ręczna kopia `EXIT` z `onboard.mjs:36-43`, a obie strony testowane są w izolacji (`onboard.test.mjs:303` sprawdza tylko rozłączność, testy bashowe wstrzykują literały `CLI_RC=3/5/1`). Renumeracja `EXIT` przechodzi obie suity na zielono. FIX: test `node:test` asertujący zgodność `EXIT` z wygrepowanymi `TEAM_OS_EXIT_*`.
+- [ ] 🟡 [P3] **scripts/install-vps.sh:1678** (TEST) — ostrzeżenie o pustym vaulcie (`team_os_vault_looks_empty`) nie ma żadnej asercji pozytywnej; funkcja nie ma unit testu (katalog pusty / z notatką / nieistniejący → sonda `find -maxdepth 2`), mimo że jest w pełni testowalna headless w istniejącym sandboxie.
+- [ ] 🟡 [P3] **scripts/install-vps.test.sh:2196** (TEST) — kombinacja „członek wkleja kod I zgadza się na auto-reply → rola `agent`" (główny scenariusz produktowy fazy, R1+R4) nie ma testu. Ograniczenie harnessu (`ask_tty` czyta zawsze pierwszą linię `TTY_DEVICE`) jest usuwalne tym samym wzorcem DI, którym stubowane są `run_as_claude`/`systemctl`: zastubować `ask_tty` kolejką odpowiedzi.
+- [ ] 🟡 [P3] **scripts/install-vps.test.sh:2226** (TEST) — `team_os_warn_onboard_failure` ma pięć nazwanych gałęzi + default, a testy pokrywają trzy (3 BAD_CODE, 5 GITIGNORE, 1 default). Bez asercji zostają 4 (HUB), 6 (WRITE) i 2 (BAD_USAGE) — każda z inną instrukcją i innymi interpolacjami (`$RESUME_ONE_LINER`, `$CLAUDE_USER`, `$INSTALL_DIR`, `$WORKSPACE`).
+- [ ] 🟡 [P3] **scripts/install-vps.test.sh:2089** (TEST) — testy nie asertują ŚCIEŻKI wołanego skryptu: literał `scripts/inbox/onboard.mjs` nie występuje ani razu w `install-vps.test.sh`, choć atrapa `node()` drukuje go jako pierwszy argument. Rename/literówka przechodzi obie suity, a na VPS-ie kończy się `Cannot find module` → exit 1 → generyczny warn.
+
+## Operator checklist faza 2
+
+- [ ] Operator: ścieżka admina — `setup_team_os_member` woła `onboard.mjs` kodem `TEAM_OS_INVITE_CODE` utworzonym chwilę wcześniej, a probe (`probeInviteCode` → `inbox-client.ping`) uderza PUBLICZNYM URL-em Funnela włączonego w tym samym runie. Wcześniejsza weryfikacja to wyłącznie lokalny `tailscale funnel status` (stan konfiguracji, nie serwowania) — pierwszy publiczny handshake TLS / wydanie certyfikatu może nie być gotowe; wtedy probe pada po 15 s × 2 próby → `EXIT.HUB` → maszyna admina NIE zostaje podłączona do własnej skrzynki, a komunikat mylnie sugeruje „hub nie działa albo kod został unieważniony". Niewykonalne headless (wymaga realnego VPS-a ze świeżo włączonym Funnelem) — Operator action: przy pierwszym deployu na świeżym VPS-ie sprawdzić, czy admin przechodzi probe za pierwszym razem; jeśli nie — zgłosić do fixu retry/backoff w gałęzi `TEAM_OS_EXIT_HUB` albo warm-up Funnela przed `setup_team_os_hub`.
+- [ ] Operator: Operator checklist IU-2.2 (4 pozycje niżej) pozostaje nieweryfikowalna headless — wymaga świeżego VPS-a z realnym systemd, Tailscale Funnel i żywym hubem — Operator action: wykonać na świeżym VPS-ie punkty (1)-(4) z pozycji poniżej ORAZ dołożyć piąty krok pokrywający re-run instalatora ze ZMIENIONĄ odpowiedzią o auto-reply (`GET /api/jobs`, ręcznie wyłączyć job niepasujący do roli — hazard z findingu P2 `install-vps.sh:1685`).
+- [ ] Operator: scenariusze end-to-end IU-2.2 na świeżym VPS-ie — Operator action: (1) pełna instalacja, odpowiedź „N" na hub, wklejenie kodu zaproszenia → skrzynka działa bez dotykania `.env`; (2) zgoda na auto-reply → po restarcie job „Team OS — asystent auto-reply" istnieje i jest włączony, joba sync **nie ma**; (3) odmowa auto-reply → job auto-reply nie powstaje; (4) instalacja admina (odpowiedź „t") → maszyna admina skonfigurowana bez ponownego wklejania kodu.
 
 ## Faza 3 — Dokumentacja (S)
 
