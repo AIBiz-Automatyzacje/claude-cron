@@ -12,7 +12,7 @@ figma_screens: {}
 # Team OS — onboarding członka w instalatorach
 
 Branch: `feature/team-os-onboarding-instalatory` (odbity z `main` po `024653f`)
-Ostatnia aktualizacja: 2026-07-26 (faza 1 zaimplementowana — IU-1.1, IU-1.2)
+Ostatnia aktualizacja: 2026-07-26 (faza 2 zaimplementowana — IU-2.1, IU-2.2, IU-2.3)
 
 ## Podsumowanie wykonawcze
 
@@ -98,10 +98,10 @@ Pominięte świadomie — zadanie operuje wyłącznie na wewnętrznych wzorcach 
 
 ### Odroczone do implementacji
 
-- **Dokładna sygnatura CLI `onboard.mjs`** (flagi vs argumenty pozycyjne, format wyjścia dla basha) — do ustalenia przy pisaniu, gdy widać realne potrzeby cytowania w `%q`.
+- ~~**Dokładna sygnatura CLI `onboard.mjs`**~~ — **rozstrzygnięte w IU-2.1**: nazwane flagi (`--code`, `--role`, `--workspace`, obie formy: ze spacją i z `=`), argumenty pozycyjne odrzucane bez echa wartości (mogłaby nią być tożsamość). Wyjście: kod wyjścia jako kontrakt maszynowy (`EXIT` 0/2/3/4/5/6, `1` zarezerwowane dla nieobsłużonego wyjątku) + jedna linia `[ok]/[warn]/[error]` dla człowieka, nigdy do parsowania przez shell.
 - **Czy `probeInviteCode` po ekstrakcji zachowa mutację `process.env`** — być może czystsze będzie przekazanie konfiguracji do `inbox-client` jawnie; decyzja po zobaczeniu, czy klient da się o to poprosić bez zmiany jego kontraktu (klient czyta env **w momencie wywołania** — to udokumentowany wzorzec, którego nie chcemy łamać).
 - **Zachowanie dla maszyny „tylko VPS, bez laptopa"** — przy roli `agent` sync nie jest włączany, więc taki użytkownik nie ma renderowanej Skrzynki. Przy założeniu współdzielonego vaulta to poprawne; jeśli w praktyce pojawi się osoba bez laptopa, potrzebna będzie trzecia rola (`standalone`: sync + auto-reply). Nie budujemy jej na zapas.
-- **Czy ostrzegać, gdy vault na VPS wygląda na pusty** (auto-reply bez wiedzy zwróci `NO_ANSWER`) — opcjonalne rozszerzenie, do rozważenia w IU-2.2, jeśli nie rozdmucha komponentu.
+- ~~**Czy ostrzegać, gdy vault na VPS wygląda na pusty**~~ — **rozstrzygnięte w IU-2.2: tak**, `team_os_vault_looks_empty` (sonda `find -maxdepth 2 -name '*.md' -print -quit`, nie inwentaryzacja) wypisuje `warn` **przed** pytaniem o auto-reply, żeby decyzja zapadała ze świadomością, że agent bez wiedzy odpowie `NO_ANSWER`.
 
 ## Fazy wdrożenia
 
@@ -115,15 +115,17 @@ Ekstrakcja `parseInviteCode`, `upsertDotenvLine`, `writeInboxEnv`, `probeInviteC
 **IU-1.2 `lib/inbox-seed.js` — rola maszyny steruje seedem (S)** — ✅
 Odczyt `state.inbox_role`: `agent` → seeduj **tylko** auto-reply z `enabled: 1`; `client` lub brak flagi → seeduj **tylko** sync (auto-reply nie powstaje). Aktualizacja komentarza dokumentującego odwróconą decyzję („seedowany wyłączony" → „tworzony tylko na maszynie-agencie, od razu włączony"). Zachowana właściwość: **wyłącznie `createJob` gdy brak, nigdy `UPDATE`** (R9) oraz snapshot+restore `process.env` wokół `loadEnv`.
 
-### Faza 2 — Instalatory (L)
+### Faza 2 — Instalatory (L) — ✅ ukończona
 
-**IU-2.1 `scripts/inbox/onboard.mjs` — CLI dla instalatora VPS (S)**
+> **Stan po implementacji:** trzy IU completed, `npm test` **579/579** zielone, `bash scripts/install-vps.test.sh` **119 PASS / 0 FAIL** (licznik wzrósł ze 110). Scenariusze testowe z `-zadania.md` pokryte: 23 testy w `onboard.test.mjs` (IU-2.1), 9 nowych w `install-vps.test.sh` (IU-2.2), rozszerzone `setup.test.mjs` (IU-2.3). Odchylenia: kontrakt kodów wyjścia rozszerzony o `BAD_USAGE=2` i `WRITE=6`, obsłużony piąty status guardu `unknown` (fail-closed), pytanie o auto-reply z domyślnym `N`. Szczegóły: `-zadania.md`, sekcje IU-2.1 / IU-2.2 / IU-2.3.
+
+**IU-2.1 `scripts/inbox/onboard.mjs` — CLI dla instalatora VPS (S)** — ✅
 Most bash → Node: przyjmuje kod zaproszenia i rolę, wykonuje łańcuch guard `.gitignore` → parse → probe → zapis `.env` → `setState('inbox_role', ...)`. Kod wyjścia i jednolinijkowy komunikat jako kontrakt dla shella; rozłączne kody dla „zły format", „hub nieosiągalny", „gitignore nienaprawialny" — bash rozstrzyga na nich komunikaty dla użytkownika (nie zgaduje z tekstu).
 
-**IU-2.2 `install-vps.sh` — ścieżka członka + autokonfiguracja admina + pytanie o auto-reply (L)**
+**IU-2.2 `install-vps.sh` — ścieżka członka + autokonfiguracja admina + pytanie o auto-reply (L)** — ✅
 Nowa funkcja `setup_team_os_member`: pytanie o kod zaproszenia (`ask_tty`, puste = pomiń — R2), wywołanie `onboard.mjs`, restart serwisu po sukcesie. Wołana z `main()` gdy ścieżka admina nie skonfigurowała tej maszyny (R3). W ścieżce admina: użycie świeżego `TEAM_OS_INVITE_CODE` do konfiguracji tej maszyny bez ponownego wklejania. Na obu ścieżkach pytanie „Czy ten serwer ma automatycznie odpowiadać na pytania zespołu?" → rola `agent`. Pad na każdym kroku = `warn` + kontynuacja (strefa opcjonalnych kroków finału — nigdy `trap ERR`).
 
-**IU-2.3 `setup.mjs` — guard `.gitignore` w ścieżce lokalnej + rola `client` (S)**
+**IU-2.3 `setup.mjs` — guard `.gitignore` w ścieżce lokalnej + rola `client` (S)** — ✅
 `askInboxInvite` woła guard **przed** `writeInboxEnv` (R6); przy wyniku „nienaprawialne" pomija zapis z czytelną instrukcją i nie przerywa setupu. Po udanym zapisie ustawia `state.inbox_role = 'client'`. Kolejność parse → probe → guard → zapis zachowana (probe waliduje kod, zanim dotkniemy plików).
 
 ### Faza 3 — Dokumentacja (S)

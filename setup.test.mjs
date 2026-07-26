@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 
 import {
   copySkillDir,
@@ -29,6 +30,20 @@ import {
 } from './setup.mjs';
 
 import http from 'node:http';
+
+const require = createRequire(import.meta.url);
+const db = require('./lib/db');
+const { ROLE_STATE_KEY } = require('./lib/inbox-seed');
+
+// askInboxInvite zapisuje rolę maszyny PRAWDZIWYM modułem lib/db — bez override'u ścieżki
+// testy dopisywałyby do operatorskiej data/claude-cron.db. ':memory:' odpada: funkcja zamyka
+// połączenie po zapisie, a baza w pamięci ginie razem z nim (nie byłoby czego odczytać).
+const TEST_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-setup-db-'));
+db.setDbPath(path.join(TEST_DB_DIR, 'setup-test.db'));
+after(() => {
+  db.close();
+  fs.rmSync(TEST_DB_DIR, { recursive: true, force: true });
+});
 
 // === resolveNodeBinPath — layout .node/ spójny z install.sh / install.ps1 ===
 
@@ -652,4 +667,145 @@ test('askInboxInvite: probe nie zostawia INBOX_* w process.env (bez side-effectu
 
   assert.equal(process.env.INBOX_HUB_URL, undefined, 'probe przywraca env po sobie');
   assert.equal(process.env.INBOX_TOKEN, undefined);
+});
+
+// === askInboxInvite — guard .gitignore + rola maszyny (IU-2.3) ===
+// Mockujemy WYŁĄCZNIE świat zewnętrzny: gita (przez `ensureIgnored`) i zapis roli tam, gdzie
+// dowodem jest „state NIE został dotknięty". Zapis `.env` jest prawdziwy — to on jest dowodem.
+
+function captureLogs(t) {
+  const saved = console.log;
+  const logs = [];
+  console.log = (...args) => { logs.push(args.join(' ')); };
+  t.after(() => { console.log = saved; });
+  return logs;
+}
+
+// Rejestrator wywołań guardu — pozwala udowodnić, że ścieżki bez zapisu w ogóle o niego
+// nie pytają (nie dotykamy `.gitignore` osoby, która skrzynki nie konfiguruje).
+function guardRecorder(status, gitignoreFile = '/ws/.gitignore') {
+  const calls = [];
+  return {
+    calls,
+    ensureIgnored: (workspace) => {
+      calls.push(workspace);
+      return { status, gitignoreFile };
+    },
+  };
+}
+
+function roleRecorder() {
+  const calls = [];
+  return { calls, setRole: () => { calls.push('setRole'); } };
+}
+
+test('askInboxInvite: guard ok → .env zapisany, rola maszyny „client" w state', async (t) => {
+  snapshotInboxEnv(t);
+  const ws = makeWorkspace(t);
+  const hubUrl = await startFakeHub(t, { v: 1, user: 'kacper', hub: 'puls' });
+  const guard = guardRecorder('ok', path.join(ws, '.gitignore'));
+  db.setState(ROLE_STATE_KEY, 'sentinel'); // dowód, że rolę zapisał TEN przebieg
+
+  await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-ok`), ws, { ensureIgnored: guard.ensureIgnored });
+
+  assert.equal(fs.existsSync(path.join(ws, '.env')), true, 'guard przepuścił = zapisujemy');
+  assert.equal(db.getState(ROLE_STATE_KEY), 'client', 'laptop człowieka to klient skrzynki');
+  assert.deepEqual(guard.calls, [ws], 'guard pytany o workspace, do którego piszemy');
+});
+
+test('askInboxInvite: guard fixed → zapis wykonany, komunikat mówi o zmianie w .gitignore', async (t) => {
+  snapshotInboxEnv(t);
+  const logs = captureLogs(t);
+  const ws = makeWorkspace(t);
+  const hubUrl = await startFakeHub(t, { v: 1, user: 'kacper', hub: 'puls' });
+  const gitignoreFile = path.join(ws, '.gitignore');
+  const role = roleRecorder();
+
+  await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-fix`), ws, {
+    ensureIgnored: () => ({ status: 'fixed', gitignoreFile }),
+    setRole: role.setRole,
+  });
+
+  assert.equal(fs.existsSync(path.join(ws, '.env')), true, 'naprawiony .gitignore = zapis wolno wykonać');
+  assert.deepEqual(role.calls, ['setRole']);
+  const output = logs.join('\n');
+  assert.match(output, /\.gitignore/, 'użytkownik ma wiedzieć, że instalator zmienił jego repozytorium');
+  assert.match(output, /\.env\*/, 'komunikat nazywa dopisany wzorzec');
+});
+
+test('askInboxInvite: guard unfixable → brak .env, brak roli, instrukcja naprawy, setup leci dalej', async (t) => {
+  snapshotInboxEnv(t);
+  const logs = captureLogs(t);
+  const ws = makeWorkspace(t);
+  const hubUrl = await startFakeHub(t, { v: 1, user: 'kacper', hub: 'puls' });
+  const role = roleRecorder();
+
+  // Brak rzutu = setup kontynuowany (kontrakt: warn + pominięcie, nigdy przerwanie instalacji).
+  await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-bad`), ws, {
+    ensureIgnored: () => ({ status: 'unfixable', gitignoreFile: path.join(ws, '.gitignore') }),
+    setRole: role.setRole,
+  });
+
+  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'sekret w repozytorium jest nieodwracalny — nie zapisujemy');
+  assert.deepEqual(role.calls, [], 'bez konfiguracji rola nie ma prawa trafić do state');
+  assert.match(logs.join('\n'), /git rm --cached/, 'komunikat niesie konkretną instrukcję naprawy');
+});
+
+test('askInboxInvite: guard unknown (git niedostępny) → fail-closed, brak .env i brak roli', async (t) => {
+  snapshotInboxEnv(t);
+  const logs = captureLogs(t);
+  const ws = makeWorkspace(t);
+  const hubUrl = await startFakeHub(t, { v: 1, user: 'kacper', hub: 'puls' });
+  const role = roleRecorder();
+
+  await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-unk`), ws, {
+    ensureIgnored: () => ({ status: 'unknown', gitignoreFile: path.join(ws, '.gitignore') }),
+    setRole: role.setRole,
+  });
+
+  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'nierozstrzygnięty guard odmawia operacji');
+  assert.deepEqual(role.calls, []);
+  assert.match(logs.join('\n'), /git/i, 'człowiek musi wiedzieć, czego brakuje');
+});
+
+test('askInboxInvite: puste wejście → guard w ogóle nie pytany (nie dotykamy cudzego .gitignore)', async (t) => {
+  snapshotInboxEnv(t);
+  const ws = makeWorkspace(t);
+  const guard = guardRecorder('ok');
+  const role = roleRecorder();
+
+  await askInboxInvite(fakeRl(''), ws, { ensureIgnored: guard.ensureIgnored, setRole: role.setRole });
+
+  assert.deepEqual(guard.calls, []);
+  assert.deepEqual(role.calls, []);
+});
+
+test('askInboxInvite: zły format kodu → guard nie pytany, zero zapisów', async (t) => {
+  snapshotInboxEnv(t);
+  const ws = makeWorkspace(t);
+  const guard = guardRecorder('ok');
+  const role = roleRecorder();
+
+  await askInboxInvite(fakeRl('nie-jest-kodem'), ws, { ensureIgnored: guard.ensureIgnored, setRole: role.setRole });
+
+  assert.deepEqual(guard.calls, [], 'walidacja formatu jest czysta — bez skutków ubocznych');
+  assert.deepEqual(role.calls, []);
+  assert.equal(fs.existsSync(path.join(ws, '.env')), false);
+});
+
+test('askInboxInvite: pad probe → guard nie pytany (walidacja kodu przed skutkami ubocznymi)', async (t) => {
+  snapshotInboxEnv(t);
+  const ws = makeWorkspace(t);
+  const hubUrl = await startFakeHub(t, { v: 2, user: 'ktoś' }); // mismatch wersji API
+  const guard = guardRecorder('ok');
+  const role = roleRecorder();
+
+  await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-probe`), ws, {
+    ensureIgnored: guard.ensureIgnored,
+    setRole: role.setRole,
+  });
+
+  assert.deepEqual(guard.calls, [], 'zły kod nie może zmieniać .gitignore użytkownika');
+  assert.deepEqual(role.calls, []);
+  assert.equal(fs.existsSync(path.join(ws, '.env')), false);
 });

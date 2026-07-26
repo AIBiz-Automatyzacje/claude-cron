@@ -61,6 +61,16 @@ DEFAULT_TZ="Europe/Warsaw"
 TEAM_OS_PROBE_ATTEMPTS=5
 TEAM_OS_PROBE_INTERVAL=2
 
+# Kontrakt maszynowy scripts/inbox/onboard.mjs (stała EXIT tamże). Instalator
+# rozstrzyga WYŁĄCZNIE na kodzie wyjścia — komunikaty CLI są dla człowieka
+# i zmieniają się przy każdej korekcie językowej, kody nie. Kod 1 celowo nie ma
+# nazwy: to nieobsłużony wyjątek Node („CLI się wywróciło"), a nie wynik domenowy.
+TEAM_OS_EXIT_BAD_USAGE=2
+TEAM_OS_EXIT_BAD_CODE=3
+TEAM_OS_EXIT_HUB=4
+TEAM_OS_EXIT_GITIGNORE=5
+TEAM_OS_EXIT_WRITE=6
+
 # Wspierany zakres Node — node:sqlite stabilne dopiero od 22.13, górna granica
 # wykluczająca <25 (spójne z package.json "engines >=22.13 <25" i lib/config.js
 # MIN_NODE_VERSION/MAX_NODE_VERSION). Bez górnej granicy instalator/cron-guard
@@ -1561,6 +1571,132 @@ setup_team_os_hub() {
   rm -f "$body_file"
 }
 
+# ============ FAZA 6: TEAM OS — SKRZYNKA NA TEJ MASZYNIE ============
+
+# Krok NIEZALEŻNY od huba (R3: „nie” na pytanie o hub nie kończy tematu skrzynki
+# — członek zespołu właśnie tu wkleja kod zaproszenia). Zero logiki domenowej
+# w bashu: format kodu, probe huba, guard `.gitignore`, zapis `.env` i rola
+# maszyny siedzą w scripts/inbox/onboard.mjs (R8), a shell wyłącznie pyta,
+# woła CLI i rozstrzyga na jego KODZIE WYJŚCIA.
+
+# team_os_onboard_cmd <install_dir> <workspace> <code> <role> — czysta funkcja:
+# komenda dla `su - claude -c`. KAŻDA wartość przez %q, bo kod zaproszenia
+# zawiera `#` (gołe ucięłoby resztę komendy jako komentarz), `:` i `//`,
+# a ścieżka workspace'u bywa ze spacją (wzorzec build_cron_cmd).
+team_os_onboard_cmd() {
+  printf 'cd %q && node scripts/inbox/onboard.mjs --workspace %q --code %q --role %q' \
+    "$1" "$2" "$3" "$4"
+}
+
+# team_os_run_onboard <code> <role> — odpala CLI onboardingu i zwraca JEGO kod
+# wyjścia. Jako user claude, nie root: `.env` ma należeć do właściciela vaulta,
+# a data/claude-cron.db (tam ląduje rola maszyny) do usera daemona — plik
+# przejęty przez roota wywróciłby zapisy schedulera przy najbliższym starcie.
+team_os_run_onboard() {
+  run_as_claude "$(team_os_onboard_cmd "$INSTALL_DIR" "$WORKSPACE" "$1" "$2")"
+}
+
+# team_os_vault_looks_empty <dir> — 0, gdy w katalogu nie widać ŻADNEJ notatki.
+# maxdepth 2, bo to sonda („czy vault w ogóle dojechał”), nie inwentaryzacja —
+# pełny skan dużego vaulta kosztowałby sekundy na końcu instalacji.
+team_os_vault_looks_empty() {
+  [ -d "$1" ] || return 0
+  local found=""
+  found="$(find "$1" -maxdepth 2 -name '*.md' -print -quit 2>/dev/null || true)"
+  [ -z "$found" ]
+}
+
+# team_os_warn_onboard_failure <kod-wyjścia> — komunikat naprawczy dobrany do
+# rozłącznego kodu z onboard.mjs. Zawsze warn + kontynuacja: to opcjonalny krok
+# finału, a `fail`/ERR odwinąłby rollbackiem zweryfikowaną instalację.
+team_os_warn_onboard_failure() {
+  case "$1" in
+    "$TEAM_OS_EXIT_BAD_CODE")
+      warn "Skrzynka NIE została skonfigurowana: kod zaproszenia ma zły format. Poproś admina zespołu o nowy kod (dashboard → widok Zespół) i wklej ponownie komendę instalacji:"
+      warn "  $RESUME_ONE_LINER"
+      ;;
+    "$TEAM_OS_EXIT_HUB")
+      warn "Skrzynka NIE została skonfigurowana: hub zespołu nie odpowiedział poprawnie (szczegóły w komunikacie powyżej). Sprawdź z adminem, czy hub działa i czy kod nie został unieważniony, potem wklej ponownie komendę instalacji:"
+      warn "  $RESUME_ONE_LINER"
+      ;;
+    "$TEAM_OS_EXIT_GITIGNORE")
+      warn "Skrzynka NIE została skonfigurowana i token NIE został zapisany: git opublikowałby plik .env z tokenem."
+      warn "  Dopisz wzorzec „.env*” do .gitignore w $WORKSPACE (sam wpis „.env” nie łapie kopii typu .env.bak), sprawdź stan faktyczny: git -C $WORKSPACE check-ignore -v .env — i wklej ponownie komendę instalacji."
+      ;;
+    "$TEAM_OS_EXIT_WRITE")
+      warn "Skrzynka NIE została w pełni skonfigurowana: zapis konfiguracji padł (szczegóły powyżej). Sprawdź uprawnienia $WORKSPACE oraz $INSTALL_DIR/data dla użytkownika $CLAUDE_USER i wklej ponownie komendę instalacji."
+      ;;
+    "$TEAM_OS_EXIT_BAD_USAGE")
+      warn "Skrzynka NIE została skonfigurowana: instalator zawołał CLI onboardingu niepoprawnie (szczegóły powyżej) — to niezgodność wersji. Zaktualizuj kod: su - $CLAUDE_USER -c 'cd $INSTALL_DIR && git pull' i wklej ponownie komendę instalacji."
+      ;;
+    *)
+      warn "Skrzynka NIE została skonfigurowana: CLI onboardingu zakończyło się kodem $1. Diagnoza: su - $CLAUDE_USER -c 'cd $INSTALL_DIR && node scripts/inbox/onboard.mjs' (bez argumentów pokaże sposób użycia)."
+      ;;
+  esac
+}
+
+# Restart serwisu PO udanym zapisie — świeży `.env` nie propaguje się do
+# żyjącego procesu (script-joby dziedziczą env daemona, a joby skrzynki tworzy
+# seed przy STARCIE). Po restarcie potwierdzamy stan faktyczny odpowiedzią HTTP:
+# „zrestartowałem” ≠ „wstał” (learned pattern), a milczący daemon oznacza brak
+# jobów skrzynki mimo poprawnej konfiguracji.
+team_os_restart_after_onboard() {
+  if ! systemctl restart "$SERVICE_NAME"; then
+    warn "Konfiguracja skrzynki zapisana, ale restart serwisu nie powiódł się — uruchom ręcznie: systemctl restart $SERVICE_NAME (diagnoza: journalctl -u $SERVICE_NAME -n 30)."
+    return 0
+  fi
+  local body_file
+  body_file="$(mktemp)"
+  if team_os_wait_for_server "http://127.0.0.1:$PORT" "$body_file"; then
+    ok "Skrzynka zespołowa gotowa — serwis $SERVICE_NAME wstał z nową konfiguracją."
+  else
+    warn "Serwis $SERVICE_NAME zrestartowany, ale nie odpowiada na http://127.0.0.1:$PORT — joby skrzynki mogły nie wstać. Diagnoza: systemctl status $SERVICE_NAME, journalctl -u $SERVICE_NAME -n 30."
+  fi
+  rm -f "$body_file"
+}
+
+# Podłączenie TEJ maszyny do skrzynki zespołu. Dwa wejścia, jedna ścieżka:
+# admin ma kod utworzony przed chwilą w TEAM_OS_INVITE_CODE (ponowne pytanie
+# o to samo byłoby absurdem i źródłem literówek przy przepisywaniu z ekranu),
+# każdy inny wkleja kod zaproszenia. Puste = pomiń (R2) — solo działa bez
+# skrzynki i instalacja leci dalej.
+setup_team_os_member() {
+  echo ""
+  local code="${TEAM_OS_INVITE_CODE:-}"
+  if [ -n "$code" ]; then
+    info "Konfiguruję skrzynkę na tej maszynie kodem zaproszenia utworzonym przed chwilą."
+  else
+    ask_tty code "Masz kod zaproszenia do skrzynki zespołowej? (puste = pomiń): " ""
+    if [ -z "$code" ]; then
+      info "Pominięto skrzynkę zespołową — podłączysz ją później, wklejając ponownie komendę instalacji."
+      return 0
+    fi
+  fi
+
+  # Ostrzeżenie PRZED pytaniem, nie po decyzji: auto-reply czerpie wiedzę
+  # z plików vaulta, więc na pustej maszynie odpowie „NO_ANSWER” na wszystko.
+  if team_os_vault_looks_empty "$WORKSPACE"; then
+    warn "W $WORKSPACE nie widać jeszcze notatek (.md) — asystent czerpie wiedzę z vaulta i bez niej odpowie „NO_ANSWER” na każde pytanie."
+  fi
+
+  # Domyślnie N: asystent odpowiada ludziom w Twoim imieniu — to świadoma
+  # decyzja, nie coś, w co wpada się Enterem (a bez tty ask_tty bierze default).
+  # Odmowa = rola „client”: maszyna renderuje własną Skrzynkę (job sync).
+  local answer="" role="client"
+  ask_tty answer "Czy ta maszyna ma odpowiadać na pytania zespołu (asystent auto-reply, 24/7)? [t/N]: " "N"
+  if [[ "$answer" =~ ^[TtYy]$ ]]; then
+    role="agent"
+  fi
+
+  local rc=0
+  team_os_run_onboard "$code" "$role" || rc=$?
+  if [ "$rc" != 0 ]; then
+    team_os_warn_onboard_failure "$rc"
+    return 0
+  fi
+  team_os_restart_after_onboard
+}
+
 # ============ FAZA 6: AUTO-UPDATE (cron 02:00, opt-out --no-auto-update) ============
 
 # build_cron_cmd <vault_git> <install_dir> <guard_script> <cron_log> <only_puls>
@@ -2114,6 +2250,12 @@ main() {
   # Tylko w pełnym trybie — hub stawia admin zespołu (konwencja rejestratora
   # wywołań, jak create_welcome_note).
   [ "$FLAG_ONLY_PULS" = 1 ] || setup_team_os_hub
+  # Skrzynka na TEJ maszynie — osobny krok PO hubie (R3: odpowiedź „nie” na hub
+  # nie kończy tematu skrzynki). Gdy ścieżka admina utworzyła członka-admina,
+  # komponent użyje jego kodu bez pytania; w przeciwnym razie pyta o kod
+  # zaproszenia. Pominięcie przy --only-puls zapada TUTAJ (konwencja rejestratora
+  # wywołań w testach, jak setup_team_os_hub).
+  [ "$FLAG_ONLY_PULS" = 1 ] || setup_team_os_member
   print_summary
 }
 

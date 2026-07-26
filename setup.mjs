@@ -25,6 +25,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  GITIGNORE_PATTERN,
+  ensureEnvIgnored,
   parseInviteCode,
   probeInviteCode,
   upsertDotenvLine,
@@ -814,11 +816,46 @@ function registerHook(workspace, hookFile, nodeBin) {
   return added;
 }
 
+// === I/O shell: zapis roli maszyny do state lokalnej DB (wzorzec persistNotifySettings) ===
+// Zawsze 'client': setup.mjs to instalator LOKALNY (laptop człowieka), a rola 'agent'
+// należy do VPS-a konfigurowanego przez scripts/inbox/onboard.mjs. Ta sama baza co daemon
+// (bez override'u ścieżki) — seed jobów skrzynki czyta tę wartość przy starcie.
+// Zamykamy połączenie od razu: setup zadaje dalej pytania (minuty), a rolę zapisujemy
+// w środku tej interakcji — nie ma powodu trzymać otwartej bazy współdzielonej z daemonem.
+function persistInboxRole() {
+  const db = require('./lib/db');
+  const { ROLE_CLIENT, ROLE_STATE_KEY } = require('./lib/inbox-seed');
+  db.setState(ROLE_STATE_KEY, ROLE_CLIENT);
+  db.close();
+}
+
+// === Pure helper: komunikat odmowy guardu .gitignore (statusy unfixable / unknown) ===
+// Bliźniak describeGuardRefusal z scripts/inbox/onboard.mjs — te same dwie przyczyny muszą
+// brzmieć tak samo w obu instalatorach. Świadoma duplikacja dwóch stringów zamiast importu:
+// onboard.mjs to CLI, którego moduł ciągnie lib/db (node:sqlite) już przy imporcie.
+function describeGitignoreRefusal(guard) {
+  if (guard.status === 'unknown') {
+    return `[warn] Nie zapisano konfiguracji skrzynki: nie udało się ustalić, czy ${guard.gitignoreFile} chroni plik .env `
+      + '(git niedostępny albo zwrócił błąd). Sprawdź instalację gita lub uprawnienia do repozytorium i uruchom setup ponownie.';
+  }
+  return `[warn] Nie zapisano konfiguracji skrzynki: git opublikowałby plik .env z tokenem. Wzorzec „${GITIGNORE_PATTERN}" `
+    + `jest już w ${guard.gitignoreFile}, a mimo to git go nie ignoruje — sprawdź reguły negacji (np. „!.env"), wzorce `
+    + 'z katalogu nadrzędnego i czy .env nie jest już śledzony (git rm --cached .env). Potem uruchom setup ponownie.';
+}
+
 // === I/O shell: onboarding członka skrzynki — kod zaproszenia → probe → zapis .env ===
 // Członek zespołu NIE potrzebuje Tailscale/VPS — wkleja jeden string. Puste = pomiń.
-// Kolejność: parse (czysto) → probe (waliduje ZANIM zapiszemy) → zapis .env → hint restartu.
-// Każda porażka (zły format, pad probe) → warn i pominięcie; NIGDY nie przerywa setupu.
-export async function askInboxInvite(rl, workspace) {
+// Kolejność jest bezpieczeństwem, nie estetyką: parse (czysto) → probe (waliduje kod, ZANIM
+// dotkniemy plików) → guard .gitignore (tuż przed zapisem, bo dotyczy właśnie zapisu: po nim
+// sekret już leży w katalogu, a wyjęcie go z historii gita bywa niemożliwe) → zapis .env →
+// rola maszyny (dopiero PO udanym zapisie — inaczej seed dałby maszynie bez konfiguracji
+// joba failującego co minutę) → hint restartu.
+// Każda porażka (zły format, pad probe, guard odmawia) → warn i pominięcie; NIGDY nie
+// przerywa setupu. Guard i zapis roli wstrzykiwalne — sięgają do świata zewnętrznego (git, DB).
+export async function askInboxInvite(rl, workspace, deps = {}) {
+  const ensureIgnored = deps.ensureIgnored || ensureEnvIgnored;
+  const setRole = deps.setRole || persistInboxRole;
+
   const code = await ask(rl, 'Masz kod zaproszenia do skrzynki zespołowej? (puste = pomiń): ');
   if (!code) {
     console.log('[info] Pominięto skrzynkę zespołową.');
@@ -838,7 +875,31 @@ export async function askInboxInvite(rl, workspace) {
     );
     return;
   }
+  const guard = ensureIgnored(workspace);
+  // `unknown` traktujemy jak `unfixable` (fail-closed): guard, który nie potrafi POTWIERDZIĆ
+  // bezpieczeństwa, odmawia zapisu — brak gita na maszynie nie znaczy „to nie repo", bo vault
+  // bywa commitowany z DRUGIEJ maszyny. Brak konfiguracji to jedno pytanie przy ponownym
+  // uruchomieniu; token w historii repozytorium to rotacja dostępu całego członka.
+  if (guard.status === 'unfixable' || guard.status === 'unknown') {
+    console.log(describeGitignoreRefusal(guard));
+    return;
+  }
   const envFile = writeInboxEnv(workspace, parsed.hubUrl, parsed.token);
+  if (guard.status === 'fixed') {
+    // Instalator zmienił repozytorium użytkownika — musi się o tym dowiedzieć, inaczej
+    // znajdzie nieswoją linię w `.gitignore` i nie będzie wiedział, skąd się wzięła.
+    console.log(`[ok] Dopisano „${GITIGNORE_PATTERN}" do ${guard.gitignoreFile}, żeby token nie trafił do repozytorium.`);
+  }
+  try {
+    setRole();
+  } catch (error) {
+    // Rola idzie do bazy PRZED smoke-testem DB, więc to pierwszy kontakt setupu z SQLite —
+    // pad nie może wywrócić instalacji (kontrakt: warn + pominięcie).
+    console.log(
+      `[warn] Nie udało się zapisać roli maszyny w bazie (${error.message}) — joby skrzynki `
+      + 'zaseedują się w trybie domyślnym (sync). Uruchom setup ponownie po naprawie bazy.',
+    );
+  }
   console.log(`[ok] Skrzynka zespołowa połączona jako „${probe.user}" — konfiguracja zapisana w ${envFile}.`);
   console.log(
     '[info] Zrestartuj daemona Pulsa, żeby joby skrzynki zobaczyły nową konfigurację '

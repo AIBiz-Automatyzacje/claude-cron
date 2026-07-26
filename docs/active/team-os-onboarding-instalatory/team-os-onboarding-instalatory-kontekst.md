@@ -1,7 +1,7 @@
 # Team OS — onboarding członka w instalatorach — kontekst
 
 Branch: `feature/team-os-onboarding-instalatory` (odbity z `main` po `024653f`)
-Ostatnia aktualizacja: 2026-07-26 (faza 1 zaimplementowana)
+Ostatnia aktualizacja: 2026-07-26 (faza 2 zaimplementowana — instalatory)
 
 ## Postęp implementacji
 
@@ -20,7 +20,26 @@ Ostatnia aktualizacja: 2026-07-26 (faza 1 zaimplementowana)
 - **Status `seedInboxSyncJob` sufiksowany** (`seeded:sync` / `exists:auto-reply` / …) zamiast dwóch pól obiektu — jedyny konsument to log startowy `server.js`, więc obiekt byłby ceremonią. Wymusiło to 3-liniową zmianę w `server.js` (poza listą plików IU-1.2), bez której log startowy cicho by zniknął.
 - **Testy guardu izolowane od konfiguracji gita użytkownika** (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` → pusty plik): globalny `core.excludesFile` ignorujący `.env` dawałby fałszywy `ok` i test przechodziłby przy zepsutym guardzie.
 
-**Do świadomej weryfikacji w fazie 2:** `ensureEnvIgnored` istnieje, ale nie jest jeszcze przez nikogo wołany — wpięcie idzie w IU-2.1 (`onboard.mjs`) i IU-2.3 (`setup.mjs`).
+**Do świadomej weryfikacji w fazie 2:** `ensureEnvIgnored` istnieje, ale nie jest jeszcze przez nikogo wołany — wpięcie idzie w IU-2.1 (`onboard.mjs`) i IU-2.3 (`setup.mjs`). ✅ **Zamknięte w fazie 2**: guard wołany przez oba instalatory, w obu fail-closed dla `unfixable` i `unknown`.
+
+### Faza 2 — ✅ ukończona (IU-2.1, IU-2.2, IU-2.3)
+
+**Co powstało:**
+- `scripts/inbox/onboard.mjs` (214 linii) + `scripts/inbox/onboard.test.mjs` (23 testy) — CLI-most bash → Node. Wejście: `--code`, `--role`, `--workspace`; wyjście: **kod wyjścia** jako kontrakt maszynowy + jedna linia dla człowieka.
+- `scripts/install-vps.sh` (+142 linie) — komponent `setup_team_os_member` wołany z `main()` **po** hubie: admin dostaje swoją maszynę skonfigurowaną świeżym `TEAM_OS_INVITE_CODE` bez ponownego pytania, każdy inny wkleja kod zaproszenia (puste = pomiń). `scripts/install-vps.test.sh` 110 → **119 PASS / 0 FAIL**.
+- `setup.mjs` — `askInboxInvite` z guardem `.gitignore` między probe a zapisem i zapisem `state.inbox_role = 'client'`.
+- `lib/inbox-seed.js` — eksport słownika roli (`ROLE_AGENT`, `ROLE_CLIENT`, `isValidRole`); logika seedowania nietknięta.
+
+**Decyzje podjęte w trakcie implementacji (poza planem):**
+- **Sześć kodów wyjścia zamiast czterech.** Doszły `BAD_USAGE=2` (instalator zawołał CLI źle: brak argumentu, zła rola, brak workspace) i `WRITE=6` (pad zapisu `.env`/roli). Bez nich bash nie odróżnia własnego błędu wywołania od złego kodu wklejonego przez człowieka, a tylko ten drugi uzasadnia powtórzenie pytania. Kod `1` zarezerwowany dla nieobsłużonego wyjątku Node — test pilnuje rozłączności.
+- **Pytanie o auto-reply z domyślnym `N`.** `ask_tty` bez tty bierze default, a `T` cicho włączyłby agenta odpowiadającego zespołowi w imieniu właściciela vaulta. Odmowa daje rolę `client`, czyli działający sync — R1 spełnione nawet przy samym Enterze.
+- **Status guardu `unknown` = odmowa zapisu** w obu instalatorach (fail-closed). To konsekwencja naprawy P2 z fazy 1: „brak gita" nie znaczy „to nie repo", bo vault bywa commitowany z drugiej maszyny.
+- **Redakcja tokenu w komunikatach** (`redactToken`): część trybów awarii `undici` osadza pełny URL żądania w `reason`, a token siedzi w ŚCIEŻCE `/inbox/v1/:token/ping` — surowy tekst oddałby sekret każdemu, kto zobaczy log instalacji.
+- **Onboarding odpalany jako user `claude`, nie root** — `.env` ma należeć do właściciela vaulta, a `data/claude-cron.db` (tam ląduje rola) do usera daemona; plik przejęty przez roota wywróciłby zapisy schedulera przy najbliższym starcie.
+- **`askInboxInvite` przyjmuje trzeci, opcjonalny argument `deps`** (`ensureIgnored`, `setRole`) — guard i DB sięgają do świata zewnętrznego; istniejące wywołania dwuargumentowe działają bez zmian.
+- **Duplikacja dwóch stringów komunikatu odmowy guardu** (`describeGuardRefusal` w `onboard.mjs` ↔ `describeGitignoreRefusal` w `setup.mjs`) zamiast importu: `onboard.mjs` ciągnie `lib/db` (`node:sqlite`) już przy imporcie, a `setup.mjs` nie ma powodu tego wciągać.
+
+**Do świadomej weryfikacji w fazie 3:** `CLAUDE.md` nadal twierdzi, że asystent auto-reply jest „seedowany WYŁĄCZONY" i nie zna flagi `inbox_role` ani ścieżki członka w instalatorze VPS — to treść IU-3.1.
 
 ## Skąd to zadanie
 
@@ -90,19 +109,20 @@ Rotacja tokenu `kacper`, czyszczenie historii gita repo vaulta, decommission Pos
 
 | Plik | Rola w zadaniu | Weryfikacja stanu 2026-07-26 |
 |---|---|---|
-| `setup.mjs` | `INVITE_CODE_PREFIX`:215, `parseInviteCode`:223, `upsertDotenvLine`:257, `writeInboxEnv`:866, `probeInviteCode`:881, `askInboxInvite`:904 — źródło ekstrakcji (IU-1.1) i miejsce guardu lokalnego (IU-2.3) | potwierdzone gremem |
-| `setup.test.mjs` | 44 dopasowania na `parseInviteCode`/`upsertDotenvLine`/`askInboxInvite` — siatka bezpieczeństwa ekstrakcji | potwierdzone |
+| `setup.mjs` | źródło ekstrakcji (IU-1.1) + guard `.gitignore` i rola `client` w `askInboxInvite` (IU-2.3) | **zmieniony** (fazy 1 i 2) |
+| `setup.test.mjs` | siatka bezpieczeństwa ekstrakcji + testy guardu/roli w `askInboxInvite` (78 testów w pliku) | **zmieniony** (fazy 1 i 2) |
 | `scripts/inbox/invite.mjs` | wspólny rdzeń kodu zaproszenia + guard `.gitignore` (IU-1.1) | **utworzony** (faza 1) |
 | `scripts/inbox/invite.test.mjs` | 26 testów rdzenia i guardu (repo testowe odcięte od `core.excludesFile` usera) | **utworzony** (faza 1) |
-| `scripts/inbox/onboard.mjs` | **nowy** — cienkie CLI, most bash → Node (IU-2.1) | do utworzenia |
+| `scripts/inbox/onboard.mjs` | cienkie CLI, most bash → Node; kontrakt `EXIT` (IU-2.1) | **utworzony** (faza 2) |
+| `scripts/inbox/onboard.test.mjs` | 23 testy CLI: `parseArgs`, wszystkie wyniki `runOnboard`, redakcja tokenu, entry-point guard | **utworzony** (faza 2) |
 | `scripts/inbox/env-loader.mjs` | wzorzec wspólnego modułu wyciągniętego, by zabić drift między skryptami | istnieje |
 | `lib/inbox-seed.js` | rola maszyny steruje seedem (IU-1.2); `ROLE_STATE_KEY`, `assistantJobDef` z `enabled: 1`, nadal zero `UPDATE` | **zmieniony** (faza 1) |
 | `lib/inbox-seed.test.js` | testy seeda rozszerzone o role + dowód R9 | **zmieniony** (faza 1) |
 | `server.js` | mapa `SEEDED_JOB_NAMES` w logu startowym — konsument sufiksowanego statusu seedu (odchylenie IU-1.2) | **zmieniony** (faza 1) |
 | `lib/db.js` | `getState`:369, `setState`:374 — nośnik flagi `inbox_role` | potwierdzone |
 | `lib/notify-push.js` | wzorzec kontraktu `{ok, reason}` — nigdy nie wywraca wołającego | istnieje |
-| `scripts/install-vps.sh` | `ask_tty`:189, `ask_valid`:228, `is_valid_member_name`:1437, `setup_team_os_hub`:1497, `TEAM_OS_INVITE_CODE`:1558 — ścieżka członka obok istniejącej ścieżki admina (IU-2.2) | potwierdzone gremem |
-| `scripts/install-vps.test.sh` | harness lib-only (`CLAUDE_CRON_LIB_ONLY=1`), sandbox `mktemp`, rejestrator wywołań | istnieje |
+| `scripts/install-vps.sh` | `setup_team_os_member` + helpery `team_os_*` obok nietkniętego `setup_team_os_hub` (IU-2.2) | **zmieniony** (faza 2) |
+| `scripts/install-vps.test.sh` | harness lib-only (`CLAUDE_CRON_LIB_ONLY=1`), sandbox `mktemp`, rejestrator wywołań; 119 PASS | **zmieniony** (faza 2) |
 | `CLAUDE.md` | sprostowanie zapisu o auto-reply + opis roli maszyny (IU-3.1) | do aktualizacji |
 
 ## Decyzje techniczne i zależności
@@ -115,7 +135,7 @@ Pełne uzasadnienia siedzą w `-plan.md`; tu skrót, żeby ten plik był samowys
 - **Kolejność na VPS:** zapis `.env` + `setState('inbox_role', …)` **przed** restartem daemona (`inbox-seed` czyta flagę dopiero przy starcie; env nie propaguje się do żyjących procesów).
 - **Kolejność wewnątrz onboardingu:** parse → probe → guard → zapis → rola. Probe waliduje kod zanim dotkniemy plików, guard tuż przed zapisem, rola tylko po udanym zapisie.
 - **Zależności między IU:** IU-1.1 i IU-1.2 są równoległe; IU-2.1 wymaga obu; IU-2.2 wymaga IU-2.1; IU-2.3 wymaga IU-1.1 + IU-1.2; IU-3.1 na końcu.
-- **Zależności zewnętrzne:** zero nowych paczek npm. Jedyny nowy element zewnętrzny to `git check-ignore` (stabilna semantyka exit-code); brak gita traktujemy jak „nie repo" → guard przepuszcza.
+- **Zależności zewnętrzne:** zero nowych paczek npm. Jedyny nowy element zewnętrzny to `git check-ignore` (stabilna semantyka exit-code). ~~Brak gita traktujemy jak „nie repo" → guard przepuszcza.~~ **Skorygowane po review fazy 1 (P2)**: brak gita / błąd gita → status `unknown` → guard **odmawia zapisu** (fail-closed), bo vault bywa commitowany z drugiej maszyny; „poza repo" rozpoznawane osobno przez `git rev-parse --git-dir`.
 
 ## Źródła
 

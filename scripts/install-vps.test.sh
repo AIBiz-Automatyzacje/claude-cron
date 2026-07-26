@@ -659,7 +659,8 @@ install_claude_cli install_ob install_tailscale login_block \
 configure_obsidian_file_types setup_vault_git link_vault_claude \
 create_obsidian_sync_service clone_repo \
 setup_puls_dependencies create_systemd_service configure_firewall setup_tailscale \
-setup_auto_update verify_services create_welcome_note setup_funnel setup_team_os_hub print_summary"
+setup_auto_update verify_services create_welcome_note setup_funnel setup_team_os_hub \
+setup_team_os_member print_summary"
 
 write_recorder_snippet() {
   local snippet="$1" main_args="$2"
@@ -2085,6 +2086,235 @@ test_setup_team_os_hub_sequence() {
   fi
 }
 
+# --- Test 58f: team_os_onboard_cmd — cytowanie %q przeżywa podwójne parsowanie
+#     (`su - claude -c "<string>"`): kod zaproszenia z `#`, `:` i `//` oraz
+#     ścieżka ze spacją docierają do CLI bez zniekształcenia ---
+test_team_os_onboard_cmd_quoting() {
+  local snippet="$SANDBOX/t-onboard-cmd.sh" out
+  mkdir -p "$SANDBOX/inst-dir"
+  # eval + atrapa `node` symuluje drugie parsowanie po stronie shella usera
+  # claude — bez %q gołe `#` ucięłoby resztę komendy jako komentarz.
+  cat > "$snippet" <<EOF
+node() { printf 'ARG[%s]\n' "\$@"; }
+cmd="\$(team_os_onboard_cmd "$SANDBOX/inst-dir" "/home/claude/vault z spacją" 'puls-inbox:https://srv.ts.net#dead#beef' agent)"
+eval "\$cmd"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"ARG[--code]"* ]] \
+    && [[ "$out" == *"ARG[puls-inbox:https://srv.ts.net#dead#beef]"* ]] \
+    && [[ "$out" == *"ARG[--role]"* ]] && [[ "$out" == *"ARG[agent]"* ]] \
+    && [[ "$out" == *"ARG[--workspace]"* ]] && [[ "$out" == *"ARG[/home/claude/vault z spacją]"* ]]; then
+    pass "team_os_onboard_cmd: kod zaproszenia (#, :, //) i ścieżka ze spacją przeżywają podwójne parsowanie"
+  else
+    problem "team_os_onboard_cmd: zniekształcone argumenty (output: $out)"
+  fi
+}
+
+# Stub granic systemu dla testów ścieżki członka: CLI onboardingu wołane przez
+# run_as_claude (szew DI instalatora) jest EVALUOWANE z atrapą `node` — test widzi
+# realne argumenty po podwójnym parsowaniu, a nie sam string komendy. Kod wyjścia
+# CLI wstrzykiwany przez $CLI_RC, wywołania systemctl/CLI zapisywane do $MARK.
+write_member_stub() {
+  cat > "$1" <<'STUB'
+sleep() { :; }
+node() { printf 'ARG[%s]\n' "$@"; }
+curl() {
+  local out=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -o) out="$2"; shift 2;;
+      *) shift;;
+    esac
+  done
+  if [ -n "$out" ]; then printf '[]' > "$out"; fi
+  printf '%s' "${HTTP_CODE:-200}"
+}
+systemctl() { echo "SYSTEMCTL $*" >> "$MARK"; }
+run_as_claude() { echo "RUN" >> "$MARK"; eval "$1"; return "${CLI_RC:-0}"; }
+STUB
+}
+
+# --- Test 58g: setup_team_os_member — pominięcie (puste = pomiń, R2), ścieżka
+#     członka (kod z tty → CLI + restart), ścieżka admina (kod z globala, bez
+#     ponownego pytania) ---
+test_setup_team_os_member() {
+  local snippet="$SANDBOX/t-member.sh" stub="$SANDBOX/member-stub.sh" mark="$SANDBOX/member-mark" out rc
+  local code='puls-inbox:https://srv.ts.net#deadbeefcafe'
+  write_member_stub "$stub"
+  mkdir -p "$SANDBOX/inst-dir" "$SANDBOX/vault-pusty" "$SANDBOX/vault-pelny"
+  : > "$SANDBOX/vault-pelny/notatka.md"
+
+  # 1. Brak tty (curl|bash bez terminala) + brak kodu admina → default "" =
+  # pomiń: zero wywołań CLI, instalacja leci dalej.
+  rm -f "$mark"
+  cat > "$snippet" <<EOF
+MARK="$mark"
+PORT=7777
+SERVICE_NAME="claude-cron"
+INSTALL_DIR="$SANDBOX/inst-dir"
+WORKSPACE="$SANDBOX/vault-pelny"
+source "$stub"
+setup_team_os_member
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -f "$mark" ] && [[ "$out" == *"Pominięto skrzynkę zespołową"* ]]; then
+    pass "setup_team_os_member: pusta odpowiedź na kod → zero wywołań CLI, instalacja kontynuowana"
+  else
+    problem "setup_team_os_member: gałąź pominięcia zawiodła (rc=$rc, mark=$(cat "$mark" 2>/dev/null), out: $out)"
+  fi
+
+  # 2. Członek: tty oddaje kod zaproszenia. To samo tty odpowiada na pytanie
+  # o auto-reply (ask_tty czyta zawsze pierwszą linię) — kod ≠ „t", więc rola
+  # to „client". Vault pusty → ostrzeżenie o NO_ANSWER przed pytaniem.
+  local tty="$SANDBOX/tty-member"
+  printf '%s\n' "$code" > "$tty"
+  rm -f "$mark"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$tty"
+MARK="$mark"
+PORT=7777
+SERVICE_NAME="claude-cron"
+INSTALL_DIR="$SANDBOX/inst-dir"
+WORKSPACE="$SANDBOX/vault-pusty"
+source "$stub"
+setup_team_os_member
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+    && [[ "$out" == *"ARG[--code]"* ]] && [[ "$out" == *"ARG[$code]"* ]] \
+    && [[ "$out" == *"ARG[--role]"* ]] && [[ "$out" == *"ARG[client]"* ]] \
+    && [[ "$out" == *"ARG[$SANDBOX/vault-pusty]"* ]] \
+    && [[ "$out" == *"NO_ANSWER"* ]] \
+    && grep -q '^SYSTEMCTL restart claude-cron$' "$mark" \
+    && [[ "$out" == *"Skrzynka zespołowa gotowa"* ]]; then
+    pass "setup_team_os_member: kod z tty → CLI z rolą client → restart serwisu + potwierdzenie, że wstał"
+  else
+    problem "setup_team_os_member: ścieżka członka zawiodła (rc=$rc, mark=$(cat "$mark" 2>/dev/null), out: $out)"
+  fi
+
+  # 3. Admin: kod utworzony przed chwilą leży w TEAM_OS_INVITE_CODE. Tty oddaje
+  # WYŁĄCZNIE „t" — gdyby instalator mimo to zapytał o kod, do CLI trafiłoby „t”.
+  printf 't\n' > "$tty"
+  rm -f "$mark"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$tty"
+MARK="$mark"
+PORT=7777
+SERVICE_NAME="claude-cron"
+INSTALL_DIR="$SANDBOX/inst-dir"
+WORKSPACE="$SANDBOX/vault-pelny"
+TEAM_OS_INVITE_CODE='$code'
+source "$stub"
+setup_team_os_member
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+    && [[ "$out" == *"ARG[$code]"* ]] && [[ "$out" != *"ARG[t]"* ]] \
+    && [[ "$out" == *"ARG[agent]"* ]] \
+    && [[ "$out" != *"NO_ANSWER"* ]] \
+    && grep -q '^SYSTEMCTL restart claude-cron$' "$mark"; then
+    pass "setup_team_os_member: ścieżka admina → kod z TEAM_OS_INVITE_CODE bez ponownego pytania, zgoda → rola agent"
+  else
+    problem "setup_team_os_member: ścieżka admina zawiodła (rc=$rc, mark=$(cat "$mark" 2>/dev/null), out: $out)"
+  fi
+}
+
+# --- Test 58h: setup_team_os_member — porażki CLI: komunikat naprawczy dobrany
+#     do kodu wyjścia, BRAK restartu serwisu, instalacja kontynuowana ---
+test_setup_team_os_member_failures() {
+  local snippet="$SANDBOX/t-member-fail.sh" stub="$SANDBOX/member-stub.sh" mark="$SANDBOX/member-fail-mark"
+  local tty="$SANDBOX/tty-member-fail" out rc
+  local code='puls-inbox:https://srv.ts.net#deadbeefcafe'
+  write_member_stub "$stub"
+  mkdir -p "$SANDBOX/inst-dir" "$SANDBOX/vault-pelny"
+  printf '%s\n' "$code" > "$tty"
+
+  write_member_fail_snippet() {
+    cat > "$snippet" <<EOF
+TTY_DEVICE="$tty"
+MARK="$mark"
+CLI_RC=$1
+PORT=7777
+SERVICE_NAME="claude-cron"
+INSTALL_DIR="$SANDBOX/inst-dir"
+WORKSPACE="$SANDBOX/vault-pelny"
+source "$stub"
+setup_team_os_member
+echo "RC_PO_KOMPONENCIE=\$?"
+EOF
+  }
+
+  # Kod 3 = zły format kodu zaproszenia: instrukcja „poproś o nowy kod", zero restartu.
+  rm -f "$mark"; write_member_fail_snippet 3
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"RC_PO_KOMPONENCIE=0"* ]] \
+    && [[ "$out" == *"zły format"* ]] && [[ "$out" == *"widok Zespół"* ]] \
+    && ! grep -q 'SYSTEMCTL restart' "$mark"; then
+    pass "setup_team_os_member: kod wyjścia 3 (zły kod) → warn z instrukcją, brak restartu, instalacja kontynuowana"
+  else
+    problem "setup_team_os_member: gałąź złego kodu zawiodła (rc=$rc, mark=$(cat "$mark" 2>/dev/null), out: $out)"
+  fi
+
+  # Kod 5 = .gitignore nienaprawialny: instrukcja MUSI podać wzorzec .env*
+  # (sam „.env" nie łapie kopii .env.bak — udokumentowany incydent).
+  rm -f "$mark"; write_member_fail_snippet 5
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"RC_PO_KOMPONENCIE=0"* ]] \
+    && [[ "$out" == *".env*"* ]] && [[ "$out" == *"check-ignore"* ]] \
+    && ! grep -q 'SYSTEMCTL restart' "$mark"; then
+    pass "setup_team_os_member: kod wyjścia 5 (gitignore) → instrukcja z wzorcem .env*, brak restartu"
+  else
+    problem "setup_team_os_member: gałąź gitignore zawiodła (rc=$rc, mark=$(cat "$mark" 2>/dev/null), out: $out)"
+  fi
+
+  # Kod 1 = CLI się wywróciło (nieobsłużony wyjątek Node) — pad NIE może wywrócić
+  # instalatora: to opcjonalny krok finału, nie ma tu trap ERR.
+  rm -f "$mark"; write_member_fail_snippet 1
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"RC_PO_KOMPONENCIE=0"* ]] \
+    && [[ "$out" == *"kodem 1"* ]] \
+    && ! grep -q 'SYSTEMCTL restart' "$mark"; then
+    pass "setup_team_os_member: pad CLI (kod 1) → warn diagnostyczny, instalator kontynuuje"
+  else
+    problem "setup_team_os_member: pad CLI wywrócił komponent (rc=$rc, out: $out)"
+  fi
+}
+
+# --- Test 58i: sekwencja main() — ścieżka członka PO hubie i PRZED
+#     podsumowaniem (R3: „nie" na hub nie kończy tematu skrzynki);
+#     --only-puls pomija całą strefę Team OS ---
+test_setup_team_os_member_sequence() {
+  local snippet="$SANDBOX/t-member-seq.sh" out calls out2
+  write_recorder_snippet "$snippet" ""
+  out="$(run_snippet "$snippet")"
+  calls="$(grep '^CALL ' <<<"$out" || true)"
+  local p_hub p_mem p_sum
+  p_hub="$(grep -n '^CALL setup_team_os_hub$' <<<"$calls" | cut -d: -f1)"
+  p_mem="$(grep -n '^CALL setup_team_os_member$' <<<"$calls" | cut -d: -f1)"
+  p_sum="$(grep -n '^CALL print_summary$' <<<"$calls" | cut -d: -f1)"
+  if [ -n "$p_hub" ] && [ -n "$p_mem" ] && [ -n "$p_sum" ] \
+    && [ "$p_hub" -lt "$p_mem" ] && [ "$p_mem" -lt "$p_sum" ]; then
+    pass "main(): setup_team_os_member PO hubie i PRZED podsumowaniem (odmowa huba nie kończy tematu skrzynki)"
+  else
+    problem "main(): zła pozycja setup_team_os_member (hub=$p_hub mem=$p_mem sum=$p_sum, calls: $calls)"
+  fi
+  write_recorder_snippet "$snippet" "--only-puls"
+  out2="$(run_snippet "$snippet")"
+  if [[ "$out2" != *"CALL setup_team_os_member"* ]] \
+    && [[ "$out2" != *"CALL setup_team_os_hub"* ]] \
+    && [[ "$out2" == *"CALL print_summary"* ]]; then
+    pass "main --only-puls: cała strefa Team OS (hub + członek) pominięta"
+  else
+    problem "main --only-puls: strefa Team OS NIE została pominięta (output: $out2)"
+  fi
+}
+
 # --- Test 58e: print_summary — kod zaproszenia Team OS pokazany gdy ustawiony,
 #     nieobecny gdy pusty ---
 test_print_summary_team_os() {
@@ -2706,6 +2936,10 @@ test_setup_funnel
 test_team_os_helpers
 test_setup_team_os_hub
 test_setup_team_os_hub_sequence
+test_team_os_onboard_cmd_quoting
+test_setup_team_os_member
+test_setup_team_os_member_failures
+test_setup_team_os_member_sequence
 test_print_summary_team_os
 test_verify_services_and_sync_wait
 test_main_final_phase_order

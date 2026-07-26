@@ -1,7 +1,7 @@
 # Team OS — onboarding członka w instalatorach — zadania
 
 Branch: `feature/team-os-onboarding-instalatory` (odbity z `main` po `024653f`)
-Ostatnia aktualizacja: 2026-07-26 (review fazy 1 — gate **BLOKUJE**: 1 × P1, 3 × P2; raport `review-faza-1.md`, sekcja „Do poprawy po review fazy 1")
+Ostatnia aktualizacja: 2026-07-26 (faza 2 zaimplementowana — IU-2.1, IU-2.2, IU-2.3; `npm test` 579/579, `install-vps.test.sh` 119/119)
 
 > **Uwaga o `Delegate to:`** — tabela doboru subagentów w `/dev-plan` zakłada stack React/Supabase.
 > Ten projekt to czysty Node (CommonJS + ESM), bash i vanilla JS bez buildu, więc **wszystkie IU trafiają
@@ -143,12 +143,12 @@ Ostatnia aktualizacja: 2026-07-26 (review fazy 1 — gate **BLOKUJE**: 1 × P1, 
 
 - [ ] 🟡 [P3] **scripts/inbox/invite.mjs:161** — `unfixable` zostawia zapisany `.gitignore` z dopisanym wzorcem i nie informuje o tym wołającego; brak rollbacku do stanu sprzed próby.
 - [ ] 🟡 [P3] **setup.mjs:836** — `probe.reason` drukowany dosłownie; część trybów awarii undici osadza pełny URL (z tokenem w ścieżce) w komunikacie → token w logu instalacji.
-- [ ] 🟡 [P3] **setup.mjs:841** — guard nie jest wpięty w `askInboxInvite` (R6 niespełnione lokalnie; plan przypisuje wpięcie do IU-2.3). Konstrukcja „guard obok zapisu" pozwala kolejnym miejscom zapisu o nim zapomnieć — `writeInboxEnv` powinien sam odmawiać zapisu przy `unfixable`.
+- [x] 🟡 [P3] **setup.mjs:841** — guard nie jest wpięty w `askInboxInvite` (R6 niespełnione lokalnie; plan przypisuje wpięcie do IU-2.3). Konstrukcja „guard obok zapisu" pozwala kolejnym miejscom zapisu o nim zapomnieć — `writeInboxEnv` powinien sam odmawiać zapisu przy `unfixable`. **DOMKNIĘTE w fazie 2 (IU-2.3)**: guard wpięty między probe a zapis, `unfixable`/`unknown` → brak zapisu i brak roli (testy w `setup.test.mjs`). Uwaga pozostaje otwarta co do drugiej części (przeniesienie odmowy do środka `writeInboxEnv`) — dziś oba miejsca zapisu (`setup.mjs`, `onboard.mjs`) wołają guard jawnie.
 - [ ] 🟡 [P3] **lib/inbox-seed.js:86** — `getAllJobs()` materializuje pełną kolekcję, by sprawdzić istnienie jednej nazwy; właściwe `SELECT 1 FROM jobs WHERE name = ?` (reguła 12).
 - [ ] 🟡 [P3] **scripts/inbox/invite.mjs:133** — brak wczesnego wyjścia z sond `spawnSync` (do 4 procesów gita na wywołanie guardu) + zbędne `encoding: 'utf-8'` przy nieczytanym stdout.
 - [ ] 🟡 [P3] **scripts/inbox/invite.mjs:136** — `spawnSync` bez `timeout`: git na nieodpowiadającym montażu zawiesza instalator bez komunikatu.
 - [x] 🟡 [P3] **scripts/inbox/invite.test.mjs:207** — gałąź `result.error` w `queryGitignoreState` bez testu (wykonalna headless przez pusty `PATH`). **NAPRAWIONE przy okazji P2/TEST**: test `ensureEnvIgnored` z pustym `PATH` (gałąź `result.error`).
-- [ ] 🟡 [P3] **lib/inbox-seed.js:19** — `ROLE_AGENT` prywatny, porównanie strict equality; pisarz z IU-2.1 zapisze literał na ślepo. Eksportuj `ROLE_AGENT`/`ROLE_CLIENT` (lub `isValidRole`) zanim powstanie pisarz.
+- [x] 🟡 [P3] **lib/inbox-seed.js:19** — `ROLE_AGENT` prywatny, porównanie strict equality; pisarz z IU-2.1 zapisze literał na ślepo. Eksportuj `ROLE_AGENT`/`ROLE_CLIENT` (lub `isValidRole`) zanim powstanie pisarz. **DOMKNIĘTE w fazie 2 (IU-2.1)**: wyeksportowane `ROLE_AGENT`, `ROLE_CLIENT`, `isValidRole`; `onboard.mjs` waliduje rolę na wejściu (`--role` spoza dziedziny → `EXIT.BAD_USAGE`), `setup.mjs` zapisuje `ROLE_CLIENT` ze wspólnego słownika.
 - [ ] 🟡 [P3] **server.js:709** — wiedza „status → nazwa joba" wyciekła z `inbox-seed.js` do mapy `SEEDED_JOB_NAMES`; czystszy kontrakt to zwrot `{ status, jobName }`.
 - [ ] 🟡 [P3] **setup.mjs:34** — komentarz twierdzi „publiczna powierzchnia bez zmian", a `INVITE_CODE_PREFIX` przestał być eksportem; dopisz, że to celowe.
 - [ ] 🟡 [P3] **server.js:59** — zgodność `INVITE_CODE_PREFIX` hub ↔ konsument trzyma się wyłącznie na komentarzu; brak testu szwu mimo deklarowanego R8.
@@ -171,9 +171,18 @@ Ostatnia aktualizacja: 2026-07-26 (review fazy 1 — gate **BLOKUJE**: 1 × P1, 
 - [ ] Operator: ustawienie `inbox_role='agent'` na VPS-ie, który przed tą zmianą dostał zaseedowany i WŁĄCZONY job sync, da OBA joby aktywne naraz (seed nie robi `UPDATE` — R9, słusznie) — czyli dwie maszyny synchronizujące Skrzynkę, przed czym chroni R5. Checklist zadania nie ma kroku weryfikacyjnego ani odpowiadającej asercji w Operator checklist IU-2.2 — Operator action: po ustawieniu roli na każdej istniejącej maszynie wypisać joby Team OS (`GET /api/jobs`), ręcznie WYŁĄCZYĆ job niepasujący do roli (na `agent` — „Team OS — inbox sync"; na `client` — „Team OS — asystent auto-reply") i potwierdzić stan po restarcie daemona.
 - [ ] Operator: skutek ustawienia `inbox_role` na ISTNIEJĄCYCH maszynach jest niesprawdzalny headless — wymaga realnego laptopa i produkcyjnego VPS-a; test jednostkowy nie zastąpi odczytu stanu produkcyjnej bazy — Operator action: na laptopie ustawić `inbox_role='client'`, na VPS-ie `'agent'`, zrestartować daemony, po restarcie potwierdzić w dashboardzie/API, że laptop ma wyłącznie job sync (włączony), a VPS wyłącznie auto-reply (włączony), i że żaden job nie został włączony wbrew wcześniejszej ręcznej decyzji.
 
-## Faza 2 — Instalatory (L)
+## Faza 2 — Instalatory (L) — ✅ ukończona
 
-### IU-2.1 `scripts/inbox/onboard.mjs` — CLI dla instalatora VPS (S)
+### IU-2.1 `scripts/inbox/onboard.mjs` — CLI dla instalatora VPS (S) — ✅ completed
+
+**Zrealizowane:** `scripts/inbox/onboard.mjs` (214 linii) + `scripts/inbox/onboard.test.mjs` (23 testy: `parseArgs`, sekwencja `runOnboard` dla wszystkich wyników, redakcja tokenu, `main()`, entry-point guard, rozłączność kodów wyjścia). Kontrakt maszynowy `EXIT` (0/2/3/4/5/6) eksportowany z modułu i odwzorowany w `scripts/install-vps.sh` na stałe `TEAM_OS_EXIT_*`. Zero logiki domenowej w CLI — parse/probe/guard/zapis pochodzą z rdzenia `invite.mjs` (IU-1.1), rola z `lib/inbox-seed.js` (IU-1.2).
+
+**Odchylenia od planu:**
+- **Zmodyfikowany plik spoza listy `Pliki:`** — `lib/inbox-seed.js` dostał eksporty `ROLE_AGENT`, `ROLE_CLIENT`, `isValidRole` (wprost z „nie duplikuj literału roli" w opisie IU; domyka finding P3 z review fazy 1, poz. `lib/inbox-seed.js:19`). Logika seedowania nietknięta.
+- **Dwa kody wyjścia ponad cztery wymienione w planie**: `BAD_USAGE=2` (złe wywołanie CLI / zła rola / brak workspace) i `WRITE=6` (pad zapisu `.env` albo roli). Bez nich bash nie odróżni własnego błędu wywołania od złego kodu wklejonego przez człowieka — a tylko ten drugi uzasadnia powtórzenie pytania. Kod `1` celowo zarezerwowany dla nieobsłużonego wyjątku Node; test pilnuje rozłączności i braku `1`.
+- **Obsłużony status guardu `unknown`** (fail-closed, jak `unfixable`) — kontrakt guardu po naprawie P2 z fazy 1 zwraca pięć wariantów, nie cztery.
+- `scripts/inbox/onboard.test.mjs` ma 308 linii (próg reguły 300) — świadomie niedzielony, bo rozbicie rozerwałoby jeden kontrakt testowy na dwa pliki.
+- Zero nowych zależności npm.
 
 **Cel:** most bash → Node, dzięki któremu instalator VPS konfiguruje skrzynkę bez ani jednej linii logiki domenowej w shellu.
 
@@ -219,7 +228,15 @@ Ostatnia aktualizacja: 2026-07-26 (review fazy 1 — gate **BLOKUJE**: 1 × P1, 
 
 ---
 
-### IU-2.2 `install-vps.sh` — ścieżka członka, autokonfiguracja admina, pytanie o auto-reply (L)
+### IU-2.2 `install-vps.sh` — ścieżka członka, autokonfiguracja admina, pytanie o auto-reply (L) — ✅ completed
+
+**Zrealizowane:** `scripts/install-vps.sh` +142 linie — stałe `TEAM_OS_EXIT_*` (odwzorowanie kontraktu z `onboard.mjs`), `team_os_onboard_cmd` (czysta, cytowanie `%q`), `team_os_run_onboard` (jako user `claude`, nie root), `team_os_vault_looks_empty` (sonda `maxdepth 2`), `team_os_warn_onboard_failure` (komunikat naprawczy per kod wyjścia), `team_os_restart_after_onboard` (restart + potwierdzenie stanu faktycznego przez `team_os_wait_for_server`) i komponent `setup_team_os_member` wołany z `main()` po hubie, pomijany przy `--only-puls`. `scripts/install-vps.test.sh` +236 linii; licznik testów 110 → **119 PASS / 0 FAIL**.
+
+**Odchylenia od planu:**
+- **Pytanie o auto-reply ma default `N` (`[t/N]`)**, czego plan nie rozstrzygał. `ask_tty` bez tty bierze default, więc `T` cicho włączałby agenta odpowiadającego zespołowi w imieniu właściciela vaulta. Odmowa = rola `client` = działający sync, więc R1 jest spełnione nawet przy samym Enterze.
+- **Ograniczenie harnessu** (`ask_tty` czyta zawsze pierwszą linię `TTY_DEVICE`): rolę `agent` weryfikuje test ścieżki admina (tty = `t`), rolę `client` — test ścieżki członka (tty = kod zaproszenia). Dwóch różnych odpowiedzi jednym plikiem tty zaskryptować się nie da.
+- **Opcjonalne rozszerzenie z planu zrealizowane**: `team_os_vault_looks_empty` wypisuje `warn` o pustym vaulcie **przed** pytaniem o auto-reply (decyzja ze świadomością, że agent bez wiedzy odpowie `NO_ANSWER`). Ostrzeżenie samo w sobie **nie ma dedykowanej asercji** w harnessie — jest efektem ubocznym testów ścieżki członka.
+- `setup_team_os_hub` nietknięty (jego testy zostają bez zmian), `install.ps1` poza zakresem zgodnie z planem. Zero nowych zależności.
 
 **Cel:** po odpowiedzi „nie" na pytanie o hub instalator prowadzi członka do działającej skrzynki; admin dostaje swoją maszynę skonfigurowaną bez ponownego wklejania kodu.
 
@@ -276,7 +293,17 @@ Ostatnia aktualizacja: 2026-07-26 (review fazy 1 — gate **BLOKUJE**: 1 × P1, 
 
 ---
 
-### IU-2.3 `setup.mjs` — guard `.gitignore` lokalnie + rola `client` (S)
+### IU-2.3 `setup.mjs` — guard `.gitignore` lokalnie + rola `client` (S) — ✅ completed
+
+**Zrealizowane:** `askInboxInvite` ma pełną sekwencję parse → probe → guard `.gitignore` → zapis `.env` → `state.inbox_role = 'client'` → hint restartu; nowe helpery `persistInboxRole` (I/O, zamyka połączenie po zapisie) i `describeGitignoreRefusal` (czysty). `setup.test.mjs` +158 linii, 78 testów w pliku (pełna suita 579/579).
+
+**Odchylenia od planu:**
+- **Komunikat odmowy przy `unfixable` nie brzmi „dopisz `.env*` do `.gitignore` i uruchom setup ponownie"** (jak w opisie planu), tylko wskazuje realne przyczyny (reguła negacji, wzorzec z katalogu nadrzędnego, plik już śledzony → `git rm --cached .env`). Przy statusie `unfixable` wzorzec JUŻ jest w pliku, więc instrukcja z planu byłaby myląca. Treść zgodna z bliźniaczym `describeGuardRefusal` w `scripts/inbox/onboard.mjs`.
+- **Dołożona obsługa statusu `unknown`** (fail-closed, jak `unfixable`) mimo braku takiego scenariusza na liście testowej planu — wymusza to kontrakt guardu po naprawie P2 z fazy 1; doszedł test.
+- **Zapis roli owinięty `try/catch` z warnem** — rola idzie do SQLite PRZED smoke-testem DB, więc bez tego pad bazy przerywałby setup wbrew kontraktowi „nigdy nie przerywa instalacji".
+- **`setup.test.mjs`: override ścieżki DB na plik w `mktemp` + hook `after`** (nie `:memory:`, bo `persistInboxRole` zamyka połączenie i baza w pamięci ginie). Konieczne, by istniejące testy wołające `askInboxInvite` bez wstrzykniętego `setRole` nie pisały do operatorskiej `data/claude-cron.db`. Zweryfikowane: `getState('inbox_role')` w operatorskiej bazie = `null`.
+- **Publiczna powierzchnia `askInboxInvite` rozszerzona o trzeci, opcjonalny argument** `deps = { ensureIgnored, setRole }` (wstrzykiwanie gita/DB do testów); istniejące wywołania dwuargumentowe działają bez zmian.
+- Zero nowych zależności npm.
 
 **Cel:** lokalny onboarding nie zapisuje tokenu do katalogu, który go opublikuje, i oznacza maszynę jako `client`.
 

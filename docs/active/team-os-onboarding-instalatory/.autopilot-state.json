@@ -7,33 +7,8 @@
       "nazwa": "Rdzeń współdzielony + rola maszyny (M)",
       "execute": "done",
       "review": "done",
-      "fix": "pending",
-      "otwarteFindingi": [
-        {
-          "severity": "P1",
-          "typ": "KOD",
-          "plik": "scripts/inbox/invite.mjs:51",
-          "opis": "Wstrzykniecie dowolnych zmiennych do .env z kodu zaproszenia (brak walidacji ksztaltu + brak escapowania). parseInviteCode zwraca SUROWY hubUrl (nie parsedUrl.href), a WHATWG URL po cichu usuwa CR/LF/TAB przy parsowaniu — string z newline'em przechodzi walidacje protokolu i trafia nietkniety do upsertDotenvLine, ktory sklei KEY=\"<wartosc>\" bez escapowania. Token nie jest walidowany w ogole (hub emituje randomBytes(32).toString('hex'), wiec /^[0-9a-f]{64}$/ byloby dokladne). ZWERYFIKOWANE uruchomieniem modulu: parseInviteCode('puls-inbox:https://hub.example#tok\\nNODE_OPTIONS=--require /tmp/evil.js') -> writeInboxEnv produkuje plik z osobna linia NODE_OPTIONS=--require /tmp/evil.js; wariant po stronie URL daje hubUrl z newline. env-loader.mjs wpisuje to do process.env skryptow skrzynki, a te przekazuja env do spawnu `claude` (buildCleanEnv stripuje tylko CLAUDE_CODE*/CLAUDECODE) -> wykonanie dowolnego kodu z uprawnieniami daemona. FIX: zwracac parsedUrl.href/origin, walidowac charset tokenu, a upsertDotenvLine ma odrzucac wartosci z \", CR, LF i znakami sterujacymi (fail-closed)."
-        },
-        {
-          "severity": "P2",
-          "typ": "KOD",
-          "plik": "scripts/inbox/invite.mjs:79",
-          "opis": "writeInboxEnv zapisuje sekret (INBOX_TOKEN) plikiem o domyslnych uprawnieniach — ZWERYFIKOWANE: nowo utworzony .env ma tryb 0644 (world-readable). Brak { mode: 0o600 } przy tworzeniu i brak chmodSync dla pliku juz istniejacego. Ten modul jest JEDYNA sciezka zapisu tokenu skrzynki dla obu instalatorow, a faza powstala po to, by domknac incydent wycieku sekretow z 25/26.07. SCENARIUSZ: instalator na VPS zapisuje ~/vault/.env w 0644; dowolny inny uzytkownik systemu robi cat i dostaje wazny token, a token to CALA tozsamosc w hubie (/inbox/v1/:token/*) — pozwala czytac cudze watki (pull), domykac zadania (done) i wysylac wiadomosci podszywajac sie pod ofiare."
-        },
-        {
-          "severity": "P2",
-          "typ": "KOD",
-          "plik": "scripts/inbox/invite.mjs:139",
-          "opis": "Guard .gitignore fail-OPEN na sygnale niejednoznacznym. queryGitignoreState traktuje result.error (brak binarki gita, ENOENT/EACCES) ORAZ status === 128 jako isRepo:false, co planGitignoreFix mapuje na not_a_repo, a kontrakt guardu kaze wtedy zapisywac sekret po cichu. 128 to generyczny kod fatalny gita, nie tylko \"to nie repo\", a brak gita nie znaczy, ze katalog nie jest repozytorium — vault bywa repo commitowanym z DRUGIEJ maszyny (topologia tego zadania: laptop + VPS). Sprzeczne z doktryna modulu i z learned-patterns 2026-07-03 oraz 2026-07-24. SCENARIUSZ: VPS bez gita, workspace ~/vault bedacy klonem repo pushowanego z laptopa -> guard mowi not_a_repo -> instalator zapisuje INBOX_TOKEN do nieignorowanego .env -> pierwszy commit z laptopa wysyla token do historii gita. FIX: odroznic \"git niedostepny/blad\" od \"poza repo\" (git rev-parse --git-dir) i przy nierozstrzygalnosci blokowac zapis."
-        },
-        {
-          "severity": "P2",
-          "typ": "TEST",
-          "plik": "scripts/inbox/invite.test.mjs:76",
-          "opis": "Suita nazywa siebie \"siatka bezpieczenstwa ekstrakcji\", ale nie ma ANI JEDNEGO przypadku wrogiego wejscia — wszystkie wejscia parseInviteCode/upsertDotenvLine/writeInboxEnv sa dobrze uformowane. Brakuje: (a) tokenu/URL-a z CR/LF (wektor wstrzykniecia linii do .env, P1 wyzej), (b) wartosci z \" i znakami sterujacymi, (c) wartosci ze wzorcem $& (rozwijanie w String.replace), (d) asercji uprawnien utworzonego .env, (e) przypadku niedostepnego git check-ignore (fail-open guardu). Zielone 533/533 nie jest dowodem bezpieczenstwa modulu, mimo ze IU-1.1 deklaruje skill \"security (materialnie)\". SCENARIUSZ: ktos wdrozy walidacje, a potem ja cofnie i suita zostanie zielona — regresja wstrzykniecia .env wraca niezauwazona do obu instalatorow."
-        }
-      ],
+      "fix": "done",
+      "otwarteFindingi": [],
       "metryki": {
         "liczniki": {
           "p1": 1,
