@@ -12,7 +12,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { EXIT, isEntryPoint, main, parseArgs, redactToken, runOnboard } from './onboard.mjs';
+import {
+  EXIT,
+  describeRoleChange,
+  isEntryPoint,
+  main,
+  parseArgs,
+  redactToken,
+  runOnboard,
+} from './onboard.mjs';
 
 const require = createRequire(import.meta.url);
 const db = require('../../lib/db');
@@ -148,6 +156,68 @@ test('guard naprawił .gitignore (fixed) → zapis wykonany, komunikat mówi o z
   assert.equal(result.exitCode, EXIT.OK);
   assert.ok(fs.existsSync(envPath(workspace)));
   assert.match(result.message, /\.gitignore/, 'użytkownik ma wiedzieć, że instalator zmienił jego repozytorium');
+});
+
+// ──────── zmiana roli między instalacjami (re-run instalatora) ────────
+// Instalator sam kieruje na ponowne uruchomienie przy każdej porażce, a pytanie o auto-reply
+// pada wtedy od nowa. Seed jobów nigdy nie robi UPDATE, więc zmiana odpowiedzi zostawia
+// maszynę z DWOMA włączonymi jobami — człowiek musi się o tym dowiedzieć z komunikatu.
+
+test('zmiana roli client → agent: komunikat wskazuje job sync z poprzedniej instalacji do wyłączenia', async (t) => {
+  const workspace = makeWorkspace(t);
+
+  const result = await runOnboard({ code: CODE, role: 'agent', workspace }, {
+    probe: okProbe,
+    getRole: () => 'client',
+  });
+
+  assert.equal(result.exitCode, EXIT.OK);
+  assert.match(result.message, /Team OS — inbox sync/, 'nazwa joba do wyłączenia musi paść wprost');
+  assert.match(result.message, /client → agent/);
+  assert.equal(db.getState(ROLE_STATE_KEY), 'agent', 'nowa rola i tak zostaje zapisana');
+});
+
+test('zmiana roli agent → client: komunikat wskazuje job auto-reply (drugi kierunek)', async (t) => {
+  const workspace = makeWorkspace(t);
+
+  const result = await runOnboard({ code: CODE, role: 'client', workspace }, {
+    probe: okProbe,
+    getRole: () => 'agent',
+  });
+
+  assert.equal(result.exitCode, EXIT.OK);
+  assert.match(result.message, /Team OS — asystent auto-reply/);
+});
+
+test('ta sama rola przy re-runie → zero ostrzeżenia o zmianie (nie strasz bez powodu)', async (t) => {
+  const workspace = makeWorkspace(t);
+
+  const result = await runOnboard({ code: CODE, role: 'client', workspace }, {
+    probe: okProbe,
+    getRole: () => 'client',
+  });
+
+  assert.equal(result.exitCode, EXIT.OK);
+  assert.ok(!result.message.includes('Rola tej maszyny zmieniła się'), 'brak zmiany = brak noty');
+});
+
+test('brak poprzedniej roli (pierwsza instalacja) i wartość spoza dziedziny → brak noty o zmianie', () => {
+  assert.equal(describeRoleChange(undefined, 'agent'), '', 'świeża maszyna nie ma czego rekoncyliować');
+  assert.equal(describeRoleChange('sentinel', 'agent'), '', 'śmieć w state to nie poprzednia rola');
+});
+
+test('pad odczytu poprzedniej roli nie wywraca onboardingu (.env już zapisany)', async (t) => {
+  const workspace = makeWorkspace(t);
+  const logs = captureLogs(t);
+
+  const result = await runOnboard({ code: CODE, role: 'agent', workspace }, {
+    probe: okProbe,
+    getRole: () => { throw new Error('SQLITE_BUSY: database is locked'); },
+  });
+
+  assert.equal(result.exitCode, EXIT.OK, 'konfiguracja zapisana = sukces mimo nieczytelnego state');
+  assert.equal(db.getState(ROLE_STATE_KEY), 'agent', 'rola i tak zapisana');
+  assert.match(logs.join('\n'), /poprzedniej roli/, 'cicha porażka odczytu byłaby nie do zdiagnozowania');
 });
 
 // ──────── runOnboard: porażki (zero zapisów) ────────

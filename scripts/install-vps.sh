@@ -1655,6 +1655,17 @@ team_os_restart_after_onboard() {
   rm -f "$body_file"
 }
 
+# team_os_warn_client_sync_overlap — ostrzeżenie o DRUGIM synchronizatorze tego samego
+# vaulta. Rola „client" seeduje job „Team OS — inbox sync", który co minutę regeneruje
+# Skrzynka.md w $WORKSPACE. Laptop tej samej osoby (setup.mjs zapisuje tam rolę „client")
+# widzi ten sam vault przez Obsidian Sync, więc dwie maszyny nadpisują ten plik nawzajem
+# i odhaczenia `[x]` giną, zanim push zdąży je zgłosić do huba. Instalator nie ma jak
+# stwierdzić, czy laptop istnieje — mówi o skutku i zostawia wybór człowiekowi.
+team_os_warn_client_sync_overlap() {
+  warn "Ta maszyna będzie co minutę renderować Skrzynkę zespołową w $WORKSPACE (job „Team OS — inbox sync”)."
+  warn "  Jeśli TEN SAM vault synchronizuje też Puls na Twoim laptopie, zostaw sync na JEDNEJ maszynie — dwa synchronizatory nadpisują Skrzynka.md nawzajem i odhaczenia „[x]” potrafią zginąć. Zbędny job wyłącz w dashboardzie (widok Zadania)."
+}
+
 # Podłączenie TEJ maszyny do skrzynki zespołu. Dwa wejścia, jedna ścieżka:
 # admin ma kod utworzony przed chwilą w TEAM_OS_INVITE_CODE (ponowne pytanie
 # o to samo byłoby absurdem i źródłem literówek przy przepisywaniu z ekranu),
@@ -1689,10 +1700,17 @@ setup_team_os_member() {
   fi
 
   local rc=0
+  # CLI sam ostrzega o ZMIANIE roli między uruchomieniami (job z poprzedniej roli zostaje
+  # włączony — seed nigdy nie robi UPDATE); tutaj rozstrzygamy wyłącznie na kodzie wyjścia.
   team_os_run_onboard "$code" "$role" || rc=$?
   if [ "$rc" != 0 ]; then
     team_os_warn_onboard_failure "$rc"
     return 0
+  fi
+  # Dopiero po udanym zapisie: job powstaje przy najbliższym starcie daemona, więc przed
+  # porażką onboardingu ostrzeżenie o sync-u dotyczyłoby czegoś, co nie zaistnieje.
+  if [ "$role" = "client" ]; then
+    team_os_warn_client_sync_overlap
   fi
   team_os_restart_after_onboard
 }

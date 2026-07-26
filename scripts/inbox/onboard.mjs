@@ -26,7 +26,13 @@ import {
 // setup.mjs → lib/db). Wymaganie modułu nie otwiera bazy — getDb() jest leniwe.
 const require = createRequire(import.meta.url);
 const db = require('../../lib/db');
-const { ROLE_STATE_KEY, isValidRole } = require('../../lib/inbox-seed');
+const {
+  ASSISTANT_JOB_NAME,
+  JOB_NAME,
+  ROLE_AGENT,
+  ROLE_STATE_KEY,
+  isValidRole,
+} = require('../../lib/inbox-seed');
 
 // Kontrakt maszynowy dla bash-a. Rozłączne kody, bo instalator dobiera po nich komunikat
 // naprawczy i decyduje, czy restartować serwis (restart ma sens WYŁĄCZNIE po OK — dopiero
@@ -112,6 +118,26 @@ function setRoleInState(role) {
   db.setState(ROLE_STATE_KEY, role);
 }
 
+function getRoleFromState() {
+  return db.getState(ROLE_STATE_KEY);
+}
+
+// === Pure helper: nota o ZMIANIE roli maszyny między instalacjami ===
+// Seed jobów skrzynki NIGDY nie robi UPDATE (lib/inbox-seed: „naprawianie" istniejącego joba
+// clobberowałoby ręczne wyłączenia usera), więc po zmianie roli przy ponownym uruchomieniu
+// instalatora job z POPRZEDNIEJ roli zostaje włączony, a obok powstaje job nowej roli —
+// maszyna robi jedno i drugie naraz, a role mają się wykluczać. Rekoncyliacja musi być
+// świadomą decyzją człowieka (job bywa wyłączony ręcznie), więc mówimy mu o tym wprost.
+// Pusty string = brak zmiany albo brak wcześniejszej roli w dziedzinie (pierwsza instalacja).
+export function describeRoleChange(previousRole, role) {
+  if (!isValidRole(previousRole) || previousRole === role) return '';
+  const staleJob = previousRole === ROLE_AGENT ? ASSISTANT_JOB_NAME : JOB_NAME;
+  return ` [warn] Rola tej maszyny zmieniła się (${previousRole} → ${role}), a job „${staleJob}"`
+    + ' z poprzedniej instalacji ZOSTAJE włączony — instalator nigdy nie modyfikuje istniejących'
+    + ' jobów. Wyłącz go w dashboardzie Pulsa (widok Zadania), inaczej maszyna będzie jednocześnie'
+    + ' renderować Skrzynkę i auto-odpowiadać.';
+}
+
 function describeGuardRefusal(guard) {
   if (guard.status === 'unknown') {
     return `[warn] Nie zapisano konfiguracji skrzynki: nie udało się ustalić, czy ${guard.gitignoreFile} chroni plik .env `
@@ -128,12 +154,13 @@ function describeGuardRefusal(guard) {
 // guard stoi PRZED zapisem (po zapisie sekret już leży w katalogu i cofnięcie go z historii
 // gita bywa niemożliwe), a rola ląduje w state dopiero PO udanym zapisie `.env` — inaczej
 // seed utworzyłby na tej maszynie joba auto-reply bez konfiguracji, failującego co minutę.
-// Zależności wstrzykiwalne, bo probe i guard sięgają do świata zewnętrznego (hub, git).
+// Zależności wstrzykiwalne, bo probe i guard sięgają do świata zewnętrznego (hub, git, baza).
 export async function runOnboard({ code, role, workspace }, deps = {}) {
   const probe = deps.probe || probeInviteCode;
   const ensureIgnored = deps.ensureIgnored || ensureEnvIgnored;
   const writeEnv = deps.writeEnv || writeInboxEnv;
   const setRole = deps.setRole || setRoleInState;
+  const getRole = deps.getRole || getRoleFromState;
 
   const parsed = parseInviteCode(code);
   if (!parsed) {
@@ -168,6 +195,15 @@ export async function runOnboard({ code, role, workspace }, deps = {}) {
       message: `[error] Nie udało się zapisać konfiguracji skrzynki: ${redactToken(error.message, parsed.token)}`,
     };
   }
+  // Odczyt PRZED zapisem — po setRole poprzedniej wartości już nie ma. Odczyt roli nie może
+  // wywrócić onboardingu (`.env` już zapisany), więc pad bazy degradujemy do „brak poprzedniej
+  // roli": stracona nota jest mniejszą szkodą niż EXIT.WRITE po udanym zapisie konfiguracji.
+  let previousRole = '';
+  try {
+    previousRole = getRole();
+  } catch (error) {
+    console.log(`[warn] Nie udało się odczytać poprzedniej roli maszyny (${redactToken(error.message, parsed.token)}).`);
+  }
   try {
     setRole(role);
   } catch (error) {
@@ -182,7 +218,7 @@ export async function runOnboard({ code, role, workspace }, deps = {}) {
     : '';
   return {
     exitCode: EXIT.OK,
-    message: `[ok] Skrzynka zespołowa połączona jako „${result.user}" (rola maszyny: ${role}) — konfiguracja w ${envFile}.${fixedNote}`,
+    message: `[ok] Skrzynka zespołowa połączona jako „${result.user}" (rola maszyny: ${role}) — konfiguracja w ${envFile}.${fixedNote}${describeRoleChange(previousRole, role)}`,
   };
 }
 

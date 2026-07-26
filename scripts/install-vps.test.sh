@@ -2129,7 +2129,7 @@ curl() {
   if [ -n "$out" ]; then printf '[]' > "$out"; fi
   printf '%s' "${HTTP_CODE:-200}"
 }
-systemctl() { echo "SYSTEMCTL $*" >> "$MARK"; }
+systemctl() { echo "SYSTEMCTL $*" >> "$MARK"; return "${SYSTEMCTL_RC:-0}"; }
 run_as_claude() { echo "RUN" >> "$MARK"; eval "$1"; return "${CLI_RC:-0}"; }
 STUB
 }
@@ -2283,6 +2283,86 @@ EOF
     pass "setup_team_os_member: pad CLI (kod 1) → warn diagnostyczny, instalator kontynuuje"
   else
     problem "setup_team_os_member: pad CLI wywrócił komponent (rc=$rc, out: $out)"
+  fi
+}
+
+# --- Test 58j: setup_team_os_member — PORAŻKI restartu po udanym onboardingu
+#     („zrestartowałem” ≠ „wstał”) oraz ostrzeżenie o drugim synchronizatorze
+#     vaulta, gdy maszyna kończy w roli client ---
+test_setup_team_os_member_restart_failures() {
+  local snippet="$SANDBOX/t-member-restart.sh" stub="$SANDBOX/member-stub.sh" mark="$SANDBOX/member-restart-mark"
+  local tty="$SANDBOX/tty-member-restart" out rc
+  local code='puls-inbox:https://srv.ts.net#deadbeefcafe'
+  write_member_stub "$stub"
+  mkdir -p "$SANDBOX/inst-dir" "$SANDBOX/vault-pelny"
+  printf '%s\n' "$code" > "$tty"
+
+  # $1 = wiersze env wstrzykiwane do snippetu (HTTP_CODE / SYSTEMCTL_RC / kod admina).
+  write_member_restart_snippet() {
+    cat > "$snippet" <<EOF
+TTY_DEVICE="$tty"
+MARK="$mark"
+PORT=7777
+SERVICE_NAME="claude-cron"
+INSTALL_DIR="$SANDBOX/inst-dir"
+WORKSPACE="$SANDBOX/vault-pelny"
+TEAM_OS_PROBE_ATTEMPTS=2
+$1
+source "$stub"
+setup_team_os_member
+echo "RC_PO_KOMPONENCIE=\$?"
+EOF
+  }
+
+  # 1. Restart się udał, ale serwer nie odpowiada (HTTP 000 = brak połączenia):
+  # daemon nie wstał, więc jobów skrzynki NIE MA — instalator nie ma prawa
+  # zameldować „gotowe”.
+  rm -f "$mark"; write_member_restart_snippet 'HTTP_CODE=000'
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"RC_PO_KOMPONENCIE=0"* ]] \
+    && grep -q '^SYSTEMCTL restart claude-cron$' "$mark" \
+    && [[ "$out" == *"nie odpowiada"* ]] && [[ "$out" == *"journalctl"* ]] \
+    && [[ "$out" != *"Skrzynka zespołowa gotowa"* ]]; then
+    pass "team_os_restart_after_onboard: serwer nie wstał (HTTP 000) → warn diagnostyczny zamiast fałszywego „gotowe”"
+  else
+    problem "team_os_restart_after_onboard: martwy daemon zameldowany jako sukces (rc=$rc, mark=$(cat "$mark" 2>/dev/null), out: $out)"
+  fi
+
+  # 2. Sam `systemctl restart` padł: instrukcja ręcznego restartu, żadnego
+  # potwierdzenia gotowości i instalacja leci dalej (to krok finału, nie fail).
+  rm -f "$mark"; write_member_restart_snippet 'SYSTEMCTL_RC=1'
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"RC_PO_KOMPONENCIE=0"* ]] \
+    && [[ "$out" == *"restart serwisu nie powiódł się"* ]] \
+    && [[ "$out" == *"systemctl restart claude-cron"* ]] \
+    && [[ "$out" != *"Skrzynka zespołowa gotowa"* ]]; then
+    pass "team_os_restart_after_onboard: pad systemctl → instrukcja ręcznego restartu, instalacja kontynuowana"
+  else
+    problem "team_os_restart_after_onboard: pad systemctl obsłużony źle (rc=$rc, out: $out)"
+  fi
+
+  # 3. Rola client = ta maszyna renderuje Skrzynkę co minutę. Człowiek musi
+  # wiedzieć, że drugi synchronizator tego samego vaulta (laptop) gubi „[x]”.
+  rm -f "$mark"; write_member_restart_snippet ''
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"ARG[client]"* ]] && [[ "$out" == *"JEDNEJ maszynie"* ]] \
+    && [[ "$out" == *"Team OS — inbox sync"* ]]; then
+    pass "setup_team_os_member: rola client → ostrzeżenie o drugim synchronizatorze vaulta (Obsidian Sync gubi odhaczenia)"
+  else
+    problem "setup_team_os_member: brak ostrzeżenia o sync-u przy roli client (out: $out)"
+  fi
+
+  # 4. Rola agent (auto-reply) syncu nie uruchamia — ostrzeżenie byłoby
+  # dezinformacją, więc padać NIE MOŻE.
+  printf 't\n' > "$tty"
+  rm -f "$mark"; write_member_restart_snippet "TEAM_OS_INVITE_CODE='$code'"
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"ARG[agent]"* ]] && [[ "$out" != *"JEDNEJ maszynie"* ]]; then
+    pass "setup_team_os_member: rola agent → zero ostrzeżenia o sync-u (job sync tam nie powstaje)"
+  else
+    problem "setup_team_os_member: ostrzeżenie o sync-u padło przy roli agent (out: $out)"
   fi
 }
 
@@ -2939,6 +3019,7 @@ test_setup_team_os_hub_sequence
 test_team_os_onboard_cmd_quoting
 test_setup_team_os_member
 test_setup_team_os_member_failures
+test_setup_team_os_member_restart_failures
 test_setup_team_os_member_sequence
 test_print_summary_team_os
 test_verify_services_and_sync_wait
