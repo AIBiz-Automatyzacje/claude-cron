@@ -10,6 +10,11 @@
   --input: #1c1c1c;
   --hairline: #202020;
   --hairline-2: #2a2a2a;
+  /* Ramka kontrolki, którą widać TYLKO po obrysie (puste pole, odznaczony checkbox).
+     WCAG 1.4.11 wymaga 3:1 — --hairline-2 daje 1.24:1 na karcie, więc pole formularza
+     jest nierozpoznawalne do czasu focusu. Minimum to #646464 (card) / #5d5d5d (bg);
+     #6a6a6a trzyma zapas na obu. Obrysy dekoracyjne (tabele, karty) zostają na hairline. */
+  --control-border: #6a6a6a;
   /* Cień nakładany na powierzchnie (table, statbar, cal-day) — odcina kartę od tła */
   --shadow-card: 0 1px 0 rgba(255,255,255,.015), 0 10px 30px rgba(0,0,0,.28);
   --text: #F2F2F2;
@@ -385,7 +390,7 @@ body {
 .check input:focus-visible + .checkbox { outline: 2px solid var(--accent); outline-offset: 2px; }
 .checkbox {
   width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0; margin-top: 1px;
-  border: 1px solid var(--hairline-2); background: var(--input);
+  border: 1px solid var(--control-border); background: var(--input);
   display: inline-flex; align-items: center; justify-content: center;
 }
 .check input:checked + .checkbox { background: var(--accent); border-color: var(--accent); }
@@ -528,7 +533,7 @@ body {
 .input[type="time"]::-webkit-calendar-picker-indicator:hover { opacity: 1; }
 .input {
   width: 100%; background: var(--input);
-  border: 1px solid var(--hairline-2); border-radius: var(--r-sm);
+  border: 1px solid var(--control-border); border-radius: var(--r-sm);
   color: var(--text); font-family: 'Inter', sans-serif; font-size: 14px;
   padding: 11px 14px; outline: none;
 }
@@ -538,7 +543,7 @@ body {
 .textarea { resize: vertical; min-height: 64px; line-height: 20px; }
 .select {
   display: flex; align-items: center; justify-content: space-between;
-  background: var(--input); border: 1px solid var(--hairline-2);
+  background: var(--input); border: 1px solid var(--control-border);
   border-radius: var(--r-sm); color: var(--text);
   padding: 11px 14px; cursor: pointer; font-size: 14px;
 }
