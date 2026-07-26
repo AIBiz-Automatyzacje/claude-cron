@@ -705,8 +705,15 @@ ask.notifyInterruptedAskRuns(reapedRuns);
 
 // Seed joba inbox sync (S-2: brak joba = cicha śmierć Skrzynki) — tylko gdy inbox
 // skonfigurowany; fire-and-forget, nie blokuje startu.
+// Który job powstaje, rozstrzyga rola maszyny (state.inbox_role) — log ma mówić prawdę o tym,
+// co faktycznie zaseedowano, a nie zawsze o syncu.
+const SEEDED_JOB_NAMES = {
+  'seeded:sync': inboxSeed.JOB_NAME,
+  'seeded:auto-reply': inboxSeed.ASSISTANT_JOB_NAME,
+};
 inboxSeed.seedInboxSyncJob().then((result) => {
-  if (result === 'seeded') console.log(`[seed] Utworzono job "${inboxSeed.JOB_NAME}" (inbox skonfigurowany, joba brakowało)`);
+  const jobName = SEEDED_JOB_NAMES[result];
+  if (jobName) console.log(`[seed] Utworzono job "${jobName}" (inbox skonfigurowany, joba brakowało)`);
 });
 
 // Start scheduler

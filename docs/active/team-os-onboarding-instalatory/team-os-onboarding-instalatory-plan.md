@@ -12,7 +12,7 @@ figma_screens: {}
 # Team OS — onboarding członka w instalatorach
 
 Branch: `feature/team-os-onboarding-instalatory` (odbity z `main` po `024653f`)
-Ostatnia aktualizacja: 2026-07-26 (plan utworzony, branch roboczy założony)
+Ostatnia aktualizacja: 2026-07-26 (faza 1 zaimplementowana — IU-1.1, IU-1.2)
 
 ## Podsumowanie wykonawcze
 
@@ -105,12 +105,14 @@ Pominięte świadomie — zadanie operuje wyłącznie na wewnętrznych wzorcach 
 
 ## Fazy wdrożenia
 
-### Faza 1 — Rdzeń współdzielony + rola maszyny (M)
+### Faza 1 — Rdzeń współdzielony + rola maszyny (M) — ✅ ukończona
 
-**IU-1.1 `scripts/inbox/invite.mjs` — wspólny rdzeń kodu zaproszenia + guard `.gitignore` (M)**
+> **Stan po implementacji:** oba IU completed, `npm test` 533/533 zielone. Scenariusze testowe z `-zadania.md` pokryte (26 testów w `invite.test.mjs`, 8 w `inbox-seed.test.js`), z jednym odchyleniem konstrukcyjnym: scenariusz „reguła negacji → po dopisaniu wzorca nadal nie ignorowany" rozbito na dwa testy, bo samą negacją nie da się dojść do ścieżki ponownej weryfikacji (dopisany na końcu `.env*` wygrywa z wcześniejszym `!.env`) — ścieżkę tę pokrywa test z plikiem śledzonym w indeksie. Szczegóły odchyleń: `-zadania.md`, sekcje IU-1.1 / IU-1.2.
+
+**IU-1.1 `scripts/inbox/invite.mjs` — wspólny rdzeń kodu zaproszenia + guard `.gitignore` (M)** — ✅
 Ekstrakcja `parseInviteCode`, `upsertDotenvLine`, `writeInboxEnv`, `probeInviteCode` z `setup.mjs` do dedykowanego modułu; `setup.mjs` importuje i **re-eksportuje** `parseInviteCode`/`upsertDotenvLine` dla zgodności z istniejącymi testami. Nowa czysta funkcja guardu: decyzja o stanie `.gitignore` (`ok` / `naprawiono` / `nienaprawialne`) oddzielona od I/O gita, żeby dała się przetestować bez tworzenia repo. Cienka skorupa I/O woła `git check-ignore` (rozstrzyganie na exit-code), dopisuje wzorzec `.env*` i **weryfikuje ponownie**.
 
-**IU-1.2 `lib/inbox-seed.js` — rola maszyny steruje seedem (S)**
+**IU-1.2 `lib/inbox-seed.js` — rola maszyny steruje seedem (S)** — ✅
 Odczyt `state.inbox_role`: `agent` → seeduj **tylko** auto-reply z `enabled: 1`; `client` lub brak flagi → seeduj **tylko** sync (auto-reply nie powstaje). Aktualizacja komentarza dokumentującego odwróconą decyzję („seedowany wyłączony" → „tworzony tylko na maszynie-agencie, od razu włączony"). Zachowana właściwość: **wyłącznie `createJob` gdy brak, nigdy `UPDATE`** (R9) oraz snapshot+restore `process.env` wokół `loadEnv`.
 
 ### Faza 2 — Instalatory (L)

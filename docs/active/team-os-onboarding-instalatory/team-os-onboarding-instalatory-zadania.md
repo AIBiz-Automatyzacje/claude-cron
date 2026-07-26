@@ -1,7 +1,7 @@
 # Team OS — onboarding członka w instalatorach — zadania
 
 Branch: `feature/team-os-onboarding-instalatory` (odbity z `main` po `024653f`)
-Ostatnia aktualizacja: 2026-07-26 (plan utworzony, faza 0 domknięta)
+Ostatnia aktualizacja: 2026-07-26 (faza 1 zaimplementowana — IU-1.1 i IU-1.2 completed, `npm test` 533/533)
 
 > **Uwaga o `Delegate to:`** — tabela doboru subagentów w `/dev-plan` zakłada stack React/Supabase.
 > Ten projekt to czysty Node (CommonJS + ESM), bash i vanilla JS bez buildu, więc **wszystkie IU trafiają
@@ -16,11 +16,20 @@ Ostatnia aktualizacja: 2026-07-26 (plan utworzony, faza 0 domknięta)
 
 - [x] Branch roboczy `feature/team-os-onboarding-instalatory` odbity z `main` (po `024653f`)
 - [x] Dokumentacja zadania zacommitowana na branchu roboczym
-- [ ] Przed startem IU-1.1: w drzewie roboczym siedzą niezacommitowane zmiany maszynerii `.claude/` (sync szablonu) + `.gitignore` — rozstrzygnąć (commit osobno albo stash), żeby diff fazy 1 był czysty
+- [x] Przed startem IU-1.1: w drzewie roboczym siedzą niezacommitowane zmiany maszynerii `.claude/` (sync szablonu) + `.gitignore` — rozstrzygnąć (commit osobno albo stash), żeby diff fazy 1 był czysty — rozstrzygnięte commitem `55cbb0e` (sync maszynerii osobno), diff fazy 1 czysty
 
-## Faza 1 — Rdzeń współdzielony + rola maszyny (M)
+## Faza 1 — Rdzeń współdzielony + rola maszyny (M) — ✅ ukończona
 
-### IU-1.1 `scripts/inbox/invite.mjs` — wspólny rdzeń + guard `.gitignore` (M)
+### IU-1.1 `scripts/inbox/invite.mjs` — wspólny rdzeń + guard `.gitignore` (M) — ✅ completed
+
+**Zrealizowane:** `scripts/inbox/invite.mjs` (192 linie) + `scripts/inbox/invite.test.mjs` (26 testów: parse, upsert, `writeInboxEnv`, `planGitignoreFix`, `ensureEnvIgnored` na żywym repo, `probeInviteCode` na lokalnym fake-hubie). `setup.mjs` skrócony o 94 linie — importuje rdzeń i re-eksportuje `parseInviteCode`/`upsertDotenvLine`.
+
+**Odchylenia od planu:**
+- `INVITE_CODE_PREFIX` **przestał być eksportem `setup.mjs`** (właścicielem jest `invite.mjs`). Plan wymieniał re-eksport tylko `parseInviteCode` i `upsertDotenvLine`; grep potwierdził zero konsumentów — `server.js` ma własną stałą CommonJS (`server.js:59`), `setup.test.mjs` go nie importuje.
+- Scenariusz „reguła negacji → po dopisaniu wzorca nadal nie ignorowany" **rozbity na dwa testy**. Samą negacją nie da się dojść do ścieżki ponownej weryfikacji: dopisany na końcu `.env*` zawsze wygrywa z wcześniejszym `!.env` (w `.gitignore` wygrywa ostatnia pasująca reguła). Negację pokrywa test „wzorzec obecny + `!.env` → `unfixable` bez duplikatu"; ścieżkę zapis → ponowna weryfikacja → `unfixable` pokrywa test z `.env` dodanym do indeksu (`git add -f`). Zachowanie kodu zgodne z planem — różnica dotyczy konstrukcji testu.
+- Guard sonduje **dwie** ścieżki (`.env` oraz `.env.bak.x`) zamiast samego `.env` — wymóg scenariusza z planu: samo `.env` w `.gitignore` przepuściłoby wariant z sufiksem niosący ten sam token (dokładnie mechanizm incydentu z 25/26.07).
+- Testy guardu ustawiają `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` na pusty plik (przywracane w `t.after`) — globalny `core.excludesFile` użytkownika ignorujący `.env` dawałby fałszywy `ok`.
+- Zero nowych zależności npm.
 
 **Cel:** jedno źródło prawdy dla kodu zaproszenia (parse → probe → zapis) plus guard chroniący przed zapisem tokenu do repo, używalne zarówno przez `setup.mjs`, jak i przez CLI instalatora VPS.
 
@@ -66,7 +75,14 @@ Ostatnia aktualizacja: 2026-07-26 (plan utworzony, faza 0 domknięta)
 
 ---
 
-### IU-1.2 `lib/inbox-seed.js` — rola maszyny steruje seedem (S)
+### IU-1.2 `lib/inbox-seed.js` — rola maszyny steruje seedem (S) — ✅ completed
+
+**Zrealizowane:** `ROLE_STATE_KEY = 'inbox_role'` czytany przez `db.getState`; `agent` → wyłącznie auto-reply z `enabled: 1`, `client`/brak flagi → wyłącznie sync. Komentarz nad `assistantJobDef` sprostowany. Testy rozszerzone o role, idempotencję obu wariantów i dowód R9 (job wyłączony ręcznie zostaje wyłączony po ponownym seedzie, cron nietknięty).
+
+**Odchylenia od planu:**
+- **Dotknięto `server.js`** (poza listą „Pliki:" w IU) — 3 linie: mapa `SEEDED_JOB_NAMES` + odczyt statusu w logu startowym. Po rozszerzeniu statusu stary warunek `result === 'seeded'` nigdy nie byłby prawdziwy i log startowy cicho by zniknął, a IU wymaga, żeby logi mówiły prawdę o stanie faktycznym. Zero zmian logiki.
+- Status zwracany zmieniony ze stringów `'seeded'|'exists'|'not_configured'` na sufiksowane `'seeded:sync'|'exists:sync'|'seeded:auto-reply'|'exists:auto-reply'|'not_configured'` — świadomie string zamiast obiektu, bo jedynym konsumentem jest `server.js`.
+- Zero nowych zależności npm.
 
 **Cel:** `inbox-seed` tworzy joby zgodnie z rolą maszyny: laptop dostaje sync, VPS dostaje auto-reply od razu włączony, a auto-reply nie pojawia się tam, gdzie nie ma sensu.
 

@@ -1,7 +1,26 @@
 # Team OS — onboarding członka w instalatorach — kontekst
 
 Branch: `feature/team-os-onboarding-instalatory` (odbity z `main` po `024653f`)
-Ostatnia aktualizacja: 2026-07-26
+Ostatnia aktualizacja: 2026-07-26 (faza 1 zaimplementowana)
+
+## Postęp implementacji
+
+### Faza 1 — ✅ ukończona (IU-1.1, IU-1.2)
+
+**Co powstało:**
+- `scripts/inbox/invite.mjs` — wspólny rdzeń: `INVITE_CODE_PREFIX`, `parseInviteCode`, `upsertDotenvLine`, `writeInboxEnv`, `probeInviteCode` (przeniesione bez zmiany zachowania z `setup.mjs`) + nowy guard `.gitignore`: czysta `planGitignoreFix(state)` i skorupa I/O `ensureEnvIgnored(workspace)`.
+- `scripts/inbox/invite.test.mjs` — 26 testów; `setup.mjs` schudł o 94 linie i re-eksportuje `parseInviteCode`/`upsertDotenvLine` (istniejące importy `setup.test.mjs` nietknięte, 71/71 zielone).
+- `lib/inbox-seed.js` — flaga roli `state.inbox_role` steruje tym, KTÓRY job powstaje; auto-reply na roli `agent` seedowany **włączony**.
+
+**Decyzje podjęte w trakcie implementacji (poza planem):**
+- **Guard sonduje dwie ścieżki: `.env` i `.env.bak.x`.** Plan mówił „czy `.env` jest ignorowany" — to za mało, bo dokładnie wariant z sufiksem wyciekł w incydencie 25/26.07. Druga sonda to nazwa syntetyczna (`git check-ignore` nie wymaga istnienia pliku) — pytamy o EFEKT wzorca `.env*`, nie o konkretny plik.
+- **Świadomie bez `--no-index`** w `git check-ignore`: plik już śledzony w indeksie ma być raportowany jako NIE-ignorowany, bo dopisanie wzorca go nie odśledzi. To fail-closed — lepiej pominąć zapis tokenu niż zapisać go do śledzonego pliku.
+- **`unfixable` gdy wzorzec już jest w pliku, a git nadal nie ignoruje** — dopisanie drugiej kopii nic nie zmieni, a duplikowałoby linię przy każdym re-runie.
+- **`INVITE_CODE_PREFIX` nie jest już eksportem `setup.mjs`** — właścicielem jest `invite.mjs`; `server.js` (hub) trzyma własną stałą CommonJS, bo jest po drugiej stronie granicy modułów. Dwie stałe w dwóch systemach modułów pozostają związane komentarzem, nie importem (świadomie — `server.js` nie może `import`ować ESM synchronicznie).
+- **Status `seedInboxSyncJob` sufiksowany** (`seeded:sync` / `exists:auto-reply` / …) zamiast dwóch pól obiektu — jedyny konsument to log startowy `server.js`, więc obiekt byłby ceremonią. Wymusiło to 3-liniową zmianę w `server.js` (poza listą plików IU-1.2), bez której log startowy cicho by zniknął.
+- **Testy guardu izolowane od konfiguracji gita użytkownika** (`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` → pusty plik): globalny `core.excludesFile` ignorujący `.env` dawałby fałszywy `ok` i test przechodziłby przy zepsutym guardzie.
+
+**Do świadomej weryfikacji w fazie 2:** `ensureEnvIgnored` istnieje, ale nie jest jeszcze przez nikogo wołany — wpięcie idzie w IU-2.1 (`onboard.mjs`) i IU-2.3 (`setup.mjs`).
 
 ## Skąd to zadanie
 
@@ -73,11 +92,13 @@ Rotacja tokenu `kacper`, czyszczenie historii gita repo vaulta, decommission Pos
 |---|---|---|
 | `setup.mjs` | `INVITE_CODE_PREFIX`:215, `parseInviteCode`:223, `upsertDotenvLine`:257, `writeInboxEnv`:866, `probeInviteCode`:881, `askInboxInvite`:904 — źródło ekstrakcji (IU-1.1) i miejsce guardu lokalnego (IU-2.3) | potwierdzone gremem |
 | `setup.test.mjs` | 44 dopasowania na `parseInviteCode`/`upsertDotenvLine`/`askInboxInvite` — siatka bezpieczeństwa ekstrakcji | potwierdzone |
-| `scripts/inbox/invite.mjs` | **nowy** — wspólny rdzeń kodu zaproszenia + guard `.gitignore` (IU-1.1) | do utworzenia |
+| `scripts/inbox/invite.mjs` | wspólny rdzeń kodu zaproszenia + guard `.gitignore` (IU-1.1) | **utworzony** (faza 1) |
+| `scripts/inbox/invite.test.mjs` | 26 testów rdzenia i guardu (repo testowe odcięte od `core.excludesFile` usera) | **utworzony** (faza 1) |
 | `scripts/inbox/onboard.mjs` | **nowy** — cienkie CLI, most bash → Node (IU-2.1) | do utworzenia |
 | `scripts/inbox/env-loader.mjs` | wzorzec wspólnego modułu wyciągniętego, by zabić drift między skryptami | istnieje |
-| `lib/inbox-seed.js` | `inboxSyncJobDef`:12, `assistantJobDef`:28 (`enabled: 0`:39), `createJob` bez `UPDATE`:71-74 — rola maszyny steruje seedem (IU-1.2) | potwierdzone gremem |
-| `lib/inbox-seed.test.js` | testy seeda do rozszerzenia o role | istnieje |
+| `lib/inbox-seed.js` | rola maszyny steruje seedem (IU-1.2); `ROLE_STATE_KEY`, `assistantJobDef` z `enabled: 1`, nadal zero `UPDATE` | **zmieniony** (faza 1) |
+| `lib/inbox-seed.test.js` | testy seeda rozszerzone o role + dowód R9 | **zmieniony** (faza 1) |
+| `server.js` | mapa `SEEDED_JOB_NAMES` w logu startowym — konsument sufiksowanego statusu seedu (odchylenie IU-1.2) | **zmieniony** (faza 1) |
 | `lib/db.js` | `getState`:369, `setState`:374 — nośnik flagi `inbox_role` | potwierdzone |
 | `lib/notify-push.js` | wzorzec kontraktu `{ok, reason}` — nigdy nie wywraca wołającego | istnieje |
 | `scripts/install-vps.sh` | `ask_tty`:189, `ask_valid`:228, `is_valid_member_name`:1437, `setup_team_os_hub`:1497, `TEAM_OS_INVITE_CODE`:1558 — ścieżka członka obok istniejącej ścieżki admina (IU-2.2) | potwierdzone gremem |
