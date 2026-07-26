@@ -1575,7 +1575,7 @@ setup_team_os_hub() {
 
 # Krok NIEZALEŻNY od huba (R3: „nie” na pytanie o hub nie kończy tematu skrzynki
 # — członek zespołu właśnie tu wkleja kod zaproszenia). Zero logiki domenowej
-# w bashu: format kodu, probe huba, guard `.gitignore`, zapis `.env` i rola
+# w bashu: format kodu, probe huba, guard `.gitignore`, zapis pliku sekretu i rola
 # maszyny siedzą w scripts/inbox/onboard.mjs (R8), a shell wyłącznie pyta,
 # woła CLI i rozstrzyga na jego KODZIE WYJŚCIA.
 
@@ -1589,9 +1589,10 @@ team_os_onboard_cmd() {
 }
 
 # team_os_run_onboard <code> <role> — odpala CLI onboardingu i zwraca JEGO kod
-# wyjścia. Jako user claude, nie root: `.env` ma należeć do właściciela vaulta,
-# a data/claude-cron.db (tam ląduje rola maszyny) do usera daemona — plik
-# przejęty przez roota wywróciłby zapisy schedulera przy najbliższym starcie.
+# wyjścia. Jako user claude, nie root: plik sekretu (data/inbox.env — CELOWO poza
+# vaultem, bo agent auto-reply czyta vault na polecenie obcej osoby) i
+# data/claude-cron.db (tam ląduje rola maszyny) mają należeć do usera daemona —
+# plik przejęty przez roota wywróciłby zapisy schedulera przy najbliższym starcie.
 team_os_run_onboard() {
   run_as_claude "$(team_os_onboard_cmd "$INSTALL_DIR" "$WORKSPACE" "$1" "$2")"
 }

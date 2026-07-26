@@ -227,17 +227,36 @@ test('upsertDotenvLine: wartość ze wzorcem `$&` zapisana DOSŁOWNIE przy podmi
   assert.equal((updated.match(/INBOX_TOKEN=/g) || []).length, 1);
 });
 
-// === writeInboxEnv — zapis do <workspace>/.env bez ruszania pozostałych kluczy ===
+// === writeInboxEnv — zapis do pliku sekretu POZA vaultem ===
+// Sekret w drzewie vaulta = eksfiltracja tokenu przez prompt injection: job auto-reply
+// spawnuje `claude -p` z cwd = vault i Read/Glob/Grep, a promptem jest treść cudzej
+// wiadomości (review fazy 3, P1). Testy wskazują lokalizację przez INBOX_ENV_FILE —
+// dokładnie tym samym nadpisaniem, którego używa instalacja.
 
-test('writeInboxEnv upsertuje INBOX_* nie ruszając pozostałych kluczy w .env', (t) => {
+// Katalog sekretu ROZŁĄCZNY z workspace'em — inaczej test przechodziłby przy powrocie
+// zapisu do vaulta (a to jest defekt, którego pilnujemy).
+function useSecretFile(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-secret-'));
+  const file = path.join(dir, 'inbox.env');
+  const prev = process.env.INBOX_ENV_FILE;
+  process.env.INBOX_ENV_FILE = file;
+  t.after(() => {
+    if (prev === undefined) delete process.env.INBOX_ENV_FILE;
+    else process.env.INBOX_ENV_FILE = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return file;
+}
+
+test('writeInboxEnv upsertuje INBOX_* nie ruszając pozostałych kluczy w pliku sekretu', (t) => {
   const ws = makeWorkspace(t);
-  const envFile = path.join(ws, '.env');
-  fs.writeFileSync(envFile, 'CLAUDE_CRON_WORKSPACE="/ws"\nINBOX_TOKEN="stary"\nDISCORD_WEBHOOK_URL="https://d"\n', 'utf-8');
+  const secretFile = useSecretFile(t);
+  fs.writeFileSync(secretFile, 'CLAUDE_CRON_WORKSPACE="/ws"\nINBOX_TOKEN="stary"\nDISCORD_WEBHOOK_URL="https://d"\n', 'utf-8');
 
   const written = writeInboxEnv(ws, 'https://hub.example', 'tok-nowy');
 
-  assert.equal(written, envFile);
-  const content = fs.readFileSync(envFile, 'utf-8');
+  assert.equal(written, secretFile);
+  const content = fs.readFileSync(secretFile, 'utf-8');
   assert.ok(content.includes('INBOX_HUB_URL="https://hub.example"'), 'hub URL zapisany');
   assert.ok(content.includes('INBOX_TOKEN="tok-nowy"'), 'token podmieniony');
   assert.ok(content.includes('CLAUDE_CRON_WORKSPACE="/ws"'), 'obcy klucz nietknięty');
@@ -245,57 +264,96 @@ test('writeInboxEnv upsertuje INBOX_* nie ruszając pozostałych kluczy w .env',
   assert.equal((content.match(/INBOX_TOKEN=/g) || []).length, 1, 'brak duplikatu po re-runie');
 });
 
-test('writeInboxEnv tworzy .env gdy pliku jeszcze nie ma', (t) => {
+test('writeInboxEnv tworzy plik sekretu (z katalogiem) gdy jeszcze go nie ma', (t) => {
   const ws = makeWorkspace(t);
+  const secretFile = useSecretFile(t);
+  // Katalog `data/` bywa nieutworzony przy pierwszym onboardingu — zapis musi go dołożyć.
+  const nested = path.join(path.dirname(secretFile), 'data', 'inbox.env');
+  process.env.INBOX_ENV_FILE = nested;
 
   writeInboxEnv(ws, 'https://hub.example', 'tok-1');
 
-  const content = fs.readFileSync(path.join(ws, '.env'), 'utf-8');
+  const content = fs.readFileSync(nested, 'utf-8');
   assert.ok(content.includes('INBOX_HUB_URL="https://hub.example"'));
   assert.ok(content.includes('INBOX_TOKEN="tok-1"'));
 });
 
-test('writeInboxEnv: nowy .env z tokenem powstaje z trybem 0600 (nie world-readable)', { skip: SKIP_WIN }, (t) => {
+test('writeInboxEnv: token NIE ląduje w vaultcie (cwd asystenta auto-reply)', (t) => {
   const ws = makeWorkspace(t);
+  useSecretFile(t);
+
+  writeInboxEnv(ws, 'https://hub.example', 'tok-tajny');
+
+  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'zero sekretu w drzewie vaulta');
+  const inVault = fs.readdirSync(ws).filter((name) => name.startsWith('.env'));
+  assert.deepEqual(inVault, [], 'żaden wariant .env* nie powstaje w workspace');
+});
+
+test('writeInboxEnv: LEGACY .env w vaultcie traci INBOX_*, reszta kluczy zostaje', (t) => {
+  const ws = makeWorkspace(t);
+  useSecretFile(t);
+  const legacy = path.join(ws, '.env');
+  fs.writeFileSync(legacy, 'INBOX_HUB_URL="https://stary"\nCLAUDE_CRON_WORKSPACE="/ws"\nINBOX_TOKEN="stary-tok"\n', 'utf-8');
+
+  writeInboxEnv(ws, 'https://hub.example', 'tok-nowy');
+
+  const content = fs.readFileSync(legacy, 'utf-8');
+  assert.ok(!content.includes('stary-tok'), 'stary token wyczyszczony z vaulta');
+  assert.ok(!content.includes('INBOX_TOKEN'), 'klucz tokenu usunięty, nie tylko wartość');
+  assert.ok(!content.includes('INBOX_HUB_URL'), 'adres huba też znika ze starej lokalizacji');
+  assert.ok(content.includes('CLAUDE_CRON_WORKSPACE="/ws"'), 'cudze klucze nietknięte');
+});
+
+test('writeInboxEnv: nowy plik sekretu powstaje z trybem 0600 (nie world-readable)', { skip: SKIP_WIN }, (t) => {
+  const ws = makeWorkspace(t);
+  useSecretFile(t);
 
   const envFile = writeInboxEnv(ws, 'https://hub.example', 'tok-1');
 
   assert.equal(fs.statSync(envFile).mode & 0o777, 0o600, 'sekret czytelny tylko dla właściciela');
 });
 
-test('writeInboxEnv: istniejący .env w 0644 zostaje ZAWĘŻONY do 0600', { skip: SKIP_WIN }, (t) => {
+test('writeInboxEnv: istniejący plik sekretu w 0644 zostaje ZAWĘŻONY do 0600', { skip: SKIP_WIN }, (t) => {
   // `mode` w writeFileSync działa wyłącznie przy TWORZENIU pliku — plik po starszej
   // instalacji zostałby przy 0644 z tokenem w środku, gdyby zabrakło chmodSync.
   const ws = makeWorkspace(t);
-  const envFile = path.join(ws, '.env');
-  fs.writeFileSync(envFile, 'CLAUDE_CRON_WORKSPACE="/ws"\n', { encoding: 'utf-8', mode: 0o644 });
-  fs.chmodSync(envFile, 0o644);
+  const secretFile = useSecretFile(t);
+  fs.writeFileSync(secretFile, 'CLAUDE_CRON_WORKSPACE="/ws"\n', { encoding: 'utf-8', mode: 0o644 });
+  fs.chmodSync(secretFile, 0o644);
 
   writeInboxEnv(ws, 'https://hub.example', 'tok-2');
 
-  assert.equal(fs.statSync(envFile).mode & 0o777, 0o600, 'uprawnienia domykane też na istniejącym pliku');
+  assert.equal(fs.statSync(secretFile).mode & 0o777, 0o600, 'uprawnienia domykane też na istniejącym pliku');
 });
 
 test('writeInboxEnv wróg: token z newline rzuca i NIE zostawia zapisanego pliku', (t) => {
   const ws = makeWorkspace(t);
+  const secretFile = useSecretFile(t);
 
   assert.throws(
     () => writeInboxEnv(ws, 'https://hub.example', 'tok\nNODE_OPTIONS=--require /tmp/evil.js'),
     /Niedozwolona wartość/,
   );
-  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'zero zapisu przy wrogiej wartości');
+  assert.equal(fs.existsSync(secretFile), false, 'zero zapisu przy wrogiej wartości');
 });
 
-test('writeInboxEnv wróg: wrogi token nie dopisuje linii do ISTNIEJĄCEGO .env', (t) => {
+test('writeInboxEnv wróg: wrogi token nie dopisuje linii do ISTNIEJĄCEGO pliku sekretu ani nie czyści legacy', (t) => {
   const ws = makeWorkspace(t);
-  const envFile = path.join(ws, '.env');
-  fs.writeFileSync(envFile, 'CLAUDE_CRON_WORKSPACE="/ws"\n', 'utf-8');
+  const secretFile = useSecretFile(t);
+  fs.writeFileSync(secretFile, 'CLAUDE_CRON_WORKSPACE="/ws"\n', 'utf-8');
+  const legacy = path.join(ws, '.env');
+  fs.writeFileSync(legacy, 'INBOX_TOKEN="stary-tok"\n', 'utf-8');
 
   assert.throws(() => writeInboxEnv(ws, 'https://hub.example', 'tok\nEVIL=1'), /Niedozwolona wartość/);
 
-  const content = fs.readFileSync(envFile, 'utf-8');
+  const content = fs.readFileSync(secretFile, 'utf-8');
   assert.equal(content, 'CLAUDE_CRON_WORKSPACE="/ws"\n', 'plik nietknięty');
   assert.ok(!content.includes('EVIL'), 'zero wstrzykniętej zmiennej');
+  assert.equal(
+    fs.readFileSync(legacy, 'utf-8'),
+    'INBOX_TOKEN="stary-tok"\n',
+    'pad walidacji nie kasuje działającej konfiguracji ze starej lokalizacji',
+  );
 });
 
 // === planGitignoreFix — czysta decyzja o naprawie (każda gałąź bez zakładania repo) ===

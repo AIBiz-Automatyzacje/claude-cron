@@ -33,14 +33,30 @@ const TOKEN = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90'
 const HUB_URL = 'https://hub.example.com';
 const CODE = `puls-inbox:${HUB_URL}#${TOKEN}`;
 
+// Sekret skrzynki NIE leży w vaultcie (review fazy 3, P1: agent auto-reply czyta vault
+// narzędziem Read na polecenie obcej osoby) — instalacja pisze go do pliku wskazanego przez
+// resolveInboxSecretFile. Testy wskazują ten plik przez INBOX_ENV_FILE, w katalogu ROZŁĄCZNYM
+// z workspace'em, żeby powrót zapisu do vaulta nie przeszedł niezauważony.
+let currentSecretFile = null;
+
 function makeWorkspace(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-onboard-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const secretDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-onboard-secret-'));
+  const prev = process.env.INBOX_ENV_FILE;
+  currentSecretFile = path.join(secretDir, 'inbox.env');
+  process.env.INBOX_ENV_FILE = currentSecretFile;
+  t.after(() => {
+    if (prev === undefined) delete process.env.INBOX_ENV_FILE;
+    else process.env.INBOX_ENV_FILE = prev;
+    currentSecretFile = null;
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(secretDir, { recursive: true, force: true });
+  });
   return dir;
 }
 
-function envPath(workspace) {
-  return path.join(workspace, '.env');
+function secretPath() {
+  return currentSecretFile;
 }
 
 const okProbe = async () => ({ ok: true, user: 'kacper' });
@@ -109,15 +125,18 @@ test('parseArgs: flaga bez wartości na końcu argv → odrzucone', () => {
 
 // ──────── runOnboard: happy path ────────
 
-test('poprawny kod + osiągalny hub → .env zapisany, rola w state, kod wyjścia OK', async (t) => {
+test('poprawny kod + osiągalny hub → sekret zapisany POZA vaultem, rola w state, kod wyjścia OK', async (t) => {
   const workspace = makeWorkspace(t);
 
   const result = await runOnboard({ code: CODE, role: 'agent', workspace }, { probe: okProbe });
 
   assert.equal(result.exitCode, EXIT.OK);
-  const content = fs.readFileSync(envPath(workspace), 'utf-8');
+  const content = fs.readFileSync(secretPath(), 'utf-8');
   assert.match(content, /^INBOX_HUB_URL="https:\/\/hub\.example\.com"$/m);
   assert.match(content, new RegExp(`^INBOX_TOKEN="${TOKEN}"$`, 'm'));
+  // Rola „agent" = na tej maszynie działa auto-reply z cwd = vault; token w vaultcie
+  // oddałby tożsamość pierwszej osobie, która przyśle odpowiednio sformułowane query.
+  assert.equal(fs.existsSync(path.join(workspace, '.env')), false, 'sekret NIE trafia do drzewa vaulta');
   assert.equal(db.getState(ROLE_STATE_KEY), 'agent');
   assert.match(result.message, /^\[ok\]/);
   assert.match(result.message, /kacper/, 'komunikat identyfikuje członka nazwą z probe');
@@ -139,7 +158,7 @@ test('powtórne wywołanie z tym samym kodem → idempotentne (jedna linia INBOX
   const second = await runOnboard({ code: CODE, role: 'client', workspace }, { probe: okProbe });
 
   assert.equal(second.exitCode, EXIT.OK);
-  const lines = fs.readFileSync(envPath(workspace), 'utf-8').split('\n');
+  const lines = fs.readFileSync(secretPath(), 'utf-8').split('\n');
   assert.equal(lines.filter((line) => line.startsWith('INBOX_TOKEN=')).length, 1);
   assert.equal(lines.filter((line) => line.startsWith('INBOX_HUB_URL=')).length, 1);
 });
@@ -154,7 +173,7 @@ test('guard naprawił .gitignore (fixed) → zapis wykonany, komunikat mówi o z
   });
 
   assert.equal(result.exitCode, EXIT.OK);
-  assert.ok(fs.existsSync(envPath(workspace)));
+  assert.ok(fs.existsSync(secretPath()));
   assert.match(result.message, /\.gitignore/, 'użytkownik ma wiedzieć, że instalator zmienił jego repozytorium');
 });
 
@@ -233,7 +252,7 @@ test('zły format kodu → EXIT.BAD_CODE, zero zapisów do .env i state, hub w o
   });
 
   assert.equal(result.exitCode, EXIT.BAD_CODE);
-  assert.equal(fs.existsSync(envPath(workspace)), false);
+  assert.equal(fs.existsSync(secretPath()), false);
   assert.deepEqual(role.calls, []);
   assert.equal(probeCalls, 0, 'walidacja formatu jest czysta — nie dotykamy sieci');
 });
@@ -248,7 +267,7 @@ test('hub nie odpowiedział poprawnie (zła wersja / timeout) → EXIT.HUB, zero
   });
 
   assert.equal(result.exitCode, EXIT.HUB);
-  assert.equal(fs.existsSync(envPath(workspace)), false);
+  assert.equal(fs.existsSync(secretPath()), false);
   assert.deepEqual(role.calls, []);
   assert.match(result.message, /v:2/, 'powód pada w komunikacie, żeby operator wiedział co naprawić');
 });
@@ -264,7 +283,7 @@ test('guard .gitignore = unfixable → EXIT.GITIGNORE, token NIE zapisany (fail-
   });
 
   assert.equal(result.exitCode, EXIT.GITIGNORE);
-  assert.equal(fs.existsSync(envPath(workspace)), false, 'sekret w repozytorium jest nieodwracalny — nie zapisujemy');
+  assert.equal(fs.existsSync(secretPath()), false, 'sekret w repozytorium jest nieodwracalny — nie zapisujemy');
   assert.deepEqual(role.calls, []);
   assert.match(result.message, /git rm --cached/, 'komunikat niesie konkretną instrukcję naprawy');
 });
@@ -280,7 +299,7 @@ test('guard .gitignore = unknown (git niedostępny) → EXIT.GITIGNORE, token NI
   });
 
   assert.equal(result.exitCode, EXIT.GITIGNORE);
-  assert.equal(fs.existsSync(envPath(workspace)), false, 'nierozstrzygnięty guard odmawia operacji');
+  assert.equal(fs.existsSync(secretPath()), false, 'nierozstrzygnięty guard odmawia operacji');
   assert.deepEqual(role.calls, []);
 });
 

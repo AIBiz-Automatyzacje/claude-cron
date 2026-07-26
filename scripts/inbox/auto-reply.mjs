@@ -112,7 +112,11 @@ export async function main({ client = inboxClient } = {}) {
   await loadEnv();
   const { INBOX_SKRZYNKA_PATH, INBOX_ARCHIVE_DIR } = process.env;
   const model = process.env.INBOX_ASSISTANT_MODEL || 'sonnet';
-  // Vault root z wymuszonej przez env-loader ścieżki Skrzynki (<vault>/Zadania/Skrzynka.md)
+  // Vault root z wymuszonej przez env-loader ścieżki Skrzynki (<vault>/Zadania/Skrzynka.md).
+  // UWAGA na inwariant bezpieczeństwa: cwd spawnu to katalog, po którym agent czyta na
+  // polecenie OBCEJ osoby (prompt = treść cudzej wiadomości, zero separacji instrukcji od
+  // danych). Dlatego sekret skrzynki NIE MOŻE tu leżeć — mieszka poza vaultem
+  // (`resolveInboxSecretFile` → `data/inbox.env`); nie przywracaj zapisu do `<vault>/.env`.
   const vaultRoot = path.dirname(path.dirname(INBOX_SKRZYNKA_PATH));
 
   // Atomowy claim po stronie huba: zwraca zajętą wiadomość albo null (brak kandydata /

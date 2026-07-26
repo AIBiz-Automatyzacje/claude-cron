@@ -11,6 +11,8 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { resolveInboxSecretFile } from './env-loader.mjs';
+
 // Prefiks kodu zaproszenia do skrzynki zespołowej — MUSI być identyczny z
 // INVITE_CODE_PREFIX w server.js (huba). parseInviteCode to dokładny odwrotnik
 // buildInviteCode: `${INVITE_CODE_PREFIX}${funnelUrl}#${token}`.
@@ -113,20 +115,47 @@ export function upsertDotenvLine(envContent, key, value) {
   return `${prefix}${line}\n`;
 }
 
-// === I/O shell: dopisz INBOX_HUB_URL/INBOX_TOKEN do .env workspace'u (format env-loader) ===
+// Klucze skrzynki, które onboarding usuwa ze starego `<workspace>/.env` (patrz niżej).
+const LEGACY_INBOX_KEYS = /^(INBOX_HUB_URL|INBOX_TOKEN)=/;
+
+// === I/O shell: usuń sekret skrzynki ze STAREJ lokalizacji w vaultcie ===
+// Do 07.2026 onboarding zapisywał INBOX_* do `<workspace>/.env`, czyli dokładnie tam, gdzie
+// czyta job auto-reply (`claude -p` z `cwd` = vault, prompt = niezaufana treść cudzej
+// wiadomości). Samo przeniesienie ZAPISU nie zamyka dziury na maszynie, która ten plik już
+// ma, więc onboarding kasuje z niego dwie linie skrzynki. Pozostałe klucze usera zostają
+// nietknięte, pliku nie usuwamy — nie jest nasz. Zwraca true, gdy coś faktycznie usunięto.
+export function stripInboxSecretsFromLegacyEnv(workspace) {
+  if (typeof workspace !== 'string' || workspace.length === 0) return false;
+  const legacyFile = path.join(workspace, '.env');
+  if (!fs.existsSync(legacyFile)) return false;
+  const before = fs.readFileSync(legacyFile, 'utf-8');
+  const after = before.split('\n').filter((line) => !LEGACY_INBOX_KEYS.test(line)).join('\n');
+  if (after === before) return false;
+  fs.writeFileSync(legacyFile, after, 'utf-8');
+  return true;
+}
+
+// === I/O shell: zapisz INBOX_HUB_URL/INBOX_TOKEN do pliku sekretu POZA vaultem ===
 // Osobny mechanizm od persistEnvVar (shell RC / rejestr Windows), bo joby skrzynki czytają
-// konfigurację z workspace .env przez env-loader — nie z env powłoki. Idempotentnie przez
-// upsertDotenvLine (re-run podmienia, nie duplikuje).
+// konfigurację przez env-loader — nie z env powłoki. Lokalizacja pochodzi z jednego źródła
+// prawdy (`resolveInboxSecretFile`: `INBOX_ENV_FILE` albo `data/inbox.env` w katalogu
+// instalacji) i CELOWO nie leży w workspace: agent auto-reply czyta vault narzędziem Read
+// na polecenie obcej osoby, więc token w vaultcie to eksfiltracja tożsamości jednym pytaniem.
+// Idempotentnie przez upsertDotenvLine (re-run podmienia, nie duplikuje).
 export function writeInboxEnv(workspace, hubUrl, token) {
-  const envFile = path.join(workspace, '.env');
+  const envFile = resolveInboxSecretFile();
   let content = fs.existsSync(envFile) ? fs.readFileSync(envFile, 'utf-8') : '';
+  // Walidacja (rzucająca) PRZED jakimkolwiek zapisem — wroga wartość nie może zostawić
+  // pliku w półstanie ani skasować sekretu ze starej lokalizacji.
   content = upsertDotenvLine(content, 'INBOX_HUB_URL', hubUrl);
   content = upsertDotenvLine(content, 'INBOX_TOKEN', token);
+  fs.mkdirSync(path.dirname(envFile), { recursive: true });
   fs.writeFileSync(envFile, content, { encoding: 'utf-8', mode: SECRET_FILE_MODE });
-  // `mode` w writeFileSync działa TYLKO przy tworzeniu pliku — `.env` zostawiony przez
+  // `mode` w writeFileSync działa TYLKO przy tworzeniu pliku — plik zostawiony przez
   // wcześniejszą instalację (albo inne narzędzie) zostałby przy 0644 z tokenem w środku,
   // więc uprawnienia domykamy zawsze. Idempotentne; na Windows no-op poza flagą read-only.
   fs.chmodSync(envFile, SECRET_FILE_MODE);
+  stripInboxSecretsFromLegacyEnv(workspace);
   return envFile;
 }
 

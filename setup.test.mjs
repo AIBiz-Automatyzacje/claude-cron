@@ -609,10 +609,30 @@ async function startFakeHub(t, responseBody) {
   return `http://127.0.0.1:${port}`;
 }
 
+// Sekret skrzynki mieszka POZA vaultem (review fazy 3, P1: job auto-reply spawnuje
+// `claude -p` z cwd = vault i Read/Glob/Grep, a promptem jest treść cudzej wiadomości —
+// token w vaultcie = eksfiltracja tożsamości jednym pytaniem). Testy wskazują jego plik
+// przez INBOX_ENV_FILE, w katalogu ROZŁĄCZNYM z workspace'em.
+let currentSecretFile = null;
+
 function makeWorkspace(t) {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-inbox-ws-'));
-  t.after(() => fs.rmSync(ws, { recursive: true, force: true }));
+  const secretDir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-inbox-secret-'));
+  const prev = process.env.INBOX_ENV_FILE;
+  currentSecretFile = path.join(secretDir, 'inbox.env');
+  process.env.INBOX_ENV_FILE = currentSecretFile;
+  t.after(() => {
+    if (prev === undefined) delete process.env.INBOX_ENV_FILE;
+    else process.env.INBOX_ENV_FILE = prev;
+    currentSecretFile = null;
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(secretDir, { recursive: true, force: true });
+  });
   return ws;
+}
+
+function secretPath() {
+  return currentSecretFile;
 }
 
 test('askInboxInvite: puste wejście → pomija, nie tworzy .env', async (t) => {
@@ -621,7 +641,7 @@ test('askInboxInvite: puste wejście → pomija, nie tworzy .env', async (t) => 
 
   await askInboxInvite(fakeRl(''), ws);
 
-  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'brak kodu = brak zapisu');
+  assert.equal(fs.existsSync(secretPath()), false, 'brak kodu = brak zapisu');
 });
 
 test('askInboxInvite: zły format kodu → pomija bez rzucania, .env nie powstaje', async (t) => {
@@ -630,7 +650,7 @@ test('askInboxInvite: zły format kodu → pomija bez rzucania, .env nie powstaj
 
   await askInboxInvite(fakeRl('nie-jest-kodem'), ws);
 
-  assert.equal(fs.existsSync(path.join(ws, '.env')), false);
+  assert.equal(fs.existsSync(secretPath()), false);
 });
 
 test('askInboxInvite: probe-fail (zła wersja huba) NIE rzuca i NIE zapisuje env', async (t) => {
@@ -641,19 +661,36 @@ test('askInboxInvite: probe-fail (zła wersja huba) NIE rzuca i NIE zapisuje env
   // Nie rzuca (wzorzec notify-push: warn przy padzie, nie fail setupu).
   await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-abc`), ws);
 
-  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'pad probe = env NIE zapisany');
+  assert.equal(fs.existsSync(secretPath()), false, 'pad probe = env NIE zapisany');
 });
 
-test('askInboxInvite: probe OK (v:1) → zapisuje INBOX_HUB_URL/INBOX_TOKEN do .env workspace', async (t) => {
+test('askInboxInvite: probe OK (v:1) → zapisuje INBOX_HUB_URL/INBOX_TOKEN do pliku sekretu POZA vaultem', async (t) => {
   snapshotInboxEnv(t);
   const ws = makeWorkspace(t);
   const hubUrl = await startFakeHub(t, { v: 1, user: 'kacper', hub: 'puls' });
 
   await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-xyz`), ws);
 
-  const envContent = fs.readFileSync(path.join(ws, '.env'), 'utf-8');
+  const envContent = fs.readFileSync(secretPath(), 'utf-8');
   assert.ok(envContent.includes(`INBOX_HUB_URL="${hubUrl}"`), 'hub URL zapisany');
   assert.ok(envContent.includes('INBOX_TOKEN="tok-xyz"'), 'token zapisany');
+  // Vault jest cwd asystenta auto-reply, który czyta pliki na polecenie obcej osoby.
+  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'token NIE trafia do drzewa vaulta');
+});
+
+test('askInboxInvite: LEGACY .env z tokenem w vaultcie zostaje wyczyszczony przy onboardingu', async (t) => {
+  snapshotInboxEnv(t);
+  const ws = makeWorkspace(t);
+  const legacy = path.join(ws, '.env');
+  fs.writeFileSync(legacy, 'INBOX_TOKEN="stary-tok"\nOBSIDIAN_KEY="zostaje"\n', 'utf-8');
+  const hubUrl = await startFakeHub(t, { v: 1, user: 'kacper', hub: 'puls' });
+
+  await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-nowy`), ws);
+
+  const legacyContent = fs.readFileSync(legacy, 'utf-8');
+  assert.ok(!legacyContent.includes('stary-tok'), 'sekret z poprzedniej wersji znika z vaulta');
+  assert.ok(!legacyContent.includes('INBOX_TOKEN'), 'klucz tokenu usunięty ze starej lokalizacji');
+  assert.ok(legacyContent.includes('OBSIDIAN_KEY="zostaje"'), 'cudze klucze nietknięte');
 });
 
 test('askInboxInvite: probe nie zostawia INBOX_* w process.env (bez side-effectu)', async (t) => {
@@ -708,7 +745,7 @@ test('askInboxInvite: guard ok → .env zapisany, rola maszyny „client" w stat
 
   await askInboxInvite(fakeRl(`puls-inbox:${hubUrl}#tok-ok`), ws, { ensureIgnored: guard.ensureIgnored });
 
-  assert.equal(fs.existsSync(path.join(ws, '.env')), true, 'guard przepuścił = zapisujemy');
+  assert.equal(fs.existsSync(secretPath()), true, 'guard przepuścił = zapisujemy');
   assert.equal(db.getState(ROLE_STATE_KEY), 'client', 'laptop człowieka to klient skrzynki');
   assert.deepEqual(guard.calls, [ws], 'guard pytany o workspace, do którego piszemy');
 });
@@ -726,7 +763,7 @@ test('askInboxInvite: guard fixed → zapis wykonany, komunikat mówi o zmianie 
     setRole: role.setRole,
   });
 
-  assert.equal(fs.existsSync(path.join(ws, '.env')), true, 'naprawiony .gitignore = zapis wolno wykonać');
+  assert.equal(fs.existsSync(secretPath()), true, 'naprawiony .gitignore = zapis wolno wykonać');
   assert.deepEqual(role.calls, ['setRole']);
   const output = logs.join('\n');
   assert.match(output, /\.gitignore/, 'użytkownik ma wiedzieć, że instalator zmienił jego repozytorium');
@@ -746,7 +783,7 @@ test('askInboxInvite: guard unfixable → brak .env, brak roli, instrukcja napra
     setRole: role.setRole,
   });
 
-  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'sekret w repozytorium jest nieodwracalny — nie zapisujemy');
+  assert.equal(fs.existsSync(secretPath()), false, 'sekret w repozytorium jest nieodwracalny — nie zapisujemy');
   assert.deepEqual(role.calls, [], 'bez konfiguracji rola nie ma prawa trafić do state');
   assert.match(logs.join('\n'), /git rm --cached/, 'komunikat niesie konkretną instrukcję naprawy');
 });
@@ -763,7 +800,7 @@ test('askInboxInvite: guard unknown (git niedostępny) → fail-closed, brak .en
     setRole: role.setRole,
   });
 
-  assert.equal(fs.existsSync(path.join(ws, '.env')), false, 'nierozstrzygnięty guard odmawia operacji');
+  assert.equal(fs.existsSync(secretPath()), false, 'nierozstrzygnięty guard odmawia operacji');
   assert.deepEqual(role.calls, []);
   assert.match(logs.join('\n'), /git/i, 'człowiek musi wiedzieć, czego brakuje');
 });
@@ -790,7 +827,7 @@ test('askInboxInvite: zły format kodu → guard nie pytany, zero zapisów', asy
 
   assert.deepEqual(guard.calls, [], 'walidacja formatu jest czysta — bez skutków ubocznych');
   assert.deepEqual(role.calls, []);
-  assert.equal(fs.existsSync(path.join(ws, '.env')), false);
+  assert.equal(fs.existsSync(secretPath()), false);
 });
 
 test('askInboxInvite: pad probe → guard nie pytany (walidacja kodu przed skutkami ubocznymi)', async (t) => {
@@ -807,5 +844,5 @@ test('askInboxInvite: pad probe → guard nie pytany (walidacja kodu przed skutk
 
   assert.deepEqual(guard.calls, [], 'zły kod nie może zmieniać .gitignore użytkownika');
   assert.deepEqual(role.calls, []);
-  assert.equal(fs.existsSync(path.join(ws, '.env')), false);
+  assert.equal(fs.existsSync(secretPath()), false);
 });
