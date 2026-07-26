@@ -7,3 +7,6 @@ data/
 .DS_Store
 
 .playwright-mcp/
+
+# backupy sync-template (ścieżka odwrotu przy aktualizacji .claude z szablonu)
+.claude/.backups/
