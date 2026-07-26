@@ -86,8 +86,11 @@ curl -i -X POST http://localhost:7777/api/inbox/members \
 
 ## Powiązane
 
-- `docs/active/team-os-hub-api/review-faza-1.md` (finding P2 · KOD, `server.js:611`)
+- `docs/completed/team-os-hub-api/review-faza-1.md` (finding P2 · KOD, `server.js:611` — numeracja z czasu review; dziś `isCrossOriginRequest` w `server.js`, użycie na `/api/inbox/members`)
 - Wzorzec bramek `/ask` i guardu XFF w `server.js` — patrz CLAUDE.md, sekcja „server.js — HTTP i granice bezpieczeństwa".
+- `docs/solutions/auth-issues/2026-07-26-sekret-w-drzewie-czytanym-przez-agenta-eksfiltracja-prompt-injection.md` —
+  ten sam kształt defektu na innym kanale (guard `.gitignore` broni przed gitem, nie przed agentem czytającym `cwd`).
+  Wspólny wniosek: **guardy są ortogonalne, sekret potrzebuje jednego na każdy kanał**.
 
 ## Kontekst
 
