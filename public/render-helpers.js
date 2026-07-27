@@ -229,10 +229,37 @@
     };
   }
 
+  // === Widoczność zakładek zależna od oglądanej instancji ===
+  // Zespół to administracja HUBEM skrzynki, a hubem jest wyłącznie instancja ze
+  // skonfigurowanym Funnelem (WEBHOOK_BASE_URL) — bez niego `POST /api/inbox/members`
+  // i tak odmawia (503, kod zaproszenia bez publicznego URL-a jest bezużyteczny),
+  // a lista pokazywałaby PUSTĄ lokalną `inbox.db`, która nie jest hubem żadnego zespołu.
+  // Kryterium jest „ta instancja ma Funnela", NIE „przełącznik stoi na VPS": dashboard
+  // otwarty wprost na hubie (przez Tailscale) działa w trybie `local` i musi tę zakładkę
+  // pokazywać — tam ona jest jedynym miejscem dodawania członków.
+  const HUB_ONLY_TABS = ['team'];
+  const DEFAULT_TAB = 'jobs';
+
+  // Fail-closed: cokolwiek innego niż literalne `true` znaczy „nie wiem" → chowamy
+  // administrację hubem (stan huba bywa nieznany, gdy VPS jest nieosiągalny).
+  function isTabAvailable(tab, state) {
+    if (!HUB_ONLY_TABS.includes(tab)) return true;
+    return (state || {}).hubConfigured === true;
+  }
+
+  // Zakładka, która ma być aktywna po zmianie środowiska — gdy bieżąca właśnie
+  // zniknęła, cofamy użytkownika na Zadania zamiast zostawiać widok bez zakładki.
+  // Brak nazwy (np. `querySelector('.tab.active')` zwrócił null) też ląduje na Zadaniach.
+  function resolveVisibleTab(tab, state) {
+    if (typeof tab !== 'string' || !tab) return DEFAULT_TAB;
+    return isTabAvailable(tab, state) ? tab : DEFAULT_TAB;
+  }
+
   const api = {
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
     parseCronForCalendar, computeWeekOccurrences, startOfWeek, formatHourMinute,
     overlapsMaintenanceWindow,
+    isTabAvailable, resolveVisibleTab, DEFAULT_TAB,
     validateMemberName, memberRowData, MEMBER_NAME_MAX,
   };
 

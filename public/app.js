@@ -10,6 +10,11 @@ let expandedRuns = new Set(); // track expanded run details
 let currentEnv = 'local'; // 'local' or 'vps'
 let vpsConfigured = false;
 let webhookBaseUrl = ''; // public URL for webhook links (from VPS env)
+// Funnel KAŻDEJ instancji z osobna — `webhookBaseUrl` wyżej celowo preferuje VPS-owy
+// (webhook musi być publiczny), więc nie odpowiada na pytanie „czy TA instancja jest
+// hubem". Widoczność zakładki Zespół potrzebuje właśnie tego rozróżnienia.
+let localWebhookBaseUrl = '';
+let vpsWebhookBaseUrl = '';
 let maintenanceWindow = null; // { startHour, startMin, endHour, endMin } z /api/env — okno restartu VPS (R5)
 
 // Guard poll() — tanie podpisy payloadu, pomijamy innerHTML gdy bez zmian.
@@ -71,6 +76,7 @@ async function switchEnv(env) {
     btn.classList.toggle('active', btn.dataset.env === env);
   });
   document.body.dataset.env = env;
+  applyTabVisibility(); // Zespół istnieje tylko po stronie huba — przed pobraniem danych
   document.body.classList.add('env-loading'); // dim + spinner; stare dane zostają do nadejścia nowych
   expandedRuns.clear();
   lastJobsSig = null; // wymuś re-render po zmianie env (te same ID, inne dane)
@@ -84,17 +90,36 @@ async function switchEnv(env) {
 }
 
 // === Tabs ===
-// data-tab: jobs|history|skills → sekcje .view#view-${tab} (demo CSS).
+// data-tab: jobs|history|skills|team → sekcje .view#view-${tab} (demo CSS).
+function activateTab(name) {
+  const btn = document.querySelector(`.tab[data-tab="${name}"]`);
+  const view = document.getElementById(`view-${name}`);
+  if (!btn || !view) return;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  btn.classList.add('active');
+  view.classList.add('active');
+  // Zespół ładuje się leniwie — dopiero przy pierwszym wejściu w zakładkę (nie w init).
+  if (name === 'team') loadMembers();
+}
+
 document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById(`view-${tab.dataset.tab}`).classList.add('active');
-    // Zespół ładuje się leniwie — dopiero przy pierwszym wejściu w zakładkę (nie w init).
-    if (tab.dataset.tab === 'team') loadMembers();
-  });
+  tab.addEventListener('click', () => activateTab(tab.dataset.tab));
 });
+
+// Widoczność zakładek zależy od tego, czy OGLĄDANA instancja jest hubem skrzynki
+// (ma Funnela), a nie od pozycji przełącznika — dashboard otwarty wprost na hubie
+// przez Tailscale działa w trybie `local` i musi pokazywać Zespół. Wołane po każdej
+// zmianie źródła danych: init i switchEnv.
+function applyTabVisibility() {
+  const hubConfigured = !!(currentEnv === 'vps' ? vpsWebhookBaseUrl : localWebhookBaseUrl);
+  document.querySelectorAll('.tab').forEach(btn => {
+    btn.hidden = !RenderHelpers.isTabAvailable(btn.dataset.tab, { hubConfigured });
+  });
+  const active = document.querySelector('.tab.active');
+  const next = RenderHelpers.resolveVisibleTab(active ? active.dataset.tab : null, { hubConfigured });
+  if (!active || active.dataset.tab !== next) activateTab(next);
+}
 
 // === Modal: segment typu zadania (Skill/Skrypt) ===
 document.querySelectorAll('#job-type-seg .seg-opt').forEach(btn => {
@@ -1464,17 +1489,20 @@ async function init() {
   try {
     const env = await fetch('/api/env').then(r => r.json());
     vpsConfigured = env.vps_configured;
-    webhookBaseUrl = env.webhook_base_url || '';
+    localWebhookBaseUrl = env.webhook_base_url || '';
+    webhookBaseUrl = localWebhookBaseUrl;
     maintenanceWindow = env.maintenance_window || null;
     if (vpsConfigured) {
       document.getElementById('env-toggle').style.display = '';
       // Fetch VPS webhook_base_url
       try {
         const vpsEnv = await fetch('/api/vps/env').then(r => r.json());
-        if (vpsEnv.webhook_base_url) webhookBaseUrl = vpsEnv.webhook_base_url;
-      } catch { /* VPS may be unreachable */ }
+        vpsWebhookBaseUrl = vpsEnv.webhook_base_url || '';
+        if (vpsWebhookBaseUrl) webhookBaseUrl = vpsWebhookBaseUrl;
+      } catch { /* VPS may be unreachable — zostaje pusty, czyli „hub nieznany" */ }
     }
   } catch { /* local only */ }
+  applyTabVisibility();
 
   await loadSkills();
   await loadJobs();

@@ -6,6 +6,7 @@ const {
   parseCronForCalendar, computeWeekOccurrences, startOfWeek,
   overlapsMaintenanceWindow,
   validateMemberName, memberRowData, MEMBER_NAME_MAX,
+  isTabAvailable, resolveVisibleTab,
 } = require('./render-helpers');
 
 const MAINTENANCE_WINDOW = { startHour: 2, startMin: 0, endHour: 2, endMin: 15 };
@@ -362,4 +363,38 @@ test('memberRowData: braki pól → bezpieczny fallback (myślnik), nie rzuca', 
 
 test('memberRowData: puste/whitespace name → myślnik (nie pusty wiersz)', () => {
   assert.equal(memberRowData({ name: '   ' }).name, '—');
+});
+
+// === isTabAvailable / resolveVisibleTab ===
+
+test('isTabAvailable: Zespół tylko gdy oglądana instancja jest hubem', () => {
+  assert.equal(isTabAvailable('team', { hubConfigured: true }), true);
+  assert.equal(isTabAvailable('team', { hubConfigured: false }), false);
+});
+
+test('isTabAvailable: pozostałe zakładki dostępne niezależnie od huba', () => {
+  for (const tab of ['jobs', 'history', 'skills']) {
+    assert.equal(isTabAvailable(tab, { hubConfigured: false }), true, `${tab} nie zależy od huba`);
+    assert.equal(isTabAvailable(tab, { hubConfigured: true }), true);
+  }
+});
+
+test('isTabAvailable: brak/zły stan huba traktowany jak brak huba (fail-closed)', () => {
+  assert.equal(isTabAvailable('team', {}), false, 'brak pola → nie pokazuj administracji hubem');
+  assert.equal(isTabAvailable('team', undefined), false);
+  assert.equal(isTabAvailable('team', { hubConfigured: 'yes' }), false, 'tylko literalne true otwiera zakładkę');
+});
+
+test('resolveVisibleTab: zakładka dostępna zostaje aktywna', () => {
+  assert.equal(resolveVisibleTab('team', { hubConfigured: true }), 'team');
+  assert.equal(resolveVisibleTab('history', { hubConfigured: false }), 'history');
+});
+
+test('resolveVisibleTab: aktywna zakładka znika po przełączeniu env → fallback na Zadania', () => {
+  assert.equal(resolveVisibleTab('team', { hubConfigured: false }), 'jobs');
+});
+
+test('resolveVisibleTab: nieznana zakładka nie wywraca renderu', () => {
+  assert.equal(resolveVisibleTab(undefined, { hubConfigured: false }), 'jobs');
+  assert.equal(resolveVisibleTab('nieistniejaca', { hubConfigured: true }), 'nieistniejaca');
 });
