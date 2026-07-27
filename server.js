@@ -14,6 +14,7 @@ const platform = require('./lib/platform');
 const keepAwake = require('./lib/keep-awake');
 const inboxSeed = require('./lib/inbox-seed');
 const inboxDb = require('./lib/inbox-db');
+const { isSelfHub } = require('./lib/inbox-hub');
 const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
 const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
@@ -219,8 +220,19 @@ async function handleApi(req, res) {
   const { method, path: urlPath, segments, params } = matchRoute(req.method, req.url);
 
   // GET /api/env — environment info
+  // is_inbox_hub: czy administracja członkami zespołu ma na tej instancji sens. Samo
+  // `webhook_base_url` nie wystarcza — członek z własnym Funnelem (dla webhooków) też je ma,
+  // a jego `inbox.db` jest pusta. Drugi warunek (istnieją członkowie) ratuje hub, na którym
+  // onboarding admina padł: skrzynka istnieje, tylko `INBOX_HUB_URL` nie zdążył się zapisać,
+  // a bez zakładki nie dałoby się tego naprawić z dashboardu.
   if (method === 'GET' && urlPath === '/api/env') {
-    return json(res, { vps_configured: !!VPS_API_URL, webhook_base_url: WEBHOOK_BASE_URL, maintenance_window: MAINTENANCE_WINDOW });
+    const isHub = isSelfHub(inboxHubUrl, WEBHOOK_BASE_URL) || inboxDb.listMembers().length > 0;
+    return json(res, {
+      vps_configured: !!VPS_API_URL,
+      webhook_base_url: WEBHOOK_BASE_URL,
+      is_inbox_hub: isHub,
+      maintenance_window: MAINTENANCE_WINDOW,
+    });
   }
 
   // Proxy /api/vps/* -> VPS instance /api/*
@@ -720,6 +732,19 @@ inboxSeed.seedInboxSyncJob({ onJobCreated: () => scheduler.rescheduleAll() }).th
   const jobName = SEEDED_JOB_NAMES[result];
   if (jobName) console.log(`[seed] Utworzono job "${jobName}" (inbox skonfigurowany, joba brakowało)`);
 });
+
+// Adres huba skrzynki czytany RAZ przy starcie — rozstrzyga `is_inbox_hub` w /api/env.
+// Nie przez `loadEnv()`, bo ten mutuje `process.env`, a script-joby dziedziczą env daemona
+// (ta sama pułapka, przed którą broni się snapshot w inbox-seed). Fire-and-forget: gdy pliku
+// nie ma albo jest nieczytelny, zostaje pusty string, czyli „nie hub" (fail-closed).
+let inboxHubUrl = '';
+import('./scripts/inbox/env-loader.mjs')
+  .then(async ({ resolveInboxSecretFile }) => {
+    const raw = await fs.promises.readFile(resolveInboxSecretFile(), 'utf8');
+    const match = raw.match(/^INBOX_HUB_URL=(.*)$/m);
+    if (match) inboxHubUrl = match[1].trim().replace(/^["']|["']$/g, '');
+  })
+  .catch(() => { /* brak pliku sekretu = maszyna bez skrzynki = nie hub */ });
 
 // Start scheduler
 scheduler.start();

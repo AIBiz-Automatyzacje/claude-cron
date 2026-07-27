@@ -10,11 +10,12 @@ let expandedRuns = new Set(); // track expanded run details
 let currentEnv = 'local'; // 'local' or 'vps'
 let vpsConfigured = false;
 let webhookBaseUrl = ''; // public URL for webhook links (from VPS env)
-// Funnel KAŻDEJ instancji z osobna — `webhookBaseUrl` wyżej celowo preferuje VPS-owy
-// (webhook musi być publiczny), więc nie odpowiada na pytanie „czy TA instancja jest
-// hubem". Widoczność zakładki Zespół potrzebuje właśnie tego rozróżnienia.
-let localWebhookBaseUrl = '';
-let vpsWebhookBaseUrl = '';
+// Czy DANA instancja jest hubem skrzynki (`is_inbox_hub` z /api/env) — osobno dla lokalnej
+// i dla VPS-a, bo zakładkę Zespół pokazujemy dla tej, na którą patrzy przełącznik.
+// Świadomie NIE `webhookBaseUrl`: hub musi mieć Funnel, ale członek z własnymi webhookami
+// też go ma — kierunek `INBOX_HUB_URL` rozstrzyga to jednoznacznie (patrz lib/inbox-hub.js).
+let localIsInboxHub = false;
+let vpsIsInboxHub = false;
 let maintenanceWindow = null; // { startHour, startMin, endHour, endMin } z /api/env — okno restartu VPS (R5)
 
 // Guard poll() — tanie podpisy payloadu, pomijamy innerHTML gdy bez zmian.
@@ -107,12 +108,12 @@ document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => activateTab(tab.dataset.tab));
 });
 
-// Widoczność zakładek zależy od tego, czy OGLĄDANA instancja jest hubem skrzynki
-// (ma Funnela), a nie od pozycji przełącznika — dashboard otwarty wprost na hubie
-// przez Tailscale działa w trybie `local` i musi pokazywać Zespół. Wołane po każdej
-// zmianie źródła danych: init i switchEnv.
+// Widoczność zakładek zależy od tego, czy OGLĄDANA instancja jest hubem skrzynki,
+// a nie od pozycji przełącznika — dashboard otwarty wprost na hubie przez Tailscale
+// działa w trybie `local` i musi pokazywać Zespół. Wołane po każdej zmianie źródła
+// danych: init i switchEnv.
 function applyTabVisibility() {
-  const hubConfigured = !!(currentEnv === 'vps' ? vpsWebhookBaseUrl : localWebhookBaseUrl);
+  const hubConfigured = currentEnv === 'vps' ? vpsIsInboxHub : localIsInboxHub;
   document.querySelectorAll('.tab').forEach(btn => {
     btn.hidden = !RenderHelpers.isTabAvailable(btn.dataset.tab, { hubConfigured });
   });
@@ -1489,17 +1490,17 @@ async function init() {
   try {
     const env = await fetch('/api/env').then(r => r.json());
     vpsConfigured = env.vps_configured;
-    localWebhookBaseUrl = env.webhook_base_url || '';
-    webhookBaseUrl = localWebhookBaseUrl;
+    localIsInboxHub = env.is_inbox_hub === true;
+    webhookBaseUrl = env.webhook_base_url || '';
     maintenanceWindow = env.maintenance_window || null;
     if (vpsConfigured) {
       document.getElementById('env-toggle').style.display = '';
       // Fetch VPS webhook_base_url
       try {
         const vpsEnv = await fetch('/api/vps/env').then(r => r.json());
-        vpsWebhookBaseUrl = vpsEnv.webhook_base_url || '';
-        if (vpsWebhookBaseUrl) webhookBaseUrl = vpsWebhookBaseUrl;
-      } catch { /* VPS may be unreachable — zostaje pusty, czyli „hub nieznany" */ }
+        vpsIsInboxHub = vpsEnv.is_inbox_hub === true;
+        if (vpsEnv.webhook_base_url) webhookBaseUrl = vpsEnv.webhook_base_url;
+      } catch { /* VPS nieosiągalny — zostaje false, czyli „nie hub" (fail-closed) */ }
     }
   } catch { /* local only */ }
   applyTabVisibility();
