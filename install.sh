@@ -251,13 +251,16 @@ ensure_dependencies() {
 
 # curl|bash zajmuje stdin pipe'em ze skryptem → setup.mjs nie może czytać
 # odpowiedzi z klawiatury. Podpinamy /dev/tty, gdy jest dostępne.
+# --disable-warning=ExperimentalWarning: setup.mjs czyta lib/db (node:sqlite),
+# a ostrzeżenie o eksperymentalnym module wypadłoby POMIĘDZY pytaniami setupu —
+# dla kursanta nieodróżnialne od błędu. Ta sama flaga co w package.json.
 handoff_to_setup() {
   info "Przekazuję sterowanie do setup.mjs..."
   if [ -r /dev/tty ]; then
-    exec "$NODE_BIN" "$REPO_DIR/setup.mjs" < /dev/tty
+    exec "$NODE_BIN" --disable-warning=ExperimentalWarning "$REPO_DIR/setup.mjs" < /dev/tty
   else
     warn "Brak /dev/tty — setup uruchamiam bez interaktywnego stdin (środowisko nieinteraktywne)."
-    exec "$NODE_BIN" "$REPO_DIR/setup.mjs"
+    exec "$NODE_BIN" --disable-warning=ExperimentalWarning "$REPO_DIR/setup.mjs"
   fi
 }
 

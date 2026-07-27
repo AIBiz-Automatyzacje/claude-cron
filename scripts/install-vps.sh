@@ -1583,8 +1583,12 @@ setup_team_os_hub() {
 # komenda dla `su - claude -c`. KAŻDA wartość przez %q, bo kod zaproszenia
 # zawiera `#` (gołe ucięłoby resztę komendy jako komentarz), `:` i `//`,
 # a ścieżka workspace'u bywa ze spacją (wzorzec build_cron_cmd).
+# --disable-warning=ExperimentalWarning: CLI dotyka lib/db (node:sqlite), a gołe
+# `node` wypisałoby ostrzeżenie o eksperymentalnym module POMIĘDZY pytaniami
+# instalatora — dla kursanta nieodróżnialne od błędu. Ta sama flaga co w
+# package.json, w unicie systemd i w setup.mjs.
 team_os_onboard_cmd() {
-  printf 'cd %q && node scripts/inbox/onboard.mjs --workspace %q --code %q --role %q' \
+  printf 'cd %q && node --disable-warning=ExperimentalWarning scripts/inbox/onboard.mjs --workspace %q --code %q --role %q' \
     "$1" "$2" "$3" "$4"
 }
 
@@ -1631,7 +1635,7 @@ team_os_warn_onboard_failure() {
       warn "Skrzynka NIE została skonfigurowana: instalator zawołał CLI onboardingu niepoprawnie (szczegóły powyżej) — to niezgodność wersji. Zaktualizuj kod: su - $CLAUDE_USER -c 'cd $INSTALL_DIR && git pull' i wklej ponownie komendę instalacji."
       ;;
     *)
-      warn "Skrzynka NIE została skonfigurowana: CLI onboardingu zakończyło się kodem $1. Diagnoza: su - $CLAUDE_USER -c 'cd $INSTALL_DIR && node scripts/inbox/onboard.mjs' (bez argumentów pokaże sposób użycia)."
+      warn "Skrzynka NIE została skonfigurowana: CLI onboardingu zakończyło się kodem $1. Diagnoza: su - $CLAUDE_USER -c 'cd $INSTALL_DIR && node --disable-warning=ExperimentalWarning scripts/inbox/onboard.mjs' (bez argumentów pokaże sposób użycia)."
       ;;
   esac
 }

@@ -256,7 +256,10 @@ function Invoke-Setup {
         [Parameter(Mandatory = $true)][string] $RepoDir
     )
     Write-Host "[info] Przekazuje sterowanie do setup.mjs..." -ForegroundColor Cyan
-    & $NodeExe (Join-Path $RepoDir "setup.mjs")
+    # --disable-warning=ExperimentalWarning: setup.mjs czyta lib/db (node:sqlite),
+    # a ostrzezenie o eksperymentalnym module wypadloby POMIEDZY pytaniami setupu -
+    # dla kursanta nieodroznialne od bledu. Ta sama flaga co w package.json.
+    & $NodeExe "--disable-warning=ExperimentalWarning" (Join-Path $RepoDir "setup.mjs")
     $code = $LASTEXITCODE
     if ($code -ne 0) { Write-Warning "setup.mjs zakonczyl sie kodem $code." }
     # `exit` TYLKO gdy skrypt uruchomiony z pliku ($PSScriptRoot ustawione: -File / .\install.ps1).

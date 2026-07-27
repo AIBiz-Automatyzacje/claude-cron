@@ -2110,6 +2110,27 @@ EOF
   fi
 }
 
+# --- Test 58k: team_os_onboard_cmd wycisza ExperimentalWarning node:sqlite ---
+#     CLI onboardingu dotyka lib/db, więc bez flagi Node wypisuje ostrzeżenie
+#     o eksperymentalnym SQLite POMIĘDZY pytaniami instalatora — dla kursanta
+#     wygląda jak błąd instalacji. Reszta projektu (package.json, unit systemd,
+#     setup.mjs) konsekwentnie flagę podaje; to było jedyne wyjście bez niej.
+test_team_os_onboard_cmd_silences_warning() {
+  local snippet="$SANDBOX/t-onboard-warn.sh" out
+  mkdir -p "$SANDBOX/inst-dir"
+  cat > "$snippet" <<EOF
+node() { printf 'ARG[%s]\n' "\$@"; }
+cmd="\$(team_os_onboard_cmd "$SANDBOX/inst-dir" /home/claude/vault kod agent)"
+eval "\$cmd"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [[ "$out" == *"ARG[--disable-warning=ExperimentalWarning]"* ]]; then
+    pass "team_os_onboard_cmd: ExperimentalWarning wyciszone (spójnie z resztą projektu)"
+  else
+    problem "team_os_onboard_cmd: brak --disable-warning=ExperimentalWarning (output: $out)"
+  fi
+}
+
 # Stub granic systemu dla testów ścieżki członka: CLI onboardingu wołane przez
 # run_as_claude (szew DI instalatora) jest EVALUOWANE z atrapą `node` — test widzi
 # realne argumenty po podwójnym parsowaniu, a nie sam string komendy. Kod wyjścia
@@ -3017,6 +3038,7 @@ test_team_os_helpers
 test_setup_team_os_hub
 test_setup_team_os_hub_sequence
 test_team_os_onboard_cmd_quoting
+test_team_os_onboard_cmd_silences_warning
 test_setup_team_os_member
 test_setup_team_os_member_failures
 test_setup_team_os_member_restart_failures
