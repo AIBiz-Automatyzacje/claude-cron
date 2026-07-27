@@ -711,7 +711,12 @@ const SEEDED_JOB_NAMES = {
   'seeded:sync': inboxSeed.JOB_NAME,
   'seeded:auto-reply': inboxSeed.ASSISTANT_JOB_NAME,
 };
-inboxSeed.seedInboxSyncJob().then((result) => {
+// onJobCreated: seed jest ASYNC, a `scheduler.start()` niżej leci synchronicznie — czyta
+// więc listę jobów, w której świeżo zaseedowanego joba jeszcze nie ma. Bez przeplanowania
+// job stoi z `next_run: null` i zero runów aż do następnego restartu daemona (potwierdzone
+// na VPS-ie 27.07: 1,5 h działania, zero uruchomień auto-reply). Hak jest bezpieczny przy
+// starcie: gdy odpala się przed `scheduler.start()`, ten i tak zaplanuje wszystko od nowa.
+inboxSeed.seedInboxSyncJob({ onJobCreated: () => scheduler.rescheduleAll() }).then((result) => {
   const jobName = SEEDED_JOB_NAMES[result];
   if (jobName) console.log(`[seed] Utworzono job "${jobName}" (inbox skonfigurowany, joba brakowało)`);
 });
