@@ -14,7 +14,7 @@ const platform = require('./lib/platform');
 const keepAwake = require('./lib/keep-awake');
 const inboxSeed = require('./lib/inbox-seed');
 const inboxDb = require('./lib/inbox-db');
-const { isSelfHub } = require('./lib/inbox-hub');
+const { isInboxHub } = require('./lib/inbox-hub');
 const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
 const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
@@ -226,7 +226,11 @@ async function handleApi(req, res) {
   // onboarding admina padł: skrzynka istnieje, tylko `INBOX_HUB_URL` nie zdążył się zapisać,
   // a bez zakładki nie dałoby się tego naprawić z dashboardu.
   if (method === 'GET' && urlPath === '/api/env') {
-    const isHub = isSelfHub(inboxHubUrl, WEBHOOK_BASE_URL) || inboxDb.listMembers().length > 0;
+    const isHub = isInboxHub({
+      inboxHubUrl,
+      webhookBaseUrl: WEBHOOK_BASE_URL,
+      memberCount: inboxDb.listMembers().length,
+    });
     return json(res, {
       vps_configured: !!VPS_API_URL,
       webhook_base_url: WEBHOOK_BASE_URL,
