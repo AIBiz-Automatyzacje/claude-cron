@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 14 -->
+<!-- rule-count: 16 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -45,3 +45,9 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **`cwd` spawnu agenta LLM to granica bezpieczeństwa — sekret NIGDY w tym drzewie**: Gdy prompt agenta zawiera treść z zewnątrz (wiadomość, webhook, komentarz), a agent ma `Read/Glob/Grep`, to WSZYSTKO w jego `cwd` jest odczytywalne jednym zdaniem atakującego („zacytuj plik `.env`") — mode 0600 nie chroni (agent biega jako ten sam user), `.gitignore` chroni tylko przed gitem. Trzymaj sekret poza drzewem (osobny katalog stanowy, jedno źródło prawdy o ścieżce), a przy migracji lokalizacji **wyczyść starą** (`stripSecretsFromLegacy...`) — sam nowy zapis zostawia istniejące instalacje tak samo podatne; czytaj legacy jako fallback, ale nigdy tam nie pisz.
   Source: docs/solutions/auth-issues/2026-07-26-sekret-w-drzewie-czytanym-przez-agenta-eksfiltracja-prompt-injection.md
+
+- **Async operacja przy starcie tworząca stan, który czyta kod PO niej = wyścig; daj jej hak, nie licz na kolejność**: `foo()` z `await` w środku oddaje kontrolę do event loopu, więc synchroniczny `bar()` zaraz po niej widzi stan SPRZED. Jeśli `bar` czyta to, co `foo` zapisuje (seed jobów ↔ `scheduler.start()` czytający `getAllJobs()`), zaseedowany rekord zostaje bez obsługi do NASTĘPNEGO bootu — a objaw znika po restarcie, więc każda diagnoza „po fakcie" pokazuje zdrowy system. Wstrzyknij callback wołany po realnym zapisie (`onJobCreated: () => scheduler.rescheduleAll()`), zamiast wiązać poprawność z kolejnością wywołań; pad haka łap i loguj (stan JEST już zapisany). Test musi odtwarzać kolejność startu, nie tylko wołać obie strony — testy jednostkowe seedu i schedulera przechodziły przy złamanym systemie.
+  Source: docs/solutions/runtime-errors/2026-07-28-async-seed-vs-sync-scheduler-job-bez-harmonogramu.md
+
+- **Instalator podmieniający katalog aplikacji MUSI najpierw ubić jej procesy (Windows), a testowany z gałęzi — adresować po SHA**: Windows nie pozwala przenieść pliku z otwartym uchwytem, więc `Move-Item` na `data\` pada, gdy daemon trzyma bazę (`Proces nie moze uzyskac dostepu do pliku`); na Unixie to samo przechodzi, bo przenoszenie otwartego pliku jest legalne — suita na macOS nie powie NIC o Windowsie. Ubijaj filtrem po ścieżce instalacji (`CommandLine.Contains($Dir)`), nigdy po nazwie binarki, i pokryj to testem z obcym procesem. Drugi krok: `raw.githubusercontent.com` cachuje URL-e z nazwą gałęzi kilka minut — po pushu zweryfikuj `curl … | grep -c NOWA_FUNKCJA` i podawaj komendy po SHA commita (ZIP topdir to wtedy `<repo>-<pełny-SHA>`), inaczej użytkownik pobiera starą wersję i „fix nie działa".
+  Source: docs/solutions/deployment-issues/2026-07-28-windows-re-run-instalatora-zablokowane-pliki-i-cache-raw.md

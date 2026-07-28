@@ -14,6 +14,8 @@ prompt zawiera niezaufaną treść cudzej wiadomości. → [CLAUDE.md § Team OS
 
 Instancja Pulsa na VPS-ie admina — **jedyny proces piszący** do bazy skrzynki (`data/inbox.db`).
 Wszyscy klienci gadają z nim przez `/inbox/v1/:token/*`, nigdy z bazą bezpośrednio.
+Rozpoznanie (`is_inbox_hub`): własny Funnel **oraz** `INBOX_HUB_URL` wskazujący na siebie albo
+istniejący członkowie — sam Funnel NIE wystarcza, bo zwykły członek też go miewa dla webhooków.
 → [CLAUDE.md § Team OS — Skrzynka](../CLAUDE.md)
 
 ## Job
