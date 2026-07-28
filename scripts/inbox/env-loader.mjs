@@ -37,6 +37,27 @@ function stripQuotes(value) {
   return v;
 }
 
+// Nazwy pliku dashboardu w kolejności pierwszeństwa. `Dashboard.md` to obowiązujący standard
+// vaulta Team OS, `to_do.md` — nazwa wycofana, trzymana wyłącznie dla vaultów sprzed zmiany.
+// Rozstrzygamy po ISTNIENIU pliku, nie po samej nazwie: nowe vaulty działają bez konfiguracji,
+// stare nie tracą bannera po aktualizacji Pulsa. Gdy nie ma żadnego, zwracamy standard — to ta
+// nazwa trafi do ostrzeżenia „brak <ścieżka> — pomijam banner" (inbox-pull), więc ma podpowiadać
+// docelową strukturę, a nie wycofaną. `INBOX_TODO_PATH` z env przebija cały ten wybór.
+const DASHBOARD_FILENAMES = ['Dashboard.md', 'to_do.md'];
+
+async function resolveDashboardPath(workspace) {
+  for (const name of DASHBOARD_FILENAMES) {
+    const candidate = path.join(workspace, 'Zadania', name);
+    try {
+      await fs.access(candidate);
+      return candidate;
+    } catch {
+      // brak pliku — sprawdzamy kolejną nazwę
+    }
+  }
+  return path.join(workspace, 'Zadania', DASHBOARD_FILENAMES[0]);
+}
+
 export async function readEnvFile(envPath) {
   try {
     const raw = await fs.readFile(envPath, 'utf8');
@@ -71,7 +92,7 @@ export async function loadEnv() {
     return workspace;
   };
   if (!process.env.INBOX_TODO_PATH) {
-    process.env.INBOX_TODO_PATH = path.join(requireWorkspace('INBOX_TODO_PATH'), 'Zadania/to_do.md');
+    process.env.INBOX_TODO_PATH = await resolveDashboardPath(requireWorkspace('INBOX_TODO_PATH'));
   }
   if (!process.env.INBOX_SKRZYNKA_PATH) {
     process.env.INBOX_SKRZYNKA_PATH = path.join(requireWorkspace('INBOX_SKRZYNKA_PATH'), 'Zadania/Skrzynka.md');

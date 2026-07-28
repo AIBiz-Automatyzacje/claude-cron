@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Team OS — inbox pull job
 // - Pełne callouts → Zadania/Skrzynka.md (dwie sekcje: Otrzymane + Wysłane, rebuild bloków między markerami)
-// - Banner + top 3 skondensowane → Zadania/to_do.md (rebuild bloku między markerami)
+// - Banner + top 3 skondensowane → Zadania/Dashboard.md (rebuild bloku między markerami;
+//   nazwa z env-loadera — `to_do.md` wycofane, patrz DASHBOARD_FILENAMES)
 // - Dane bierze z huba (`client.pull()`); oznaczanie pending → delivered robi hub.
 // Odpalane co 1 min przez launchd/cron. Zero Claude CLI.
 
@@ -242,7 +243,7 @@ async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedIt
   await fs.writeFile(filePath, updated, 'utf8');
 }
 
-// ──────── to_do.md banner writer ────────
+// ──────── dashboard banner writer ────────
 // Polski plural — uproszczona reguła (1 / 2-4 / 5+). Dla MVP wystarczy.
 function plural(n, one, few, many) {
   if (n === 1) return one;
@@ -345,7 +346,7 @@ export async function main({ client = inboxClient } = {}) {
     return hours >= STALE_HOURS;
   }).length;
 
-  // Write to Skrzynka.md (oba bloki) + to_do.md banner
+  // Write to Skrzynka.md (oba bloki) + banner w dashboardzie
   await updateSkrzynkaFile(INBOX_SKRZYNKA_PATH, threadRows, active, delegated, me);
   await updateDashboard(INBOX_TODO_PATH, {
     inboxCount: active.length,

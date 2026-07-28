@@ -36,7 +36,9 @@ test('INBOX_ENV_FILE: ścieżki rozwiązane ZAWSZE, także przy komplecie HUB_UR
     async (envPath) => {
       process.env.INBOX_ENV_FILE = envPath;
       await loadEnv();
-      assert.equal(process.env.INBOX_TODO_PATH, path.join('/tmp/ws', 'Zadania/to_do.md'));
+      // `/tmp/ws` nie istnieje → fallback nie znajduje żadnego pliku i zwraca standard
+      // (`Dashboard.md`); `to_do.md` jest wycofany, patrz DASHBOARD_FILENAMES.
+      assert.equal(process.env.INBOX_TODO_PATH, path.join('/tmp/ws', 'Zadania/Dashboard.md'));
       assert.equal(process.env.INBOX_SKRZYNKA_PATH, path.join('/tmp/ws', 'Zadania/Skrzynka.md'));
       assert.equal(process.env.INBOX_ARCHIVE_DIR, path.join('/tmp/ws', 'Zasoby/inbox-archive'));
     }
@@ -128,6 +130,66 @@ test('loadEnv: jawne INBOX_*_PATH wygrywają nad workspace', async () => {
   process.env.INBOX_SKRZYNKA_PATH = '/custom/vault/Zadania/Skrzynka.md';
   await loadEnv();
   assert.equal(process.env.INBOX_SKRZYNKA_PATH, '/custom/vault/Zadania/Skrzynka.md');
-  assert.equal(process.env.INBOX_TODO_PATH, path.join('/tmp/ws', 'Zadania/to_do.md'));
+  assert.equal(process.env.INBOX_TODO_PATH, path.join('/tmp/ws', 'Zadania/Dashboard.md'));
   assert.equal(process.env.INBOX_ARCHIVE_DIR, path.join('/custom/vault', 'Zasoby/inbox-archive'));
+});
+
+// === Nazwa pliku dashboardu: Dashboard.md (standard) z fallbackiem na to_do.md (wycofany) ===
+// Vault Team OS przemianował `Zadania/to_do.md` na `Zadania/Dashboard.md`, a kod został
+// z tyłu — na Windowsie 28.07 dało to sync failujący co minutę (ENOENT). Fallback po
+// ISTNIENIU pliku, nie po nazwie: nowe vaulty działają bez konfiguracji, stare nie tracą
+// bannera, a `INBOX_TODO_PATH` dalej przebija oba.
+
+async function withTmpVault(files, fn) {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-vault-'));
+  await fs.mkdir(path.join(base, 'Zadania'), { recursive: true });
+  for (const name of files) {
+    await fs.writeFile(path.join(base, 'Zadania', name), '# stub\n', 'utf8');
+  }
+  try {
+    await fn(base);
+  } finally {
+    await fs.rm(base, { recursive: true, force: true });
+  }
+}
+
+test('dashboard: vault z Dashboard.md → wybrany Dashboard.md', async () => {
+  await withTmpVault(['Dashboard.md'], async (base) => {
+    process.env.CLAUDE_CRON_WORKSPACE = base;
+    await loadEnv();
+    assert.equal(process.env.INBOX_TODO_PATH, path.join(base, 'Zadania', 'Dashboard.md'));
+  });
+});
+
+test('dashboard: stary vault tylko z to_do.md → fallback nie gubi bannera', async () => {
+  await withTmpVault(['to_do.md'], async (base) => {
+    process.env.CLAUDE_CRON_WORKSPACE = base;
+    await loadEnv();
+    assert.equal(process.env.INBOX_TODO_PATH, path.join(base, 'Zadania', 'to_do.md'));
+  });
+});
+
+test('dashboard: oba pliki → wygrywa Dashboard.md (standard, nie wycofana nazwa)', async () => {
+  await withTmpVault(['Dashboard.md', 'to_do.md'], async (base) => {
+    process.env.CLAUDE_CRON_WORKSPACE = base;
+    await loadEnv();
+    assert.equal(process.env.INBOX_TODO_PATH, path.join(base, 'Zadania', 'Dashboard.md'));
+  });
+});
+
+test('dashboard: żaden plik nie istnieje → Dashboard.md (nazwa w komunikacie o pominięciu)', async () => {
+  await withTmpVault([], async (base) => {
+    process.env.CLAUDE_CRON_WORKSPACE = base;
+    await loadEnv();
+    assert.equal(process.env.INBOX_TODO_PATH, path.join(base, 'Zadania', 'Dashboard.md'));
+  });
+});
+
+test('dashboard: jawne INBOX_TODO_PATH przebija fallback', async () => {
+  await withTmpVault(['Dashboard.md'], async (base) => {
+    process.env.CLAUDE_CRON_WORKSPACE = base;
+    process.env.INBOX_TODO_PATH = '/custom/Moja lista.md';
+    await loadEnv();
+    assert.equal(process.env.INBOX_TODO_PATH, '/custom/Moja lista.md');
+  });
 });
