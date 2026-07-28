@@ -89,6 +89,28 @@ function Expand-RepoFromZip {
     return $freshDir
 }
 
+# Zatrzymuje daemona Pulsa dzialajacego Z TEGO katalogu instalacji.
+# Windows nie pozwala przeniesc ani skasowac pliku, ktory ma otwarty uchwyt - zywy
+# serwer trzyma data\claude-cron.db, wiec re-run instalatora padal na Move-Item
+# ("Proces nie moze uzyskac dostepu do pliku..."). Na Unixie problemu nie ma (przenoszenie
+# otwartego pliku jest legalne), dlatego install.sh tego nie potrzebuje.
+# Filtr po CommandLine zawierajacym $InstallDir - NIE zabijamy cudzych procesow node.
+# Daemon wstaje z powrotem po instalacji (hook autostartu / Task Scheduler).
+function Stop-PulsProcesses {
+    param([Parameter(Mandatory = $true)][string] $Dir)
+
+    $procs = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine.Contains($Dir) })
+    if ($procs.Count -eq 0) { return }
+
+    foreach ($p in $procs) {
+        Write-Host "[info] Zatrzymuje daemona Pulsa (PID $($p.ProcessId)) - trzyma pliki instalacji." -ForegroundColor Cyan
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    # Windows zwalnia uchwyty asynchronicznie po zabiciu procesu.
+    Start-Sleep -Seconds 2
+}
+
 # Atomowy(-ish) swap: swieze repo -> $InstallDir, stare -> kosz w tmp.
 # Najpierw przenosi data\ i .node\ ze starej instalacji do swiezej.
 function Install-FreshRepo {
@@ -103,6 +125,8 @@ function Install-FreshRepo {
     }
 
     if (Test-Path -LiteralPath $InstallDir) {
+        # PRZED jakimkolwiek ruchem na plikach - inaczej Move-Item padnie na zablokowanej bazie.
+        Stop-PulsProcesses -Dir $InstallDir
         Move-PreservedDirs -OldDir $InstallDir -FreshDir $FreshDir
         # Stara instalacja idzie do kosza w tmp (sprzatane przez finally).
         $trash = Join-Path $TmpDir "old-install"

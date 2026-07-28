@@ -64,6 +64,30 @@ try {
         }
     }
 
+    # --- Test 5: Stop-PulsProcesses nie rusza cudzych procesow node ---
+    # Regresja z 28.07 (Windows): re-run instalatora padal na Move-Item, bo zywy daemon
+    # trzymal data\claude-cron.db. Fix zabija node'y TEGO katalogu instalacji - filtr po
+    # CommandLine musi byc scisly, inaczej instalator ubija cudze aplikacje Node.
+    function Test-StopPulsIgnoresForeignNode {
+        # Proces spoza katalogu instalacji: sam fakt, ze to node.exe, nie moze wystarczyc.
+        $foreign = Start-Process -FilePath "node" -ArgumentList "-e", "setTimeout(()=>{},30000)" -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+        if (-not $foreign) {
+            Test-Pass "Stop-PulsProcesses: pominieto (brak node w PATH)"
+            return
+        }
+        try {
+            Stop-PulsProcesses -Dir (Join-Path $Sandbox "nieistniejaca-instalacja")
+            Start-Sleep -Milliseconds 500
+            if (-not $foreign.HasExited) {
+                Test-Pass "Stop-PulsProcesses nie rusza node'a spoza katalogu instalacji"
+            } else {
+                Test-Problem "Stop-PulsProcesses ubil obcy proces node"
+            }
+        } finally {
+            if (-not $foreign.HasExited) { Stop-Process -Id $foreign.Id -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
     # --- Test 3: KONTRAKT DANYCH - re-run z plikiem-strażnikiem nie kasuje data\ ---
     function Test-RerunPreservesSentinel {
         # Symulacja istniejącej instalacji w $InstallDir z plikiem-strażnikiem.
@@ -123,6 +147,7 @@ try {
     Test-PreserveNoopWhenNoOld
     Test-RerunPreservesSentinel
     Test-FreshInstallWhenNoExisting
+    Test-StopPulsIgnoresForeignNode
 
     Write-Host ""
     Write-Host "Wynik: $Pass PASS / $($Pass + $Fail) total"
