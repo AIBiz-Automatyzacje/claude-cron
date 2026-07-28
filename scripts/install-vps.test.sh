@@ -2241,6 +2241,60 @@ EOF
   else
     problem "setup_team_os_member: ścieżka admina zawiodła (rc=$rc, mark=$(cat "$mark" 2>/dev/null), out: $out)"
   fi
+
+  # 4. Domyślna odpowiedź PRZY terminalu → „agent”. Kod bierzemy z TEAM_OS_INVITE_CODE,
+  # więc jedyne pytanie to auto-reply, a puste tty oddaje na nie Enter. VPS stawia się
+  # po to, żeby odpowiadał; laptop i tak jest zawsze klientem (setup.mjs), więc ten
+  # default eliminuje parę „dwa synchronizatory na jednym vaulcie”.
+  printf '\n' > "$tty"
+  rm -f "$mark"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$tty"
+MARK="$mark"
+PORT=7777
+SERVICE_NAME="claude-cron"
+INSTALL_DIR="$SANDBOX/inst-dir"
+WORKSPACE="$SANDBOX/vault-pelny"
+TEAM_OS_INVITE_CODE='$code'
+source "$stub"
+setup_team_os_member
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+    && [[ "$out" == *"ARG[agent]"* ]] && [[ "$out" != *"ARG[client]"* ]] \
+    && [[ "$out" == *"[T/n]"* ]] \
+    && [[ "$out" != *"JEDNEJ maszynie"* ]]; then
+    pass "setup_team_os_member: Enter przy terminalu → rola agent (prompt pokazuje [T/n])"
+  else
+    problem "setup_team_os_member: default przy tty zawiódł (rc=$rc, out: $out)"
+  fi
+
+  # 5. Ta sama ścieżka BEZ terminala → „client”. Nieinteraktywna instalacja (ssh bez -t,
+  # cron, CI) nie może po cichu włączyć asystenta odpowiadającego w imieniu właściciela
+  # vaulta — brak człowieka przy klawiaturze to brak zgody.
+  rm -f "$mark"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/no-tty-role"
+MARK="$mark"
+PORT=7777
+SERVICE_NAME="claude-cron"
+INSTALL_DIR="$SANDBOX/inst-dir"
+WORKSPACE="$SANDBOX/vault-pelny"
+TEAM_OS_INVITE_CODE='$code'
+source "$stub"
+setup_team_os_member
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] \
+    && [[ "$out" == *"ARG[client]"* ]] && [[ "$out" != *"ARG[agent]"* ]] \
+    && [[ "$out" == *"[t/N]"* ]] \
+    && [[ "$out" == *"JEDNEJ maszynie"* ]]; then
+    pass "setup_team_os_member: brak terminala → rola client (bez zgody człowieka nie włączamy agenta)"
+  else
+    problem "setup_team_os_member: default bez tty zawiódł (rc=$rc, out: $out)"
+  fi
 }
 
 # --- Test 58h: setup_team_os_member — porażki CLI: komunikat naprawczy dobrany

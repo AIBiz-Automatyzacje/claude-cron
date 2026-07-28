@@ -1695,11 +1695,24 @@ setup_team_os_member() {
     warn "W $WORKSPACE nie widać jeszcze notatek (.md) — asystent czerpie wiedzę z vaulta i bez niej odpowie „NO_ANSWER” na każde pytanie."
   fi
 
-  # Domyślnie N: asystent odpowiada ludziom w Twoim imieniu — to świadoma
-  # decyzja, nie coś, w co wpada się Enterem (a bez tty ask_tty bierze default).
-  # Odmowa = rola „client”: maszyna renderuje własną Skrzynkę (job sync).
-  local answer="" role="client"
-  ask_tty answer "Czy ta maszyna ma odpowiadać na pytania zespołu (asystent auto-reply, 24/7)? [t/N]: " "N"
+  # Default zależy od tego, czy ktoś stoi przy klawiaturze — bo „Enter” i „brak
+  # terminala” to dwie różne sytuacje, a ask_tty zwraca dla nich tę samą wartość.
+  #
+  # Z tty → „agent”. VPS stawia się właśnie po to, żeby odpowiadał 24/7, a lokalny
+  # setup.mjs nadaje rolę „client” na sztywno. Ten default sprawia, że typowa para
+  # „laptop + własny VPS” wychodzi poprawnie bez podejmowania decyzji — czyli
+  # znika najczęstsza pomyłka: dwie maszyny renderujące Skrzynkę tego samego vaulta
+  # (rozproszony lost update pod Obsidian Sync, gubione odhaczenia „[x]”).
+  #
+  # Bez tty → „client”, tak jak dotąd. Nieinteraktywna instalacja (ssh bez -t, cron,
+  # CI) nie może po cichu włączyć asystenta odpowiadającego zespołowi w imieniu
+  # właściciela vaulta; na to trzeba świadomej zgody człowieka.
+  local answer="" role="client" role_default="N" role_hint="[t/N]"
+  if { : < "$TTY_DEVICE"; } 2>/dev/null; then
+    role_default="T"
+    role_hint="[T/n]"
+  fi
+  ask_tty answer "Czy ta maszyna ma odpowiadać na pytania zespołu (asystent auto-reply, 24/7)? $role_hint: " "$role_default"
   if [[ "$answer" =~ ^[TtYy]$ ]]; then
     role="agent"
   fi
