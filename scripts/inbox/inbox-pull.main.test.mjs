@@ -84,3 +84,24 @@ test('pusta skrzynka z huba: pusty stan bez wyjątku, self-heal tworzy plik (err
   assert.ok(out.includes('Pusto'), 'pusty stan Otrzymane');
   assert.match(out, /^\*0 nowych\*$/m);
 });
+
+test('brak pliku dashboardu: sync kończy się sukcesem, Skrzynka zapisana (error case)', async (t) => {
+  // Vault użytkownika nie musi mieć `Zadania/to_do.md` — plik należy do NIEGO (jego lista
+  // zadań), nie do Pulsa, a nazwa bywa zmieniona. Banner to dodatek: brak MARKERÓW w tym
+  // pliku od zawsze kończył się warnem i pominięciem, więc brak samego PLIKU nie może być
+  // twardszy. Regresja z 28.07: ENOENT wywalał cały sync i job failował co minutę (45 razy),
+  // mimo że Skrzynka renderowała się poprawnie.
+  const { skrzynka, todo } = setupVault(t);
+  fs.rmSync(todo);
+  process.env.INBOX_USER = 'ktokolwiek';
+
+  const client = {
+    pull: async () => ({ v: 1, user: 'alicja', active: [], threadRows: [], delegated: [] }),
+  };
+
+  await assert.doesNotReject(main({ client }), 'brak dashboardu nie może wywrócić synca');
+
+  const out = await fsp.readFile(skrzynka, 'utf8');
+  assert.ok(out.includes('%% inbox:items:start %%'), 'Skrzynka zapisana mimo braku dashboardu');
+  assert.equal(fs.existsSync(todo), false, 'nie fabrykujemy pliku należącego do użytkownika');
+});

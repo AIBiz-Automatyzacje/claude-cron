@@ -295,9 +295,21 @@ function buildBanner({ inboxCount, taskCount, queryCount, topInbox, delegatedCou
 }
 
 async function updateDashboard(todoPath, args) {
-  const raw = await fs.readFile(todoPath, 'utf8');
+  // Dashboard należy do UŻYTKOWNIKA (jego lista zadań), w przeciwieństwie do Skrzynki, którą
+  // Puls generuje — dlatego brak pliku pomijamy, a NIE tworzymy go z szablonu. Banner jest
+  // dodatkiem: brak markerów od zawsze kończył się warnem, więc brak samego pliku nie może
+  // być twardszy. Bez tego ENOENT (inna nazwa pliku w vaultcie, świeży vault bez struktury
+  // Team OS) wywracał CAŁY sync — łącznie z zapisaną już Skrzynką — i job failował co minutę.
+  let raw;
+  try {
+    raw = await fs.readFile(todoPath, 'utf8');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    console.warn(`[inbox-pull] brak ${todoPath} — pomijam banner (ustaw INBOX_TODO_PATH, jeśli plik ma inną nazwę)`);
+    return;
+  }
   if (!raw.includes('%% inbox:banner:start %%')) {
-    console.warn('[inbox-pull] banner markers missing in to_do.md — skipping banner update');
+    console.warn('[inbox-pull] banner markers missing in dashboard — skipping banner update');
     return;
   }
   const banner = buildBanner(args);
