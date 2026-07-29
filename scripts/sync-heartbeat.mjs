@@ -69,16 +69,36 @@ async function readIfExists(filePath) {
   }
 }
 
+// Rola maszyny bez argumentów CLI.
+//
+// Script-joby Pulsa uruchamiają `node <command>` i NIE przekazują argumentów, więc
+// job nie może podać ścieżek. Wyprowadzamy je z platformy: w tej topologii jest
+// dokładnie jeden Mac (laptop) i jeden Linux (VPS). Gdy dojdzie trzecia maszyna,
+// nadpisz jawnie przez SYNC_HEARTBEAT_SELF / SYNC_HEARTBEAT_PEER — wtedy platforma
+// przestaje cokolwiek rozstrzygać.
+export function resolveRole({ platform, env = {} }) {
+  if (env.SYNC_HEARTBEAT_SELF && env.SYNC_HEARTBEAT_PEER) {
+    return { self: env.SYNC_HEARTBEAT_SELF, peer: env.SYNC_HEARTBEAT_PEER, device: env.SYNC_HEARTBEAT_DEVICE || platform };
+  }
+  return platform === 'darwin'
+    ? { self: 'Zasoby/_sync/mac.md', peer: 'Zasoby/_sync/vps.md', device: 'maczek' }
+    : { self: 'Zasoby/_sync/vps.md', peer: 'Zasoby/_sync/mac.md', device: 'vps' };
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   const workspace = process.env.CLAUDE_CRON_WORKSPACE || process.cwd();
-  const device = args.device || os.hostname();
   const maxAgeMin = Number(args['max-age-min'] ?? 45);
 
+  // Bez jawnych ścieżek działamy w trybie automatycznym (tak woła nas job Pulsa).
   if (!args.write && !args.check) {
-    console.error('Usage: sync-heartbeat.mjs [--write <ścieżka>] [--check <ścieżka>] [--max-age-min N] [--device <nazwa>]');
-    process.exit(2);
+    const role = resolveRole({ platform: process.platform, env: process.env });
+    args.write = role.self;
+    args.check = role.peer;
+    args.device = args.device || role.device;
   }
+
+  const device = args.device || os.hostname();
 
   // Najpierw zapis własnego znacznika — nawet gdy sprawdzenie zaraz zaalarmuje,
   // druga strona musi dostać świeży dowód, że TA maszyna żyje.

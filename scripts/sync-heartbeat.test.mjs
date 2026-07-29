@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { renderHeartbeat, evaluateHeartbeat } from './sync-heartbeat.mjs';
+import { renderHeartbeat, evaluateHeartbeat, resolveRole } from './sync-heartbeat.mjs';
 
 const NOW = Date.parse('2026-07-29T10:00:00.000Z');
 
@@ -48,4 +48,36 @@ test('renderHeartbeat zapisuje datę i urządzenie w postaci czytelnej dla parse
   assert.match(raw, /^updated: 2026-07-29T09:00:00\.000Z$/m);
   assert.match(raw, /^device: maczek$/m);
   assert.equal(evaluateHeartbeat(raw, NOW).ageMin, 60);
+});
+
+// === Tryb automatyczny — job Pulsa nie może przekazać argumentów ===
+// `spawn('node', [job.command])` w executorze przekazuje wyłącznie ścieżkę skryptu,
+// więc rola maszyny musi wynikać ze środowiska, nie z CLI.
+test('resolveRole: macOS pisze mac.md i sprawdza vps.md', () => {
+  const r = resolveRole({ platform: 'darwin' });
+  assert.equal(r.self, 'Zasoby/_sync/mac.md');
+  assert.equal(r.peer, 'Zasoby/_sync/vps.md');
+  assert.equal(r.device, 'maczek');
+});
+
+test('resolveRole: linux pisze vps.md i sprawdza mac.md (odwrotnie niż Mac)', () => {
+  const r = resolveRole({ platform: 'linux' });
+  assert.equal(r.self, 'Zasoby/_sync/vps.md');
+  assert.equal(r.peer, 'Zasoby/_sync/mac.md');
+  assert.equal(r.device, 'vps');
+});
+
+test('resolveRole: jawne env wygrywa nad platformą (trzecia maszyna)', () => {
+  const r = resolveRole({
+    platform: 'linux',
+    env: { SYNC_HEARTBEAT_SELF: 'Zasoby/_sync/cave.md', SYNC_HEARTBEAT_PEER: 'Zasoby/_sync/mac.md', SYNC_HEARTBEAT_DEVICE: 'cave' },
+  });
+  assert.equal(r.self, 'Zasoby/_sync/cave.md');
+  assert.equal(r.peer, 'Zasoby/_sync/mac.md');
+  assert.equal(r.device, 'cave');
+});
+
+test('resolveRole: niepełne env NIE nadpisuje platformy (brak peer)', () => {
+  const r = resolveRole({ platform: 'darwin', env: { SYNC_HEARTBEAT_SELF: 'Zasoby/_sync/x.md' } });
+  assert.equal(r.self, 'Zasoby/_sync/mac.md', 'połowiczna konfiguracja jest ignorowana w całości');
 });
