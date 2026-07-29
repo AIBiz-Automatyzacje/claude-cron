@@ -8,8 +8,16 @@
 //
 // Dlatego ten skrypt nie sprawdza ani procesu, ani statusu, tylko JEDYNĄ rzecz,
 // która ma znaczenie: czy dane faktycznie płyną. Każda maszyna zapisuje własny
-// znacznik czasu i patrzy na znacznik drugiej strony. Znacznik przestał się
+// znacznik czasu, a MAC patrzy na znacznik drugiej strony. Znacznik przestał się
 // odświeżać = kanał stoi, niezależnie od tego, co twierdzą statusy.
+//
+// Osąd siedzi wyłącznie po stronie Maca, bo tylko Mac wie, czy Mac śpi albo jest
+// offline. VPS nie odróżni „Mac wyłączony" od „sync padł" — pierwszego dnia
+// działania wysłał 28 fałszywych alarmów, gdy laptop po prostu spał. Dlatego VPS
+// jest write-only (pisze vps.md, niczego nie sprawdza), a Mac przed kontrolą
+// wyklucza dwa niewinne scenariusze: właśnie wstał po uśpieniu (własny znacznik
+// stary — sync nie miał kiedy nadrobić) i brak internetu (sync nie ma prawa
+// działać). Alarm zostaje tylko na sytuację: Mac włączony, online, a vps.md stoi.
 //
 // Użycie (script-job w Pulsie, cwd = workspace):
 //   node scripts/sync-heartbeat.mjs --write Zasoby/_sync/mac.md \
@@ -80,9 +88,34 @@ export function resolveRole({ platform, env = {} }) {
   if (env.SYNC_HEARTBEAT_SELF && env.SYNC_HEARTBEAT_PEER) {
     return { self: env.SYNC_HEARTBEAT_SELF, peer: env.SYNC_HEARTBEAT_PEER, device: env.SYNC_HEARTBEAT_DEVICE || platform };
   }
+  // VPS pisze tylko własny znacznik (peer: null) — patrz nagłówek: nie umie
+  // odróżnić uśpionego Maca od zepsutego synca, więc nie jemu oceniać.
   return platform === 'darwin'
     ? { self: 'Zasoby/_sync/mac.md', peer: 'Zasoby/_sync/vps.md', device: 'maczek' }
-    : { self: 'Zasoby/_sync/vps.md', peer: 'Zasoby/_sync/mac.md', device: 'vps' };
+    : { self: 'Zasoby/_sync/vps.md', peer: null, device: 'vps' };
+}
+
+// Kontrola znacznika drugiej strony ma sens tylko, gdy TA maszyna była na chodzie
+// przez ostatnie okno i ma internet. Własny znacznik stary/nieobecny = dopiero
+// wstaliśmy (albo pierwszy run) — sync nie miał kiedy dostarczyć pliku, prawdziwy
+// test zrobi następny run. `ownVerdict: null` = tryb bez zapisu (samo --check):
+// nie znamy własnej historii, więc gate „wake" nie ma podstaw i nie blokuje.
+export function shouldSkipCheck({ ownVerdict, online, maxAgeMin }) {
+  if (!online) return { skip: true, reason: 'offline' };
+  if (ownVerdict && (!ownVerdict.ok || ownVerdict.ageMin > maxAgeMin)) {
+    return { skip: true, reason: 'wake' };
+  }
+  return { skip: false };
+}
+
+// Dowolna odpowiedź HTTP = jest sieć (status nie ma znaczenia); błąd/timeout = offline.
+export async function checkOnline({ url = 'https://api.obsidian.md/', timeoutMs = 5000 } = {}) {
+  try {
+    await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(timeoutMs) });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function main() {
@@ -101,15 +134,27 @@ async function main() {
   const device = args.device || os.hostname();
 
   // Najpierw zapis własnego znacznika — nawet gdy sprawdzenie zaraz zaalarmuje,
-  // druga strona musi dostać świeży dowód, że TA maszyna żyje.
+  // druga strona musi dostać świeży dowód, że TA maszyna żyje. Poprzednią wersję
+  // czytamy PRZED nadpisaniem: jej wiek mówi, czy maszyna dopiero wstała.
+  let ownVerdict = null;
   if (args.write) {
     const target = path.resolve(workspace, args.write);
+    ownVerdict = evaluateHeartbeat(await readIfExists(target), Date.now());
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, renderHeartbeat({ device, now: new Date().toISOString() }), 'utf8');
     console.log(`[heartbeat] zapisano ${args.write} (device: ${device})`);
   }
 
   if (args.check) {
+    const online = await checkOnline();
+    const gate = shouldSkipCheck({ ownVerdict, online, maxAgeMin });
+    if (gate.skip) {
+      console.log(gate.reason === 'offline'
+        ? '[heartbeat] pomijam kontrolę — brak internetu, sync i tak nie może działać.'
+        : '[heartbeat] pomijam kontrolę — maszyna dopiero wstała, sync nie miał kiedy nadrobić; prawdziwy test w następnym runie.');
+      return;
+    }
+
     const target = path.resolve(workspace, args.check);
     const verdict = evaluateHeartbeat(await readIfExists(target), Date.now());
 

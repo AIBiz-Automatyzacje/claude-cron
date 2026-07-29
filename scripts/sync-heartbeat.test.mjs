@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { renderHeartbeat, evaluateHeartbeat, resolveRole } from './sync-heartbeat.mjs';
+import { renderHeartbeat, evaluateHeartbeat, resolveRole, shouldSkipCheck } from './sync-heartbeat.mjs';
 
 const NOW = Date.parse('2026-07-29T10:00:00.000Z');
 
@@ -60,10 +60,12 @@ test('resolveRole: macOS pisze mac.md i sprawdza vps.md', () => {
   assert.equal(r.device, 'maczek');
 });
 
-test('resolveRole: linux pisze vps.md i sprawdza mac.md (odwrotnie niż Mac)', () => {
+// VPS nie odróżni uśpionego Maca od zepsutego synca — pierwszego dnia wysłał
+// 28 fałszywych alarmów. Dlatego pisze tylko własny znacznik i niczego nie ocenia.
+test('resolveRole: linux jest write-only — pisze vps.md, peer null', () => {
   const r = resolveRole({ platform: 'linux' });
   assert.equal(r.self, 'Zasoby/_sync/vps.md');
-  assert.equal(r.peer, 'Zasoby/_sync/mac.md');
+  assert.equal(r.peer, null);
   assert.equal(r.device, 'vps');
 });
 
@@ -80,4 +82,35 @@ test('resolveRole: jawne env wygrywa nad platformą (trzecia maszyna)', () => {
 test('resolveRole: niepełne env NIE nadpisuje platformy (brak peer)', () => {
   const r = resolveRole({ platform: 'darwin', env: { SYNC_HEARTBEAT_SELF: 'Zasoby/_sync/x.md' } });
   assert.equal(r.self, 'Zasoby/_sync/mac.md', 'połowiczna konfiguracja jest ignorowana w całości');
+});
+
+// === Gate przed kontrolą — fałszywe alarmy po uśpieniu i bez internetu ===
+// Scenariusz z 29.07: Mac wstał po 7,5 h snu i od razu zaalarmował o vps.md
+// sprzed 448 min, choć sync nadrobił zaległość minutę później.
+
+const FRESH_OWN = { ok: true, ageMin: 15 };
+
+test('gate: brak internetu → pomiń kontrolę, powód offline', () => {
+  const g = shouldSkipCheck({ ownVerdict: FRESH_OWN, online: false, maxAgeMin: 45 });
+  assert.deepEqual(g, { skip: true, reason: 'offline' });
+});
+
+test('gate: własny znacznik starszy niż próg (maszyna spała) → pomiń, powód wake', () => {
+  const g = shouldSkipCheck({ ownVerdict: { ok: true, ageMin: 448 }, online: true, maxAgeMin: 45 });
+  assert.deepEqual(g, { skip: true, reason: 'wake' });
+});
+
+test('gate: brak własnego pliku (pierwszy run) → pomiń, powód wake', () => {
+  const g = shouldSkipCheck({ ownVerdict: { ok: false, reason: 'missing' }, online: true, maxAgeMin: 45 });
+  assert.deepEqual(g, { skip: true, reason: 'wake' });
+});
+
+test('gate: maszyna na chodzie i online → kontrola idzie normalnie', () => {
+  const g = shouldSkipCheck({ ownVerdict: FRESH_OWN, online: true, maxAgeMin: 45 });
+  assert.deepEqual(g, { skip: false });
+});
+
+test('gate: tryb samo --check (ownVerdict null) nie blokuje kontroli', () => {
+  const g = shouldSkipCheck({ ownVerdict: null, online: true, maxAgeMin: 45 });
+  assert.deepEqual(g, { skip: false });
 });
