@@ -240,7 +240,21 @@ async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedIt
   updated = updated.replace(/^\*\d+ now[a-z]+\*$/m, `*${inboxCount} ${inboxCount === 1 ? 'nowa' : 'nowych'}*`);
   updated = updated.replace(/^\*\d+ w toku\*$/m, `*${delegatedCount} w toku*`);
 
-  await fs.writeFile(filePath, updated, 'utf8');
+  await writeIfChanged(filePath, raw, updated);
+}
+
+// Zapis TYLKO przy realnej zmianie treści.
+//
+// Job renderujący chodzi co minutę, więc bezwarunkowy `writeFile` to ~1440 zapisów
+// dziennie na plik, z czego prawie wszystkie odtwarzają bajt w bajt to samo. Dla
+// Obsidian Sync każdy taki zapis to ŚWIEŻA ZMIANA LOKALNA: Mac w kółko wypycha własną
+// wersję i wygrywa konflikt z tym, co przyszło z innej maszyny. Tak `Dashboard.md`
+// wygenerowany przez `/daily` na VPS nie miał szans dojść na Maca — ginął, zanim
+// ktokolwiek go zobaczył (29.07: plik na Macu miał świeży mtime i wczorajszą treść).
+async function writeIfChanged(filePath, before, after) {
+  if (before === after) return false;
+  await fs.writeFile(filePath, after, 'utf8');
+  return true;
 }
 
 // ──────── dashboard banner writer ────────
@@ -315,7 +329,7 @@ async function updateDashboard(todoPath, args) {
   }
   const banner = buildBanner(args);
   const updated = replaceBetweenMarkers(raw, '%% inbox:banner:start %%', '%% inbox:banner:end %%', banner);
-  await fs.writeFile(todoPath, updated, 'utf8');
+  await writeIfChanged(todoPath, raw, updated);
 }
 
 // ──────── main ────────

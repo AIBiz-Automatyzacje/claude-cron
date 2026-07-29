@@ -105,3 +105,57 @@ test('brak pliku dashboardu: sync kończy się sukcesem, Skrzynka zapisana (erro
   assert.ok(out.includes('%% inbox:items:start %%'), 'Skrzynka zapisana mimo braku dashboardu');
   assert.equal(fs.existsSync(todo), false, 'nie fabrykujemy pliku należącego do użytkownika');
 });
+
+// === Idempotencja zapisu — plik dotykany tylko przy realnej zmianie ===
+// Regresja 29.07: job renderujący chodzi co minutę i zapisywał bezwarunkowo, więc dla
+// Obsidian Sync każdy przebieg był świeżą zmianą lokalną. Mac w kółko wypychał własną
+// wersję i wygrywał konflikt z tym, co przyszło z VPS — `Dashboard.md` z joba `/daily`
+// nigdy nie docierał (plik miał świeży mtime i wczorajszą treść).
+test('drugi przebieg bez zmian nie dotyka Skrzynki ani dashboardu (Obsidian Sync)', async (t) => {
+  const { skrzynka, todo } = setupVault(t);
+
+  const myQuery = { id: ID_Q, thread_id: THREAD, from_user: 'alicja', to_user: 'bob', type: 'query', title: 'Kiedy live?', content: 'Data?', status: 'delivered', created_at: T0, payload: null };
+  const client = {
+    pull: async () => ({ v: 1, user: 'alicja', active: [], threadRows: [], delegated: [myQuery] }),
+  };
+
+  await main({ client });
+  const afterFirst = {
+    skrzynka: fs.statSync(skrzynka).mtimeMs,
+    todo: fs.statSync(todo).mtimeMs,
+  };
+  const contentAfterFirst = fs.readFileSync(skrzynka, 'utf8');
+
+  // Zegar plików ma rozdzielczość — bez odczekania równe mtime nic by nie dowodziło.
+  await new Promise((r) => setTimeout(r, 25));
+  await main({ client });
+
+  assert.equal(fs.statSync(skrzynka).mtimeMs, afterFirst.skrzynka, 'Skrzynka nietknięta przy identycznej treści');
+  assert.equal(fs.statSync(todo).mtimeMs, afterFirst.todo, 'dashboard nietknięty przy identycznym bannerze');
+  assert.equal(fs.readFileSync(skrzynka, 'utf8'), contentAfterFirst, 'treść bez zmian');
+});
+
+test('zmiana danych z huba nadal trafia na dysk', async (t) => {
+  const { skrzynka } = setupVault(t);
+
+  const first = { id: ID_Q, thread_id: THREAD, from_user: 'alicja', to_user: 'bob', type: 'query', title: 'Kiedy live?', content: 'Data?', status: 'delivered', created_at: T0, payload: null };
+  const second = { id: ID_R, thread_id: THREAD, from_user: 'bob', to_user: 'alicja', type: 'query', title: 'Nowe pytanie', content: 'Co z grafiką?', status: 'delivered', created_at: T1, payload: null };
+
+  let call = 0;
+  const client = {
+    pull: async () => {
+      call += 1;
+      return call === 1
+        ? { v: 1, user: 'alicja', active: [], threadRows: [], delegated: [first] }
+        : { v: 1, user: 'alicja', active: [second], threadRows: [second], delegated: [first] };
+    },
+  };
+
+  await main({ client });
+  const before = fs.readFileSync(skrzynka, 'utf8');
+  await main({ client });
+  const after = fs.readFileSync(skrzynka, 'utf8');
+
+  assert.notEqual(after, before, 'nowa wiadomość z huba przepisuje plik');
+  assert.ok(after.includes('Nowe pytanie'), 'nowa treść widoczna w Skrzynce');
+});
