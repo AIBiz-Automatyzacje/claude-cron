@@ -219,6 +219,19 @@ function proxyToVps(req, res, targetPath) {
 async function handleApi(req, res) {
   const { method, path: urlPath, segments, params } = matchRoute(req.method, req.url);
 
+  // CSRF: KAŻDA metoda mutująca w /api/* odrzucana, gdy żądanie jest cross-origin.
+  // Guard XFF (Tailscale-only) tego nie łapie — fetch z evil.com do http://localhost:7777
+  // idzie BEZ X-Forwarded-For, a globalne ACAO:* pozwala tej stronie odczytać odpowiedź
+  // (learned pattern docs/solutions/auth-issues/2026-07-24). Skutki są realne dla całego
+  // API, nie tylko dla endpointów z sekretem: POST /api/jobs = job `claude` z dowolnym
+  // promptem i --dangerously-skip-permissions (RCE), PUT /api/settings/concurrency =
+  // podmiana limitu maszyny, POST /api/runs/:id/kill = ubicie cudzego runu.
+  // Bezpieczne dla proxy /api/vps/*: proxyToVps wysyła wyłącznie Content-Type, więc
+  // żądanie dociera do VPS bez Origin i tam guard je przepuszcza.
+  if (method !== 'GET' && method !== 'HEAD' && isCrossOriginRequest(req)) {
+    return error(res, 'Cross-origin request rejected', 403);
+  }
+
   // GET /api/env — environment info
   // is_inbox_hub: czy administracja członkami zespołu ma na tej instancji sens. Samo
   // `webhook_base_url` nie wystarcza — członek z własnym Funnelem (dla webhooków) też je ma,
@@ -290,8 +303,7 @@ async function handleApi(req, res) {
   // GET/PUT /api/settings/concurrency — limit równoległych runów (state.max_concurrent).
   // PRYWATNY (za guardem XFF jak cały dashboard): wartość steruje zużyciem wspólnego okna
   // planu Claude na TEJ maszynie, więc nie ma powodu, by dało się ją zmienić z internetu.
-  // Bez guardu CSRF (isCrossOriginRequest) — endpoint nie zwraca ani nie przyjmuje sekretu,
-  // a ten guard jest zastrzeżony dla odpowiedzi z tokenami (/api/inbox/members).
+  // CSRF: PUT przechodzi przez wspólny guard cross-origin metod mutujących (góra handleApi).
   if (urlPath === '/api/settings/concurrency') {
     // GET — wartość rozwiązywana w momencie odczytu (state > default), nie przy require
     if (method === 'GET') {
@@ -305,6 +317,11 @@ async function handleApi(req, res) {
       const check = scheduler.sanitizeMaxConcurrent(body.max_concurrent);
       if (!check.ok) return error(res, check.error);
       db.setState(scheduler.MAX_CONCURRENT_STATE_KEY, String(check.value));
+      // Dzwonek do pętli drain (wzorzec z enqueueJob): pętla czeka na Promise.race
+      // aktywnych runów i nie ma okresowego re-picku, więc BEZ tego podniesienie limitu
+      // nie ruszyłoby niczego z kolejki aż do zakończenia któregoś runu (przy timeoucie
+      // 10 min — kilkanaście minut ciszy po kliknięciu „Zapisz").
+      scheduler.processQueue().catch((err) => console.error('[scheduler] processQueue:', err.message));
       return json(res, { max_concurrent: scheduler.readMaxConcurrent() });
     }
   }

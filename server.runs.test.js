@@ -292,3 +292,57 @@ test('Kill per run też jest prywatny: X-Forwarded-For → 403', async () => {
   const res = await api('/api/runs/1/kill', { method: 'POST', headers: { 'X-Forwarded-For': '1.2.3.4' } });
   assert.equal(res.status, 403);
 });
+
+// === Odbiór P2 review fazy 1 ===
+
+test('CSRF: cross-origin PUT limitu i POST killa odrzucone (403), same-origin przechodzi', async (t) => {
+  t.after(() => api('/api/settings/concurrency', { method: 'PUT', body: { max_concurrent: 3 } }));
+
+  // Arrange — guard XFF NIE łapie żądania z przeglądarki: fetch z evil.com do localhost
+  // idzie bez X-Forwarded-For, a ACAO:* pozwala tej stronie odczytać odpowiedź.
+  const evil = { Origin: 'http://evil.com' };
+
+  // Act/Assert — zapis limitu z obcej strony odrzucony i BEZ skutku
+  const put = await api('/api/settings/concurrency', { method: 'PUT', body: { max_concurrent: 9 }, headers: evil });
+  assert.equal(put.status, 403, 'cross-origin PUT limitu odrzucony');
+  assert.notEqual((await api('/api/settings/concurrency')).body.max_concurrent, 9);
+
+  // Act/Assert — kill runu z obcej strony odrzucony
+  const kill = await api('/api/runs/1/kill', { method: 'POST', headers: evil });
+  assert.equal(kill.status, 403, 'cross-origin kill odrzucony');
+
+  // Act/Assert — legalny dashboard (Origin == Host) nie jest zablokowany
+  const sameOrigin = await api('/api/settings/concurrency', {
+    method: 'PUT',
+    body: { max_concurrent: 2 },
+    headers: { Origin: `http://localhost:${PORT}` },
+  });
+  assert.deepEqual(sameOrigin, { status: 200, body: { max_concurrent: 2 } });
+});
+
+test('Podniesienie limitu z dashboardu BUDZI kolejkę — run rusza bez dodatkowego triggera', async (t) => {
+  // Arrange — limit 1: drugi trigger ląduje w kolejce
+  t.after(async () => {
+    await api('/api/settings/concurrency', { method: 'PUT', body: { max_concurrent: 3 } });
+    await killAllRunning();
+  });
+  await api('/api/settings/concurrency', { method: 'PUT', body: { max_concurrent: 1 } });
+  await api(`/api/jobs/${jobA.id}/trigger`, { method: 'POST' });
+  await api(`/api/jobs/${jobB.id}/trigger`, { method: 'POST' });
+  await waitFor(async () => {
+    const status = await getStatus();
+    return status.current_runs.length === 1 && status.queue_length >= 1;
+  }, 'jeden run biegnie, drugi czeka w kolejce');
+
+  // Act — user podnosi limit w dashboardzie; ŻADNEGO dodatkowego triggera
+  const put = await api('/api/settings/concurrency', { method: 'PUT', body: { max_concurrent: 3 } });
+  assert.deepEqual(put, { status: 200, body: { max_concurrent: 3 } });
+
+  // Assert — czekający run startuje od razu, nie po zakończeniu biegnącego (SLEEP_MS = 60 s)
+  const running = await waitFor(
+    async () => ((await runningRunIds()).length === 2 ? true : null),
+    'drugi run wystartował po podniesieniu limitu',
+    10_000,
+  );
+  assert.equal(running, true);
+});
