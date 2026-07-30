@@ -610,6 +610,15 @@ figma-design-to-code *(nominalnie — repo używa vanilla JS bez frameworka i be
 
 **Cel:** panel przestaje kłamić, a instalowany plist faktycznie wstaje.
 
+**Zakres (doprecyzowany po review fazy 3, 2026-07-30):** Unit 8 dostarcza **moduł** — generator
+plista, sprzątanie legacy agentów i status czytany po tej samej etykiecie. **Wpięcie w ścieżkę
+usera** (`setup.mjs` / `POST /api/autostart` / renderowanie `autostart` w `public/app.js`)
+jest **poza zakresem tego Unitu** i idzie jako **Unit 10** (patrz „Backlog po sprincie"):
+autostart na Macu robi dziś hook Claude Code (`setup.mjs:1197`), więc dołożenie launchd bez
+wygaszenia hooka daje dwa mechanizmy wskrzeszające serwer na porcie 7777, a wybór między nimi to
+decyzja produktowa spoza R10. Do czasu wpięcia instalacja launchd = ręczne
+`node -e "console.log(require('./lib/platform').install())"` (checklist operatora).
+
 **Wymagania:** R10
 
 **Zależności:** brak
@@ -697,6 +706,18 @@ characterization testu generatora plista (kształt XML, ścieżki, env), zanim z
 **Weryfikacja:**
 - `node --test lib/scheduler.test.js` przechodzi.
 - `npm test` przechodzi w całości.
+
+### Backlog po sprincie (poza zakresem tych czterech faz)
+
+- [ ] **Unit 10: wpięcie autostartu launchd w ścieżkę usera** *(follow-up Unitu 8, dodany po review
+  fazy 3)*. Kolejność: (1) rozstrzygnąć „hook Claude Code vs launchd" — dziś autostart na Macu robi
+  hook z `setup.mjs:1197`, więc oba naraz = dwa procesy walczące o port 7777; (2) wpiąć
+  `platform.install()` w wybraną ścieżkę (`setup.mjs` albo `POST /api/autostart` z guardem XFF
+  i cross-origin, wzorzec `/api/inbox/members`); (3) wyrenderować `status.autostart` w
+  `public/app.js` (dziś pole nie ma ANI JEDNEGO konsumenta w UI); (4) dopiero mając konsumenta
+  rozstrzygnąć, czy `buildMacStatus` zostaje z polami `label`/`legacy`, czy wracają do
+  `{installed, running, platform}`. Do czasu wpięcia jedyna ścieżka instalacji launchd to ręczne
+  `node -e "console.log(require('./lib/platform').install())"`.
 
 ## Wpływ systemowy
 

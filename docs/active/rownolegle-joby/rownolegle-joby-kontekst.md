@@ -1,8 +1,9 @@
 # Równoległe joby — kontekst techniczny
 
 **Branch:** `feature/rownolegle-joby`
-**Ostatnia aktualizacja:** 2026-07-30 — Faza 3 (Unit 8, autostart na Macu) zaimplementowana;
-`npm test` 772/772 (0 fail), `node --test lib/platform.test.js` 26/26
+**Ostatnia aktualizacja:** 2026-07-30 — Faza 3 (Unit 8, autostart na Macu) zaimplementowana
++ fix po review; `npm test` 782/782 (0 fail), `node --test lib/platform.test.js` 36/36
+(na wymuszonym `process.platform='linux'`: 35 pass / 1 skip / 0 fail)
 
 ## Źródła
 
@@ -336,3 +337,63 @@ to pierwsze pokrycie tego modułu (26 testów). `npm test` 772/772.
   funkcje — realnego `launchctl load` nikt jeszcze nie odpalił na tej maszynie.
 - **Baseline testów w dokumentach był nieaktualny** (plan mówi 640, zadania 736): przed Fazą 3 repo
   miało 746 testów, po niej 772. Żaden istniejący plik testowy nie został tknięty.
+
+## Review fazy 3 (2026-07-30)
+
+**Raport:** `docs/active/rownolegle-joby/review-faza-3.md` · **Gate:** ⚠️ ZASTRZEŻENIA
+(0×P1, 3×P2, 14×P3 + 2 findingi OPERATOR poza gate'em). Bookkeeping `Weryfikacja:`: 2 checkboxy CLI
+odznaczone (`node --test lib/platform.test.js` 26/26, `npm test` 772/772, oba exit 0), 1 checkbox
+operatora przeniesiony do „Operator checklist faza 3". Tester E2E pominięty przez routing (brak
+warstwy UI, 0 browserowych checkboxów) — nic browserowego nie zostało odznaczone.
+
+**Kluczowe wnioski:**
+
+- **Unit 8 nie ma dziś konsumenta** (P2, `lib/platform.js:169`) — `installMac()`/`install()` nie jest
+  wołany z żadnej ścieżki usera (`lib/platform` importuje wyłącznie `server.js:13`, i tylko po
+  `getStatus()`), a `public/` w ogóle nie renderuje pola `autostart` (grep = 0 trafień). Realny
+  autostart to hook Claude Code z `setup.mjs:1197`, nie launchd. Cel „panel przestaje kłamić" nie
+  może przejść bez wpięcia modułu w setup/endpoint albo jawnego przeniesienia wpięcia do osobnego
+  Unitu. To rozstrzygnięcie determinuje też dwa sprzeczne findingi P3 wokół `buildMacStatus`
+  (asymetryczne DI vs YAGNI gałęzi legacy) — jedna decyzja zamyka oba.
+- **Cała ścieżka I/O `installMac()` jest bez testu** (P2) — odhaczony checkbox „unloaduje i kasuje
+  stary plist przed load" opiera się na inspekcji kodu; przetestowana jest tylko połowa czytająca.
+  Learned-pattern 2026-07-28: testy czystych funkcji przechodzą przy złamanym zachowaniu systemowym.
+- **Nowy plik testowy jest nieprzenośny** (P2, `lib/platform.test.js:210`) — asercja na
+  `path.basename(PLIST_PATH)` failuje na Linuksie (`PLIST_PATH === ''` poza darwinem), a repo działa
+  produkcyjnie na VPS-ie. Zweryfikowane empirycznie: 25/26 na wymuszonym `process.platform='linux'`.
+- **Powtórka antywzorca z Fazy 2**: `resolvePortableNodeBin` dopasowuje `.node/` substringiem bez
+  granicy katalogu — dokładnie to, co review Fazy 2 zgłosiło dla `Contains` w `install.ps1`.
+- **Operator jest jedynym, kto może domknąć tę fazę na Macu** — i musi zrobić kopię działającego
+  ręcznego plista `com.claude-cron.daemon` PRZED pierwszym `installMac()`, bo instalacja go kasuje
+  bezpowrotnie.
+
+### Fix po review fazy 3 (2026-07-30)
+
+- **Zakres Unitu 8 doprecyzowany: moduł TAK, wpięcie w ścieżkę usera NIE (P2 `lib/platform.js:169`).**
+  Cel „panel przestaje kłamić" dotyczy *modułu* — `installMac()` produkuje plist, który wstaje,
+  a `getStatus()` czyta stan po tej samej etykiecie. Wpięcia (`setup.mjs` / `POST /api/autostart`
+  / pole `autostart` na dashboardzie) świadomie NIE robimy w tej fazie, bo:
+  (a) autostart na Macu robi dziś **hook Claude Code** (`setup.mjs:1197`,
+  `claude-cron-autostart.js`) — dołożenie launchd bez wygaszenia hooka daje DWA mechanizmy
+  wskrzeszające serwer na tym samym porcie 7777 (dokładnie ta klasa awarii, którą Faza 2 właśnie
+  zamykała wykryciem zajętego portu); wybór „hook czy launchd" to decyzja produktowa, której plan
+  Fazy 3 (R10) nie podejmował;
+  (b) `POST /api/autostart` to nowa mutująca powierzchnia wymagająca guardów (XFF + cross-origin,
+  jak `/api/inbox/members`) i UI — over-specification wobec zakresu Unitu 8.
+  Wpięcie jest zapisane jako **Unit 10 w „Follow-up po Fazie 3"** (`rownolegle-joby-zadania.md`).
+  Konsekwencja dla operatora: dopóki wpięcia nie ma, instalacja launchd idzie ręcznie —
+  `node -e "console.log(require('./lib/platform').install())"` (checklist operatora zaktualizowana).
+  Ta sama decyzja zawiesza dwa sprzeczne findingi P3 wokół `buildMacStatus` (asymetryczne DI vs
+  YAGNI gałęzi legacy) — rozstrzyga je dopiero konsument w UI.
+- **`installMac()`/`removeLegacyAgents()`/`unloadAgent()`/`readLaunchctlList()` dostały wstrzykiwalne
+  I/O** (`REAL_IO`, domyślny argument `io`) i pierwsze testy — kontraktem tych funkcji jest
+  KOLEJNOŚĆ kroków (katalog logów + unload PRZED zapisem plista i przed `load`), której nie da się
+  zweryfikować czystą funkcją, a realny `launchctl load` wymaga sesji GUI. Wzorzec ten sam co
+  `db.setDbPath` / `claude-spawn.setClaudeBin`. Zachowanie produkcyjne bez zmian.
+  Pokryte: kolejność kroków, sprzątanie legacy przed zapisem, pad `unload` nieprzerywający
+  instalacji, kasowanie legacy plista mimo padu `unload` (świadomy kontrakt + ostrzeżenie),
+  `unloadAgent` ok/pad, `readLaunchctlList` output/pad z ostrzeżeniem RAZ na proces.
+- **Suita jest przenośna** — asercja o `path.basename(PLIST_PATH)` dostała
+  `{ skip: process.platform !== 'darwin' }`, a kontrakt „jedna stała etykiety" ma teraz drugą,
+  platformo-niezależną asercję (`status.label === PLIST_LABEL`). Zweryfikowane wymuszonym
+  `process.platform='linux'`: 35 pass / 1 skip / 0 fail (na macOS 36/36).
