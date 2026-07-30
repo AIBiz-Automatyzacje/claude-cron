@@ -1,7 +1,7 @@
 # Równoległe joby — checklista zadań
 
 **Branch:** `feature/rownolegle-joby`
-**Ostatnia aktualizacja:** 2026-07-30 (Faza 1 zaimplementowana)
+**Ostatnia aktualizacja:** 2026-07-30 (Faza 4 zaimplementowana — Unit 9, karencja po wybudzeniu)
 
 Legenda: `Test:` = scenariusz testowy z planu technicznego · `Weryfikacja:` = automatyczne
 kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego nie odznacza).
@@ -313,13 +313,13 @@ review fazy 3"). Do czasu wpięcia jedyną ścieżką instalacji launchd jest wy
 
 *Delegate to: feature-builder-data · Zależy od: Unit 3*
 
-- [ ] Czysta funkcja `shouldDeferAfterWake(lastActiveAt, now, graceMs)` — bez zegara i bez sieci
-- [ ] Wykrycie wybudzenia z luki w heartbeacie (wzorzec progu: `executor.js:20-31`, `SLEEP_GAP_MS`)
-- [ ] Odroczenie pierwszego startu runu o 30-60 s po wybudzeniu; retry bez zmian
-- [ ] Rozstrzygnąć w implementacji: karencja dla wszystkich jobów czy tylko `run_on_wake`; sztywne czekanie czy probe sieci
-- [ ] Test: `shouldDeferAfterWake` → `true` tuż po luce, `false` po karencji, `false` przy normalnej pracy
-- [ ] Test: run zakolejkowany w oknie karencji startuje **po** jej upływie — nie ginie i nie jest `failed`
-- [ ] Test: zwykły ruch kolejki (bez wybudzenia) nie jest opóźniany o ani jeden tick
+- [x] Czysta funkcja `shouldDeferAfterWake(lastActiveAt, now, graceMs)` — bez zegara i bez sieci
+- [x] Wykrycie wybudzenia z luki w heartbeacie (wzorzec progu: `executor.js:20-31`, `SLEEP_GAP_MS`)
+- [x] Odroczenie pierwszego startu runu o 30-60 s po wybudzeniu; retry bez zmian
+- [x] Rozstrzygnąć w implementacji: karencja dla wszystkich jobów czy tylko `run_on_wake`; sztywne czekanie czy probe sieci
+- [x] Test: `shouldDeferAfterWake` → `true` tuż po luce, `false` po karencji, `false` przy normalnej pracy
+- [x] Test: run zakolejkowany w oknie karencji startuje **po** jej upływie — nie ginie i nie jest `failed`
+- [x] Test: zwykły ruch kolejki (bez wybudzenia) nie jest opóźniany o ani jeden tick
 - [ ] Weryfikacja: `node --test lib/scheduler.test.js` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 

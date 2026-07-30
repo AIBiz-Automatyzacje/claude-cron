@@ -668,7 +668,7 @@ characterization testu generatora plista (kształt XML, ścieżki, env), zanim z
 
 ### Faza 4 — Opóźnienie startu po wybudzeniu
 
-- [ ] **Unit 9: Karencja sieciowa po wykryciu wybudzenia**
+- [x] **Unit 9: Karencja sieciowa po wykryciu wybudzenia**
 
 **Cel:** joby wymagające sieci nie padają na `ENOTFOUND` w pierwszych sekundach po wybudzeniu.
 
@@ -703,9 +703,21 @@ characterization testu generatora plista (kształt XML, ścieżki, env), zanim z
   oznaczany jako `failed`.
 - [Unit] Zwykły ruch kolejki (bez wybudzenia) nie jest opóźniany o ani jeden tick.
 
+**Rozstrzygnięcie odroczonych decyzji (30.07, implementacja):**
+- **Karencja obejmuje WSZYSTKIE joby**, nie tylko `run_on_wake` — job Pulsa to w większości spawn
+  CLI `claude`, który i tak gada z API po sieci, a `ENOTFOUND` nie pyta o flagę; filtr per-job
+  wymagałby zgadywania, który job „wymaga sieci".
+- **Sztywne czekanie 45 s, bez probe sieci** — probe wnosi I/O sieciowe do pętli kolejki (wiszący
+  DNS zablokowałby drain) i jest nietestowalny bez sieci; zysk to kilkadziesiąt sekund raz na
+  wybudzenie.
+- **Pierwszy argument czystej funkcji to chwila WYBUDZENIA, nie `last_active_at`** —
+  `shouldDeferAfterWake(wakeAt, now, graceMs)`. Heartbeat nadpisuje `last_active_at` zaległym
+  tyknięciem w milisekundach po pobudce, więc detekcja oparta o ten znacznik byłaby ślepa na
+  główny scenariusz (sen Maca przy żyjącym procesie).
+
 **Weryfikacja:**
-- `node --test lib/scheduler.test.js` przechodzi.
-- `npm test` przechodzi w całości.
+- `node --test lib/scheduler.test.js` przechodzi. ✅ 51/51 (30.07)
+- `npm test` przechodzi w całości. ✅ 790/790, 0 fail (30.07)
 
 ### Backlog po sprincie (poza zakresem tych czterech faz)
 

@@ -1,9 +1,8 @@
 # Równoległe joby — kontekst techniczny
 
 **Branch:** `feature/rownolegle-joby`
-**Ostatnia aktualizacja:** 2026-07-30 — Faza 3 (Unit 8, autostart na Macu) zaimplementowana
-+ fix po review; `npm test` 782/782 (0 fail), `node --test lib/platform.test.js` 36/36
-(na wymuszonym `process.platform='linux'`: 35 pass / 1 skip / 0 fail)
+**Ostatnia aktualizacja:** 2026-07-30 — Faza 4 (Unit 9, karencja po wybudzeniu) zaimplementowana;
+`npm test` 790/790 (0 fail), `node --test lib/scheduler.test.js` 51/51
 
 ## Źródła
 
@@ -397,3 +396,68 @@ warstwy UI, 0 browserowych checkboxów) — nic browserowego nie zostało odznac
   `{ skip: process.platform !== 'darwin' }`, a kontrakt „jedna stała etykiety" ma teraz drugą,
   platformo-niezależną asercję (`status.label === PLIST_LABEL`). Zweryfikowane wymuszonym
   `process.platform='linux'`: 35 pass / 1 skip / 0 fail (na macOS 36/36).
+
+## Stan realizacji — Faza 4, Unit 9 (30.07)
+
+Karencja sieciowa po wybudzeniu w `lib/scheduler.js`: po wykryciu powrotu maszyny do życia pętla
+drain wstrzymuje **start** runów o `WAKE_GRACE_MS = 45 s` (środek widełek 30–60 s z planu — krócej
+niż jeden cykl heartbeatu, więc karencja nigdy nie zjada więcej niż jedno tyknięcie). Retry bez
+zmian. `npm test` **790 pass / 0 fail** (baseline 782 → 8 nowych testów, zero modyfikacji
+istniejących), `node --test lib/scheduler.test.js` 51/51. Zero nowych zależności npm.
+
+### Decyzje podjęte w implementacji (poza literalnym brzmieniem planu)
+
+1. **Pierwszym argumentem czystej funkcji jest chwila WYBUDZENIA, nie `last_active_at`** —
+   `shouldDeferAfterWake(wakeAt, now, graceMs)` zamiast planowanego
+   `shouldDeferAfterWake(lastActiveAt, ...)`. Powód jest twardy: po pobudce Node odpala zaległy
+   callback heartbeatu natychmiast i nadpisuje `last_active_at` świeżą wartością, więc luka znika,
+   zanim ktokolwiek zdąży ją przeczytać. Detekcja oparta o ten znacznik byłaby **ślepa na główny
+   scenariusz** (sen Maca przy żyjącym procesie). Ten sam mechanizm, na którym stoi
+   `startSleepAwareTimeout` w executorze.
+2. **Trzy czyste funkcje zamiast jednej**: `shouldDeferAfterWake` (decyzja pętli),
+   `wakeGraceRemainingMs` (reszta karencji — timer potrzebuje liczby ms, nie booleana) i
+   `isWakeGap` (definicja snu, próg z `executor.SLEEP_GAP_MS` — w projekcie ma być JEDNA definicja
+   snu). Wszystkie pokryte testami i używane w produkcji, żadna nie jest abstrakcją „na przyszłość".
+3. **Rozstrzygnięcie odroczone w planie #1 — karencja obejmuje WSZYSTKIE joby, nie tylko
+   `run_on_wake`.** Job Pulsa to w ogromnej większości spawn CLI `claude`, który i tak gada z API
+   po sieci, a `ENOTFOUND` nie pyta o flagę. Filtr per-job kupowałby dwie klasy w pickerze za cenę
+   zgadywania, który job „wymaga sieci"; koszt globalnej karencji to jedno opóźnienie rzędu pół
+   minuty, raz na wybudzenie. Uzasadnienie siedzi w komentarzu w `processQueue`.
+4. **Rozstrzygnięcie odroczone w planie #2 — sztywne czekanie, nie probe sieci.** Probe wnosi I/O
+   sieciowe do pętli kolejki (nowa klasa awarii: wiszący DNS blokuje drain) i jest nietestowalny bez
+   sieci. Kierunek zgodny z gate wake w `scripts/sync-heartbeat.mjs`.
+5. **Dwa źródła detekcji wybudzenia, nie jedno.** (a) luka między tyknięciami heartbeatu — sen
+   maszyny przy żyjącym procesie; (b) `detectWakeFromDowntime()` w `start()` — downtime dłuższy od
+   progu snu, czyli restart po reboocie maszyny. Kolejność w `start()` jest kontraktem:
+   `detectWakeFromDowntime` **przed** `detectMissedJobs` i `startHeartbeat`, bo to właśnie joby
+   `run_on_wake` lądują w kolejce jako pierwsze po pobudce i to one padały na `ENOTFOUND`, a
+   heartbeat nadpisuje ślad downtime'u przy pierwszym wywołaniu.
+6. **Timer karencji jest własnym bodźcem pętli**, dołożonym do `Promise.race` obok dzwonka
+   (`delayPromise`, `unref()` wzorem `lib/ask.js`, `cancel()` w `finally` — zwolnienie idempotentne
+   także przy wyjściu przez wyjątek). Bez tego run zakolejkowany w oknie karencji czekałby na
+   dowolne następne `enqueueJob`. Pętla czeka na koniec karencji **tylko gdy w kolejce coś stoi**
+   (`hasPendingRuns`), żeby przy pustej kolejce nie trzymać `queueProcessing` przez pół minuty.
+7. **Ścieżka bez wybudzenia jest bit-w-bit dzisiejsza** — zero `await`, zero dodatkowego zapytania
+   do DB (`hasPendingRuns` pytamy WYŁĄCZNIE gdy karencja trwa). Pokryte testem regresji R1: run
+   dostaje status `running` w tym samym ticku, w którym woła się `processQueue()`.
+8. **Stan wybudzenia żyje w pamięci procesu, nie w `state`** — to stan bieżącego procesu, a nie dana
+   do przetrwania restartu (po restarcie ścieżkę downtime'u wykrywa `detectWakeFromDowntime`).
+   Eksporty `markWakeDetected`/`getWakeDetectedAt` to DI dla testów (wzorzec `db.setDbPath`) — bez
+   nich test szwu startu i test integracyjny karencji nie mają jak ustawić/odczytać stanu modułu.
+9. **Zegar cofnięty przez NTP po pobudce → karencja natychmiast wygasa** (`wakeGraceRemainingMs`
+   zwraca 0 dla ujemnego „since"). Lepiej jeden run za wcześnie niż kolejka zamrożona do czasu, aż
+   zegar dogoni znacznik.
+
+### Dług do domknięcia
+
+- **`lib/scheduler.js` urósł do ~560 linii** (limit z `.claude/rules/coding-rules.md` = 300; po
+  Fazie 1 było 426). Podziału dalej świadomie nie robiono — nieplanowany refaktor rdzenia razem ze
+  zmianą zachowania byłby zmianą na ślepo. Kandydat na osobny krok, teraz z wyraźnym szwem:
+  karencja + heartbeat + detekcja wybudzenia to spójny moduł „wake" do wyjęcia z pętli kolejki.
+- **Karencja nie ma pokrycia E2E na żywej maszynie** — realne wybudzenie Maca z zakolejkowanym
+  jobem `run_on_wake` to krok operatora przy deployu (obserwacja poniedziałku, patrz „Odbiór
+  całości”).
+- **Logowanie zdarzeń wybudzenia idzie przez `console.log`** z prefiksem `[scheduler]` — zgodnie
+  z konwencją całego repo (projekt nie ma structured loggera ani Sentry, a dołożenie ich byłoby
+  nową zależnością poza zakresem sprintu). Audyt error-handlingu tej fazy: zero pustych `catch`,
+  zero połkniętych błędów (jedyny nowy `try` ma `finally` bez `catch`).
