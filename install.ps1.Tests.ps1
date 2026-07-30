@@ -142,12 +142,67 @@ try {
         $script:InstallDir = Join-Path $Sandbox "claude-cron" # przywróć
     }
 
+    # --- Test 6: pusta odpowiedź na pytanie o katalog → wartość domyślna ---
+    function Test-ResolveInstallDirEmptyAnswer {
+        $fallback = Join-Path $HOME "claude-cron"
+        $result = Resolve-InstallDir -Answer "" -Fallback $fallback
+        $blank  = Resolve-InstallDir -Answer "   " -Fallback $fallback
+        if ($result -eq $fallback -and $blank -eq $fallback) {
+            Test-Pass "Resolve-InstallDir: sam Enter → domyślny katalog"
+        } else {
+            Test-Problem "Resolve-InstallDir: pusta odpowiedź dała '$result' / '$blank'"
+        }
+    }
+
+    # --- Test 7: cudzysłowy z Explorera, ~ i ścieżka względna → absolutna ścieżka ---
+    function Test-ResolveInstallDirSanitizes {
+        $fallback = Join-Path $HOME "claude-cron"
+        $quoted   = Resolve-InstallDir -Answer '  "C:\moje pulsy\instancja"  ' -Fallback $fallback
+        $tilde    = Resolve-InstallDir -Answer "~\puls" -Fallback $fallback
+        $relative = Resolve-InstallDir -Answer "puls" -Fallback $fallback -Base "C:\base"
+
+        $okQuoted   = $quoted -eq "C:\moje pulsy\instancja"
+        $okTilde    = $tilde -eq (Join-Path $HOME "puls")
+        $okRelative = $relative -eq (Join-Path "C:\base" "puls")
+        if ($okQuoted -and $okTilde -and $okRelative) {
+            Test-Pass "Resolve-InstallDir: czyści cudzysłowy, rozwija ~ i ścieżkę względną"
+        } else {
+            Test-Problem "Resolve-InstallDir: quoted='$quoted' tilde='$tilde' relative='$relative'"
+        }
+    }
+
+    # --- Test 8: instalacja w NIESTANDARDOWYM katalogu (odpowiedź usera → realny install) ---
+    function Test-CustomInstallDirReceivesRepo {
+        $answer = Join-Path $Sandbox "moje pulsy\instancja"
+        $script:InstallDir = Resolve-InstallDir -Answer $answer -Fallback (Join-Path $HOME "claude-cron")
+        $fresh = Join-Path $Sandbox "t8-fresh"
+        $tmp   = Join-Path $Sandbox "t8-tmp"
+        New-Item -ItemType Directory -Path $fresh -Force | Out-Null
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        Set-Content -Path (Join-Path $fresh "server.js") -Value "code"
+        Set-Content -Path (Join-Path $fresh "setup.mjs") -Value "x"
+
+        Install-FreshRepo -FreshDir $fresh -TmpDir $tmp
+
+        # Invoke-Setup odpala dokładnie "$RepoDir\setup.mjs" (RepoDir = InstallDir) —
+        # obecność tego pliku to warunek startu instalacji w wybranym katalogu.
+        if ((Test-Path -LiteralPath (Join-Path $answer "setup.mjs")) -and (Test-Path -LiteralPath (Join-Path $answer "server.js"))) {
+            Test-Pass "niestandardowy katalog: repo (z setup.mjs do handoffu) wylądowało w wybranej ścieżce"
+        } else {
+            Test-Problem "niestandardowy katalog: brak repo w '$answer'"
+        }
+        $script:InstallDir = Join-Path $Sandbox "claude-cron" # przywróć
+    }
+
     Write-Host "== install.ps1 - testy bootstrap/preserve =="
     Test-PreserveMovesDataAndNode
     Test-PreserveNoopWhenNoOld
     Test-RerunPreservesSentinel
     Test-FreshInstallWhenNoExisting
     Test-StopPulsIgnoresForeignNode
+    Test-ResolveInstallDirEmptyAnswer
+    Test-ResolveInstallDirSanitizes
+    Test-CustomInstallDirReceivesRepo
 
     Write-Host ""
     Write-Host "Wynik: $Pass PASS / $($Pass + $Fail) total"

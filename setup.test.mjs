@@ -27,6 +27,17 @@ import {
   upsertDotenvLine,
   askInboxInvite,
   NODE_VERSION,
+  DEFAULT_DASHBOARD_PORT,
+  PORT_STATE,
+  buildDashboardUrl,
+  parsePortAnswer,
+  isPulsStatusPayload,
+  classifyPortState,
+  buildPortBusyMessage,
+  buildPortReuseMessage,
+  resolveDashboardPort,
+  probeDashboardPort,
+  buildStaleHookPortWarning,
 } from './setup.mjs';
 
 import http from 'node:http';
@@ -845,4 +856,211 @@ test('askInboxInvite: pad probe → guard nie pytany (walidacja kodu przed skutk
   assert.deepEqual(guard.calls, [], 'zły kod nie może zmieniać .gitignore użytkownika');
   assert.deepEqual(role.calls, []);
   assert.equal(fs.existsSync(secretPath()), false);
+});
+
+// === Port dashboardu (R9) — wykrycie kolizji i wybór portu ===
+
+test('parsePortAnswer: pusta odpowiedź → fallback (Enter zostawia bieżący port)', () => {
+  assert.equal(parsePortAnswer('', 7777), 7777);
+  assert.equal(parsePortAnswer('   ', 8080), 8080);
+  assert.equal(parsePortAnswer(undefined, 7777), 7777);
+});
+
+test('parsePortAnswer: poprawny numer → liczba', () => {
+  assert.equal(parsePortAnswer('8080', 7777), 8080);
+  assert.equal(parsePortAnswer(' 1 ', 7777), 1);
+  assert.equal(parsePortAnswer('65535', 7777), 65535);
+});
+
+test('parsePortAnswer: śmieć i wartości poza zakresem → null (nie cichy fallback)', () => {
+  assert.equal(parsePortAnswer('7777x', 7777), null, 'śmieć nie może przejść jako 7777');
+  assert.equal(parsePortAnswer('abc', 7777), null);
+  assert.equal(parsePortAnswer('0', 7777), null);
+  assert.equal(parsePortAnswer('65536', 7777), null);
+  assert.equal(parsePortAnswer('-1', 7777), null);
+});
+
+test('isPulsStatusPayload: kontrakt GET /api/status → true', () => {
+  assert.equal(
+    isPulsStatusPayload({ uptime: 12, queue_length: 0, total_jobs: 4, enabled_jobs: 3 }),
+    true,
+  );
+});
+
+test('isPulsStatusPayload: obce JSON-owe API na tym porcie → false', () => {
+  assert.equal(isPulsStatusPayload({ status: 'ok' }), false);
+  assert.equal(isPulsStatusPayload({ uptime: '12', queue_length: 0, total_jobs: 1, enabled_jobs: 1 }), false);
+  assert.equal(isPulsStatusPayload(null), false);
+  assert.equal(isPulsStatusPayload('uptime'), false);
+});
+
+test('classifyPortState: wolny port → free', () => {
+  assert.equal(classifyPortState({ bindable: true, statusPayload: null }), PORT_STATE.FREE);
+});
+
+test('classifyPortState: zajęty przez naszą starą instancję → ours (re-run, nie błąd)', () => {
+  const payload = { uptime: 99, queue_length: 1, total_jobs: 2, enabled_jobs: 2 };
+  assert.equal(classifyPortState({ bindable: false, statusPayload: payload }), PORT_STATE.OURS);
+});
+
+test('classifyPortState: zajęty przez cudzy proces → foreign', () => {
+  assert.equal(classifyPortState({ bindable: false, statusPayload: null }), PORT_STATE.FOREIGN);
+  assert.equal(classifyPortState({ bindable: false, statusPayload: { hello: 'world' } }), PORT_STATE.FOREIGN);
+});
+
+test('buildPortBusyMessage: zawiera numer portu i podpowiedź diagnostyczną', () => {
+  const msg = buildPortBusyMessage(7777);
+  assert.ok(msg.includes('7777'), 'komunikat MUSI podać numer portu');
+  assert.ok(/lsof|Get-NetTCPConnection/.test(msg), 'komunikat MUSI podpowiedzieć, jak znaleźć winowajcę');
+});
+
+test('buildPortReuseMessage: mówi o re-runie, nie o błędzie', () => {
+  const msg = buildPortReuseMessage(7777);
+  assert.ok(msg.includes('7777'));
+  assert.ok(!msg.toLowerCase().includes('error'));
+});
+
+test('buildDashboardUrl: URL składany z wybranego portu', () => {
+  assert.equal(buildDashboardUrl(8080), 'http://localhost:8080');
+  assert.equal(buildDashboardUrl(DEFAULT_DASHBOARD_PORT), 'http://localhost:7777');
+});
+
+test('resolveDashboardPort: wolny port → zwraca go bez pytania', async () => {
+  const asked = [];
+  const result = await resolveDashboardPort({
+    initialPort: 7777,
+    probePort: async () => PORT_STATE.FREE,
+    askPort: async (p) => { asked.push(p); return ''; },
+    log: () => {},
+  });
+  assert.deepEqual(result, { port: 7777, reused: false });
+  assert.deepEqual(asked, [], 'wolny port nie może generować pytania');
+});
+
+test('resolveDashboardPort: port zajęty przez NASZĄ instancję → ścieżka re-runu, bez pytania', async () => {
+  const asked = [];
+  const logs = [];
+  const result = await resolveDashboardPort({
+    initialPort: 7777,
+    probePort: async () => PORT_STATE.OURS,
+    askPort: async (p) => { asked.push(p); return '8080'; },
+    log: (m) => logs.push(m),
+  });
+  assert.deepEqual(result, { port: 7777, reused: true });
+  assert.deepEqual(asked, [], 're-run instalatora nie jest kolizją — brak pytania o inny port');
+  assert.ok(logs.join('\n').includes('7777'));
+});
+
+test('resolveDashboardPort: cudzy proces → komunikat z portem i przejście na podany port', async () => {
+  const logs = [];
+  const seen = [];
+  const result = await resolveDashboardPort({
+    initialPort: 7777,
+    probePort: async (port) => { seen.push(port); return port === 7777 ? PORT_STATE.FOREIGN : PORT_STATE.FREE; },
+    askPort: async () => '8080',
+    log: (m) => logs.push(m),
+  });
+  assert.deepEqual(result, { port: 8080, reused: false });
+  assert.deepEqual(seen, [7777, 8080], 'nowy port MUSI być sprawdzony, nie przyjęty na wiarę');
+  assert.ok(logs.join('\n').includes('7777'), 'komunikat o kolizji zawiera zajęty port');
+});
+
+test('resolveDashboardPort: brak poprawnej odpowiedzi na zajęty port → rzuca (zero cichego sukcesu)', async () => {
+  await assert.rejects(
+    () =>
+      resolveDashboardPort({
+        initialPort: 7777,
+        probePort: async () => PORT_STATE.FOREIGN,
+        askPort: async () => '',
+        log: () => {},
+      }),
+    (error) => {
+      assert.ok(error.message.includes('7777'), 'błąd MUSI wskazać zajęty port');
+      return true;
+    },
+  );
+});
+
+test('resolveDashboardPort: same zajęte porty → rzuca po wyczerpaniu prób', async () => {
+  let asks = 0;
+  await assert.rejects(
+    () =>
+      resolveDashboardPort({
+        initialPort: 7777,
+        probePort: async () => PORT_STATE.FOREIGN,
+        askPort: async () => { asks += 1; return String(7778 + asks); },
+        log: () => {},
+      }),
+    /port/i,
+  );
+  assert.ok(asks > 0 && asks < 50, 'pętla nie może być nieskończona');
+});
+
+// === buildHookSource — port wypalony w hooku (dashboard i autostart = ta sama wartość) ===
+
+test('buildHookSource: bez podanego portu zostaje domyślny 7777 (zgodność z instalacjami sprzed R9)', () => {
+  const source = buildHookSource('/repo', '/repo/.node/x/bin/node');
+  assert.ok(source.includes('http://localhost:7777/api/status'));
+});
+
+test('buildHookSource: wybrany port trafia i do health-checku, i do env spawnowanego serwera', () => {
+  const source = buildHookSource('/repo', '/repo/.node/x/bin/node', 8123);
+  assert.ok(source.includes('http://localhost:8123/api/status'), 'health-check musi pytać o wybrany port');
+  assert.ok(source.includes('CLAUDE_CRON_PORT'), 'hook musi wymusić port w env serwera');
+  assert.ok(source.includes('8123'));
+  assert.ok(!source.includes('7777'), 'stary port nie może zostać nigdzie w hooku');
+});
+
+// === probeDashboardPort — realny bind-test na gnieździe (nie atrapa) ===
+
+// Startuje serwer HTTP na losowym porcie i oddaje port; sprzątanie przez t.after.
+function startServerOnFreePort(t, handler) {
+  return new Promise((resolve) => {
+    const server = http.createServer(handler);
+    t.after(() => new Promise((done) => server.close(done)));
+    server.listen(0, '0.0.0.0', () => resolve(server.address().port));
+  });
+}
+
+test('probeDashboardPort: nikt nie słucha → free', async (t) => {
+  // Port zajmujemy i natychmiast zwalniamy — dostajemy numer, o którym wiemy, że jest wolny.
+  const server = http.createServer(() => {});
+  const port = await new Promise((resolve) => {
+    server.listen(0, '0.0.0.0', () => resolve(server.address().port));
+  });
+  await new Promise((done) => server.close(done));
+
+  assert.equal(await probeDashboardPort(port), PORT_STATE.FREE);
+});
+
+test('probeDashboardPort: nasz dashboard na porcie → ours (re-run instalatora)', async (t) => {
+  const port = await startServerOnFreePort(t, (req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ uptime: 1, queue_length: 0, total_jobs: 0, enabled_jobs: 0 }));
+  });
+
+  assert.equal(await probeDashboardPort(port), PORT_STATE.OURS);
+});
+
+test('probeDashboardPort: cudzy serwer na porcie → foreign (kolizja, nie re-run)', async (t) => {
+  const port = await startServerOnFreePort(t, (req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<html>cudza aplikacja</html>');
+  });
+
+  assert.equal(await probeDashboardPort(port), PORT_STATE.FOREIGN);
+});
+
+// === buildStaleHookPortWarning — autostart i dashboard muszą pilnować tego samego portu ===
+
+test('buildStaleHookPortWarning: hook z tym samym portem → brak ostrzeżenia', () => {
+  const source = buildHookSource('/repo', '/repo/.node/x/bin/node', 8123);
+  assert.equal(buildStaleHookPortWarning(source, 8123), null);
+});
+
+test('buildStaleHookPortWarning: hook z poprzednim portem → ostrzeżenie z nowym portem', () => {
+  const source = buildHookSource('/repo', '/repo/.node/x/bin/node', 7777);
+  const warning = buildStaleHookPortWarning(source, 8123);
+  assert.ok(warning, 'rozjazd portu hook↔dashboard musi być zgłoszony');
+  assert.ok(warning.includes('8123'));
 });

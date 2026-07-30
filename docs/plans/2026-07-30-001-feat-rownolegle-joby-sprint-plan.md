@@ -560,7 +560,7 @@ figma-design-to-code *(nominalnie — repo używa vanilla JS bez frameworka i be
 
 ### Faza 2 — Instalator
 
-- [ ] **Unit 7: Konfigurowalny katalog instalacji i wykrycie zajętego portu**
+- [x] **Unit 7: Konfigurowalny katalog instalacji i wykrycie zajętego portu**
 
 **Cel:** pierwszy kontakt zespołu z produktem ma przejść gładko.
 

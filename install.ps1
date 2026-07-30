@@ -25,8 +25,11 @@ $NodeVersion = "22.17.0"
 $ZipUrl    = if ($env:CLAUDE_CRON_ZIP_URL) { $env:CLAUDE_CRON_ZIP_URL } else { "https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/main.zip" }
 $ZipTopDir = if ($env:CLAUDE_CRON_ZIP_TOPDIR) { $env:CLAUDE_CRON_ZIP_TOPDIR } else { "claude-cron-main" }
 
-# Docelowy katalog instalacji w trybie bootstrap (override przez env w testach).
-$InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $HOME "claude-cron" }
+# Docelowy katalog instalacji w trybie bootstrap. Env-override (testy, automatyzacja,
+# druga instancja obok pierwszej) wygrywa i POMIJA pytanie - inaczej nieinteraktywny
+# przebieg z jawnie podanym katalogiem i tak pytalby o niego uzytkownika.
+$InstallDirDefault = Join-Path $HOME "claude-cron"
+$InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { $InstallDirDefault }
 
 # Katalogi przenoszone ze starej instalacji do swiezej (allowlist, NIE blacklist).
 # data\  = baza SQLite + logi (NIGDY nie kasowac przy re-run).
@@ -42,6 +45,52 @@ function Get-NodeArch {
         "x86"   { return "x86" }
         default { throw "Nieobslugiwana architektura: $($env:PROCESSOR_ARCHITECTURE)." }
     }
+}
+
+# ============ KATALOG INSTALACJI ============
+
+# Czysta zamiana odpowiedzi uzytkownika na sciezke instalacji (parytet z resolve_install_dir
+# w install.sh). Puste (sam Enter) -> katalog domyslny. Explorer wkleja sciezki w cudzyslowach,
+# a "~" nie jest przez PowerShell rozwijane w wartosci z Read-Host - bez tego powstalby
+# katalog o nazwie "~". Sciezka wzgledna -> absolutna, bo cwd instalatora bywa przypadkowy.
+function Resolve-InstallDir {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Answer,
+        [Parameter(Mandatory = $true)][string] $Fallback,
+        [string] $Base = $PWD.Path
+    )
+    $value = $Answer.Trim().Trim('"').Trim("'").Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) { return $Fallback }
+
+    if ($value -eq "~") { return $HOME }
+    if ($value.StartsWith("~")) {
+        return (Join-Path $HOME $value.Substring(1).TrimStart('\', '/'))
+    }
+    if (-not [System.IO.Path]::IsPathRooted($value)) {
+        return (Join-Path $Base $value)
+    }
+    return $value
+}
+
+# Pytanie o katalog instalacji (tylko tryb bootstrap). Pod irm|iex konsola jest stdin-em
+# procesu (zweryfikowane 2026-07-01 na Windows 11 + PS 5.1), wiec Read-Host czyta klawiature.
+# Gdy stdin jest przekierowany (CI, potok), Read-Host oddaje pusty string albo rzuca -
+# obie drogi konczy sie katalogiem domyslnym, nigdy zawieszeniem instalatora.
+function Read-InstallDir {
+    if ($env:INSTALL_DIR) {
+        Write-Host "[info] Katalog instalacji z env INSTALL_DIR: $InstallDir" -ForegroundColor Cyan
+        return $InstallDir
+    }
+    $answer = ""
+    try {
+        $answer = Read-Host "Katalog instalacji [$InstallDirDefault]"
+    }
+    catch {
+        Write-Host "[warn] Brak interaktywnego wejscia - instaluje w katalogu domyslnym." -ForegroundColor Yellow
+    }
+    $resolved = Resolve-InstallDir -Answer $answer -Fallback $InstallDirDefault
+    Write-Host "[ok] Katalog instalacji: $resolved" -ForegroundColor Green
+    return $resolved
 }
 
 # ============ BOOTSTRAP (irm|iex, bez git) ============
@@ -146,6 +195,12 @@ function Invoke-Bootstrap {
     Write-Host ""
     Write-Host "CLAUDE-CRON - instalacja jedna komenda" -ForegroundColor Cyan
     Write-Host "========================================"
+    Write-Host ""
+
+    # Katalog PRZED pobraniem czegokolwiek - Install-FreshRepo i Stop-PulsProcesses
+    # dostaja juz docelowa sciezke (filtr procesow idzie po sciezce instalacji).
+    $script:InstallDir = Read-InstallDir
+
     Write-Host ""
     Write-Host "  Pobieram repo do $InstallDir (bez git) i konfiguruje." -ForegroundColor DarkGray
     Write-Host ""

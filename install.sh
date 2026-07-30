@@ -26,8 +26,17 @@ NODE_VERSION="22.17.0"
 TARBALL_URL="${CLAUDE_CRON_TARBALL_URL:-https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/main.tar.gz}"
 TARBALL_TOPDIR="${CLAUDE_CRON_TARBALL_TOPDIR:-claude-cron-main}"
 
-# Docelowy katalog instalacji w trybie bootstrap (override przez env w testach).
-INSTALL_DIR="${INSTALL_DIR:-$HOME/claude-cron}"
+# Docelowy katalog instalacji w trybie bootstrap. Env-override (testy, automatyzacja,
+# druga instancja obok pierwszej) wygrywa i POMIJA pytanie — inaczej nieinteraktywny
+# przebieg z jawnie podanym katalogiem i tak pytałby o niego użytkownika.
+INSTALL_DIR_DEFAULT="$HOME/claude-cron"
+INSTALL_DIR_EXPLICIT=0
+# Forma if/then, NIE `[ ... ] && VAR=1`: pod `set -e` fałszywy test na końcu listy kończy
+# cały skrypt (przy pustym INSTALL_DIR instalator wychodził tu z kodem 1, bez komunikatu).
+if [ -n "${INSTALL_DIR:-}" ]; then
+  INSTALL_DIR_EXPLICIT=1
+fi
+INSTALL_DIR="${INSTALL_DIR:-$INSTALL_DIR_DEFAULT}"
 
 # Katalogi przenoszone ze starej instalacji do świeżej (allowlist, NIE blacklist).
 # data/  = baza SQLite + logi (NIGDY nie kasować przy re-run).
@@ -78,6 +87,64 @@ detect_arch() {
     x86_64|amd64)  echo "x64" ;;
     *) fail "Nieobsługiwana architektura: $(uname -m)." ;;
   esac
+}
+
+# ============ KATALOG INSTALACJI ============
+
+# resolve_install_dir <odpowiedz> <domyslny> [baza] — czysta zamiana odpowiedzi na ścieżkę.
+# Puste (sam Enter) → domyślny katalog. Drag & drop z Findera dokleja cudzysłowy i escape'y
+# spacji, a `~` w wartości z `read` NIE jest rozwijane przez powłokę (rozwijanie tyldy
+# działa tylko na tekście kodu) — obie rzeczy trzeba obsłużyć tu, inaczej powstałby
+# katalog o nazwie "~". Ścieżka względna → absolutna, bo cwd instalatora bywa przypadkowy.
+resolve_install_dir() {
+  local answer="$1" fallback="$2" base="${3:-$PWD}"
+  answer="${answer//\"/}"
+  answer="${answer//\'/}"
+  answer="${answer//\\/}"
+  answer="$(printf '%s' "$answer" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+
+  [ -n "$answer" ] || { printf '%s' "$fallback"; return 0; }
+
+  case "$answer" in
+    "~")   answer="$HOME" ;;
+    "~/"*) answer="$HOME/${answer#\~/}" ;;
+    /*)    ;;
+    *)     answer="$base/$answer" ;;
+  esac
+  printf '%s' "$answer"
+}
+
+# Źródło odpowiedzi interaktywnych. Override WYŁĄCZNIE dla testów (podstawiony plik
+# udaje terminal) — w realnym przebiegu zawsze /dev/tty.
+INSTALL_TTY="${INSTALL_TTY:-/dev/tty}"
+
+# Czy da się CZYTAĆ z terminala. Test `-r /dev/tty` kłamie: na macOS węzeł urządzenia
+# istnieje i jest „czytelny" także dla procesu bez terminala kontrolującego, a dopiero
+# otwarcie zwraca „Device not configured" — pod `set -e` wywalało to instalator bez
+# komunikatu. Guard musi więc SPRAWDZIĆ stan faktyczny: otworzyć i zamknąć.
+has_tty() {
+  { : < "$INSTALL_TTY"; } 2>/dev/null
+}
+
+# Pytanie o katalog instalacji (tylko tryb bootstrap). W `curl|bash` stdin to potok z
+# treścią skryptu — `read` dostałby EOF i cicho wziął domyślną wartość — więc czytamy
+# z terminala. Prompt idzie na stdout (w curl|bash to nadal terminal usera; przekierowanie
+# na /dev/tty nic by nie dało, a zepsułoby testowalność). Brak terminala = środowisko
+# nieinteraktywne → domyślny katalog z komunikatem, nigdy zwis na prompcie.
+ask_install_dir() {
+  local answer=""
+  if [ "$INSTALL_DIR_EXPLICIT" = "1" ]; then
+    info "Katalog instalacji z env INSTALL_DIR: $INSTALL_DIR"
+    return 0
+  fi
+  if has_tty; then
+    printf "Katalog instalacji [%s]: " "$INSTALL_DIR_DEFAULT"
+    IFS= read -r answer < "$INSTALL_TTY" || answer=""
+  else
+    warn "Brak terminala — instaluję w domyślnym katalogu (środowisko nieinteraktywne)."
+  fi
+  INSTALL_DIR="$(resolve_install_dir "$answer" "$INSTALL_DIR_DEFAULT")"
+  ok "Katalog instalacji: $INSTALL_DIR"
 }
 
 # ============ BOOTSTRAP (curl|bash, bez git) ============
@@ -147,6 +214,10 @@ run_bootstrap() {
   echo ""
   echo -e "${CYAN}🕹️  CLAUDE-CRON — instalacja jedną komendą${NC}"
   echo "========================================"
+  echo ""
+
+  ask_install_dir
+
   echo ""
   echo -e "  ${DIM}Pobieram repo do ${INSTALL_DIR} (bez git) i konfiguruję.${NC}"
   echo ""
@@ -256,10 +327,13 @@ ensure_dependencies() {
 # dla kursanta nieodróżnialne od błędu. Ta sama flaga co w package.json.
 handoff_to_setup() {
   info "Przekazuję sterowanie do setup.mjs..."
-  if [ -r /dev/tty ]; then
-    exec "$NODE_BIN" --disable-warning=ExperimentalWarning "$REPO_DIR/setup.mjs" < /dev/tty
+  # has_tty zamiast `-r /dev/tty`: samo prawo odczytu nie znaczy, że urządzenie da się
+  # otworzyć (macOS bez terminala kontrolującego) — a nieudany `exec ... < /dev/tty`
+  # kończy instalację twardym błędem zamiast wejść w ścieżkę nieinteraktywną.
+  if has_tty; then
+    exec "$NODE_BIN" --disable-warning=ExperimentalWarning "$REPO_DIR/setup.mjs" < "$INSTALL_TTY"
   else
-    warn "Brak /dev/tty — setup uruchamiam bez interaktywnego stdin (środowisko nieinteraktywne)."
+    warn "Brak terminala — setup uruchamiam bez interaktywnego stdin (środowisko nieinteraktywne)."
     exec "$NODE_BIN" --disable-warning=ExperimentalWarning "$REPO_DIR/setup.mjs"
   fi
 }

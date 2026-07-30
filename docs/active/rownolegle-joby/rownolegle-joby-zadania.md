@@ -178,16 +178,16 @@ kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego
 
 *Delegate to: feature-builder-data · Zależy od: — (niezależne od Fazy 1)*
 
-- [ ] Pytanie o katalog instalacji przez `/dev/tty` z domyślną wartością `$HOME/claude-cron` (`install.sh:30`)
-- [ ] Symetryczna ścieżka na Windowsie (`install.ps1` / `setup.mjs`)
-- [ ] Wykrycie zajętego `CLAUDE_CRON_PORT` przed startem + czytelny komunikat
-- [ ] Zapis wybranego portu do konfiguracji (dashboard i autostart używają tej samej wartości)
-- [ ] Rozróżnienie „port zajęty przez cudzy proces" vs „przez naszą starą instancję" (re-run, nie błąd)
-- [ ] Ubijanie procesów filtrem po **ścieżce instalacji**, nigdy po nazwie binarki (pułapka Windows 28.07)
-- [ ] Test: instalacja w niestandardowym katalogu działa i tam startuje
-- [ ] Test: zajęty port → komunikat z numerem portu i sugestią; brak cichego „sukcesu" z martwym serwerem
-- [ ] Test: port zajęty przez naszą starą instancję → ścieżka re-runu
-- [ ] Test: pusta odpowiedź na pytanie o katalog → wartość domyślna
+- [x] Pytanie o katalog instalacji przez `/dev/tty` z domyślną wartością `$HOME/claude-cron` (`install.sh:30`)
+- [x] Symetryczna ścieżka na Windowsie (`install.ps1` / `setup.mjs`)
+- [x] Wykrycie zajętego `CLAUDE_CRON_PORT` przed startem + czytelny komunikat
+- [x] Zapis wybranego portu do konfiguracji (dashboard i autostart używają tej samej wartości)
+- [x] Rozróżnienie „port zajęty przez cudzy proces" vs „przez naszą starą instancję" (re-run, nie błąd)
+- [x] Ubijanie procesów filtrem po **ścieżce instalacji**, nigdy po nazwie binarki (pułapka Windows 28.07)
+- [x] Test: instalacja w niestandardowym katalogu działa i tam startuje
+- [x] Test: zajęty port → komunikat z numerem portu i sugestią; brak cichego „sukcesu" z martwym serwerem
+- [x] Test: port zajęty przez naszą starą instancję → ścieżka re-runu
+- [x] Test: pusta odpowiedź na pytanie o katalog → wartość domyślna
 - [ ] Weryfikacja: `bash install.test.sh` przechodzi
 - [ ] Weryfikacja: `node --test setup.test.mjs` przechodzi
 - [ ] Weryfikacja: przebieg przez **prawdziwy pipe** (`curl … | bash` z env-override źródła), nie lokalne `bash install.sh`

@@ -1,7 +1,8 @@
 # Równoległe joby — kontekst techniczny
 
 **Branch:** `feature/rownolegle-joby`
-**Ostatnia aktualizacja:** 2026-07-30 — Faza 1 (Unit 1-6) zaimplementowana, `npm test` 707/707
+**Ostatnia aktualizacja:** 2026-07-30 — Faza 2 (Unit 7, instalator) zaimplementowana; `npm test`
+736/736, `bash install.test.sh` 13/13
 
 ## Źródła
 
@@ -158,6 +159,84 @@ zero modyfikacji istniejących — R7 utrzymane). Zero nowych zależności npm.
   `formatElapsed`, `runningRunsFrom`) i testy HTTP na żywym serwerze są zielone.
 - **Kroki `Operator:`** (rozstrzelenie cronów na VPS i Macu, ustawienie `max_concurrent`) — poza
   kodem, do wykonania przy deployu.
+
+## Review fazy 1 (2026-07-30)
+
+Raport: [review-faza-1.md](review-faza-1.md) · Gate: ⚠️ **ZASTRZEŻENIA** (0×P1, 5×P2, 17×P3,
+4 pozycje operatora). Wszystkie checkboxy `Weryfikacja:` typu CLI/grep odznaczone — `npm test`
+707 pass / 0 fail, kontrakt kolejności matcherów potwierdzony gerpem (webhook 719 → ask 730 →
+inbox 735 → guard XFF 745 → api 751).
+
+**Wnioski, które przeżyją tę fazę:**
+
+1. **Pętla drain ma trzy defekty żywotności, nie poprawności pickera.** Picker (czyste funkcje) jest
+   zdrowy; psuje się to, co wisi na obietnicach: (a) odrzucona obietnica `executeRun` zostawia run
+   `queued` i zapętla drain bez oddania kontroli do fazy timerów = zamrożony demon, (b) slot zwalnia
+   się dopiero na `'close'`, więc karencja `'exit'` z Unit 2 nie przekłada się na `inFlight`,
+   (c) zmiana limitu z dashboardu nie dzwoni dzwonkiem. Wspólny mianownik: **każde nowe źródło
+   zmiany stanu kolejki musi mieć swój dzwonek, a każda ścieżka wyjścia z runu — swoje domknięcie.**
+2. **Guard XFF nie jest guardem CSRF** — powtórka learned-patternu 2026-07-24 na nowych endpointach
+   mutujących. Notatka wykonawcza fazy uzasadniała brak guardu tym, że „endpoint nie zwraca sekretu";
+   to zamyka wektor odczytu, nie zapisu.
+3. **Test odbiorczy R1 mierzył dzwonek, nie rezerwę** — oba joby bez historii runów klasyfikują się
+   jako długie, więc krótki startował z wolnego slotu. Szew `getRecentSuccessDurations → classifyJob
+   → pickEligibleRuns` nie ma dziś pokrycia integracyjnego.
+4. **`lock_group` w seedzie chroni tylko nowe instalacje** — `createJob`-only (słusznie: zero
+   `UPDATE`), więc na maszynach, gdzie job sync już istnieje, kolumna zostaje `NULL` i ochrona R5
+   przed kolizją na `Zadania/Dashboard.md` nie działa mimo włączonej równoległości.
+
+## Stan realizacji — Faza 2, Unit 7 (30.07)
+
+Instalator pyta o katalog (`install.sh` → `ask_install_dir`/`resolve_install_dir`, `install.ps1` →
+`Read-InstallDir`/`Resolve-InstallDir`) i rozstrzyga port dashboardu przed hookiem i startem serwera
+(`setup.mjs` → `resolveDashboardPort`). `npm test` 736 pass / 0 fail, `bash install.test.sh`
+13 PASS / 13.
+
+### Decyzje podjęte w implementacji (poza literalnym brzmieniem planu)
+
+- **Stan portu z DWÓCH sygnałów, nie z `lsof`.** `classifyPortState` łączy bind-test (`net.createServer`
+  na `0.0.0.0`, tak jak `server.listen`) z odpowiedzią `GET /api/status`. Rozpoznanie „to nasza stara
+  instancja" idzie po **zestawie pól kontraktu** (`uptime`, `queue_length`, `total_jobs`,
+  `enabled_jobs`), nie po luźnym substringu — na zajętym porcie może siedzieć dowolne API zwracające
+  JSON, a fałszywe „to nasze" kazałoby instalatorowi zignorować realną kolizję i zameldować sukces
+  z martwym serwerem. Narzędzia systemowe (`lsof`/`Get-NetTCPConnection`) różnią się per OS i tak
+  czy siak nie powiedzą, **czyj** to serwer — trafiły więc tylko do komunikatu diagnostycznego.
+- **`pingDashboard` zaostrzony do kontraktu `/api/status`.** Wcześniej wystarczyła dowolna odpowiedź
+  HTTP, więc obcy serwer na 7777 dawał setupowi „dashboard żyje" i auto-open cudzej aplikacji.
+- **Port wypalany do trzech miejsc naraz**: `persistEnvVar('CLAUDE_CRON_PORT')`, źródło hooka
+  autostartu (`buildHookSource(..., port)` — health-check **i** `env` spawnowanego serwera) oraz
+  `spawnServer`. Powód wprost z learned-patternu 2026-07-07: zmiana env nie propaguje się do
+  żyjących procesów, a hook żyje w sesji Claude Code z env sprzed instalacji.
+- **`buildStaleHookPortWarning` + `warnIfHookPortStale` (poza literalną checklistą).** Zmiana portu
+  przy odmowie reinstalacji hooka zostawiała autostart na starym porcie — cicha rozbieżność
+  „dashboard vs autostart", której wymóg R9 ma nie dopuścić.
+- **`has_tty` zamiast `[ -r /dev/tty ]` — i to samo w istniejącym `handoff_to_setup`.** Test prawa
+  odczytu **kłamie**: na macOS bez terminala kontrolującego węzeł urządzenia jest „czytelny", ale
+  otwarcie zwraca `Device not configured` i pod `set -e` kończyło instalator bez jednego słowa.
+  Guard sprawdza stan faktyczny (otwiera i zamyka) — dokładnie ta klasa błędu, którą opisuje
+  learned-pattern „potwierdzaj stan faktyczny, nie kod wyjścia".
+- **Regresja tej samej klasy naprawiona w nagłówku skryptu**: `[ -n "$INSTALL_DIR" ] && VAR=1` na
+  poziomie skryptu kończyło `install.sh` kodem 1 przy pustym env (fałszywy test na końcu listy pod
+  `set -e`). Zamienione na `if/then` + test regresyjny ładujący skrypt w osobnej powłoce bez env.
+- **`INSTALL_TTY` jako DI (override WYŁĄCZNIE dla testów).** Bez tego ścieżka terminalowa
+  `ask_install_dir` była nietestowalna — a to właśnie ona, nie stdin, jest ścieżką `curl|bash`.
+- **`probeDashboardPort` wyeksportowany**, żeby bind-test był pokryty na **prawdziwych gniazdach**
+  (free / ours / foreign), nie na atrapie.
+- **Env-override `INSTALL_DIR` pomija pytanie** (obie platformy) — nieinteraktywny przebieg
+  z jawnie podanym katalogiem nie ma o co pytać. Odpowiedź usera przechodzi przez sanityzację:
+  cudzysłowy z Findera/Explorera, escape'owane spacje, `~` (nie rozwijane w wartości z `read`),
+  ścieżka względna → absolutna.
+
+### Dług do domknięcia (Faza 2)
+
+- **`install.ps1.Tests.ps1` nie uruchomione** — brak `pwsh`/`powershell` na macOS. Trzy nowe testy
+  (pusta odpowiedź, sanityzacja, instalacja w niestandardowym katalogu) czekają na krok operatora
+  z planu: przebieg instalatora na Windowsie, gdzie dopiero widać blokady plików.
+- **Przebieg przez prawdziwy pipe** (`curl … | bash` z env-override źródła) — pozycja `Weryfikacja:`
+  dla review; suita pokrywa ścieżkę terminalową przez podstawiony `INSTALL_TTY`, ale nie zastępuje
+  przebiegu z realnym potokiem na stdin.
+- **Port nie jest pytany wprost przy wolnym porcie** — pytanie pada dopiero przy kolizji z cudzym
+  procesem. Świadomie: jedno pytanie mniej w onboardingu, a `CLAUDE_CRON_PORT` z env nadal wygrywa.
 
 ## Kontrakty, których nie wolno naruszyć
 
