@@ -343,6 +343,10 @@ async function handleApi(req, res) {
 
     return json(res, {
       uptime: process.uptime(),
+      // Katalog instalacji tego procesu: od momentu, gdy user wybiera katalog, na jednej
+      // maszynie potrafią stać DWIE instalacje. Bez tego pola setup.mjs nie odróżnia
+      // własnego re-runu od cudzej instancji na tym samym porcie i adoptuje obcy proces.
+      repo_dir: __dirname,
       current_run: currentRun,
       current_runs: currentRuns,
       queue_length: queued.length,

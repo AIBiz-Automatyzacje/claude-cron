@@ -255,6 +255,180 @@ test_ask_install_dir_respects_env() {
   INSTALL_DIR="$SANDBOX/claude-cron" # przywróć
 }
 
+# --- Test 14: GUARD — obcy katalog NIE zostaje skasowany (brak terminala = odmowa) ---
+# Katalog instalacji jest wolną odpowiedzią usera, a stara zawartość leci do kosza w tmp,
+# który trap kasuje `rm -rf`. Literówka („~/Documents") nie może kosztować danych.
+test_install_dir_rejects_foreign_content() {
+  local target fresh tmp rc=0
+  target="$SANDBOX/obcy-katalog"
+  mkdir -p "$target/podkatalog"
+  echo "prywatne" > "$target/moje-dane.txt"
+  fresh="$SANDBOX/t14-fresh"
+  tmp="$SANDBOX/t14-tmp"
+  mkdir -p "$fresh" "$tmp"
+  echo "code" > "$fresh/server.js"
+  echo "x" > "$fresh/setup.mjs"
+
+  (
+    INSTALL_DIR="$target"
+    INSTALL_TTY="$SANDBOX/nie-ma-takiego-tty"
+    install_fresh_repo "$fresh" "$tmp"
+  ) > /dev/null 2>&1 || rc=$?
+
+  if [ "$rc" -ne 0 ] \
+    && [ -f "$target/moje-dane.txt" ] \
+    && [ "$(cat "$target/moje-dane.txt")" = "prywatne" ] \
+    && [ -d "$target/podkatalog" ] \
+    && [ ! -f "$target/server.js" ]; then
+    pass "guard: obcy katalog odrzucony bez terminala — dane usera nietknięte"
+  else
+    problem "guard: obcy katalog NIE został ochroniony (rc=$rc, dane=$([ -f "$target/moje-dane.txt" ] && echo ok || echo ZGINELY))"
+  fi
+}
+
+# --- Test 15: GUARD — odpowiedź „n" na potwierdzenie zostawia katalog nietknięty ---
+test_install_dir_declined_confirmation_keeps_data() {
+  local target fresh tmp tty_file rc=0
+  target="$SANDBOX/obcy-katalog-n"
+  mkdir -p "$target"
+  echo "prywatne" > "$target/moje-dane.txt"
+  fresh="$SANDBOX/t15-fresh"
+  tmp="$SANDBOX/t15-tmp"
+  mkdir -p "$fresh" "$tmp"
+  echo "code" > "$fresh/server.js"
+  echo "x" > "$fresh/setup.mjs"
+  tty_file="$SANDBOX/t15-tty"
+  printf 'n\n' > "$tty_file"
+
+  (
+    INSTALL_DIR="$target"
+    INSTALL_TTY="$tty_file"
+    install_fresh_repo "$fresh" "$tmp"
+  ) > /dev/null 2>&1 || rc=$?
+
+  if [ "$rc" -ne 0 ] && [ -f "$target/moje-dane.txt" ] && [ ! -f "$target/server.js" ]; then
+    pass "guard: odmowa potwierdzenia zostawia zawartość katalogu"
+  else
+    problem "guard: po odmowie katalog został naruszony (rc=$rc)"
+  fi
+}
+
+# --- Test 16: GUARD — jawne „t" z terminala pozwala zainstalować w obcym katalogu ---
+test_install_dir_confirmed_replaces_content() {
+  local target fresh tmp tty_file rc=0
+  target="$SANDBOX/obcy-katalog-t"
+  mkdir -p "$target"
+  echo "prywatne" > "$target/moje-dane.txt"
+  fresh="$SANDBOX/t16-fresh"
+  tmp="$SANDBOX/t16-tmp"
+  mkdir -p "$fresh" "$tmp"
+  echo "code" > "$fresh/server.js"
+  echo "x" > "$fresh/setup.mjs"
+  tty_file="$SANDBOX/t16-tty"
+  printf 't\n' > "$tty_file"
+
+  (
+    INSTALL_DIR="$target"
+    INSTALL_TTY="$tty_file"
+    install_fresh_repo "$fresh" "$tmp"
+  ) > /dev/null 2>&1 || rc=$?
+
+  if [ "$rc" -eq 0 ] && [ -f "$target/setup.mjs" ] && [ -f "$target/server.js" ]; then
+    pass "guard: jawne potwierdzenie „t\" pozwala podmienić katalog"
+  else
+    problem "guard: potwierdzenie „t\" nie doprowadziło do instalacji (rc=$rc)"
+  fi
+}
+
+# --- Test 17: GUARD — katalog domowy i plik są odrzucane, instalacja Pulsa przechodzi ---
+# $HOME testujemy na PODSTAWIONYM katalogu domowym — realnego $HOME nie ruszamy nawet w teście.
+test_classify_install_target_kinds() {
+  local fake_home="$SANDBOX/fake-home" file_target="$SANDBOX/plik-nie-katalog"
+  local puls_dir="$SANDBOX/rozpoznany-puls" empty_dir="$SANDBOX/pusty" home_kind file_kind
+  mkdir -p "$fake_home" "$empty_dir" "$puls_dir/data"
+  echo "code" > "$puls_dir/server.js"
+  echo "to plik" > "$file_target"
+
+  home_kind="$(HOME="$fake_home" classify_install_target "$fake_home")"
+  file_kind="$(classify_install_target "$file_target")"
+
+  if [ "$home_kind" = "forbidden" ] \
+    && [ "$file_kind" = "file" ] \
+    && [ "$(classify_install_target "$empty_dir")" = "empty" ] \
+    && [ "$(classify_install_target "$SANDBOX/nie-ma-mnie")" = "empty" ] \
+    && [ "$(classify_install_target "$puls_dir")" = "puls" ]; then
+    pass "classify_install_target: \$HOME=forbidden, plik=file, pusty/nieistniejący=empty, instalacja=puls"
+  else
+    problem "classify_install_target: home='$home_kind' file='$file_kind'"
+  fi
+}
+
+# --- Test 18: find_puls_pids filtruje po ŚCIEŻCE z granicą katalogu ---
+# Regresja klasy „C:\puls łapie C:\puls-backup" (parytet z install.ps1) — obce procesy
+# node MUSZĄ przeżyć, filtr nigdy nie idzie po nazwie binarki.
+test_find_puls_pids_matches_only_install_dir() {
+  local snapshot result
+  snapshot="$(printf '%s\n' \
+    "  101 /Users/x/puls/.node/node-v22.17.0-darwin-arm64/bin/node --disable-warning server.js" \
+    "  102 /Users/x/puls-backup/.node/node-v22.17.0-darwin-arm64/bin/node server.js" \
+    "  103 /usr/local/bin/node /Users/x/inny-projekt/server.js" \
+    "  104 /Users/x/puls/.node/node-v22.17.0-darwin-arm64/bin/node scripts/inbox/inbox-sync.mjs")"
+
+  result="$(find_puls_pids "/Users/x/puls" "$snapshot" | tr '\n' ' ')"
+
+  if [ "$result" = "101 " ]; then
+    pass "find_puls_pids: łapie tylko daemona z TEGO katalogu (nie -backup, nie cudzy node)"
+  else
+    problem "find_puls_pids zwrócił '$result' zamiast '101 '"
+  fi
+}
+
+# --- Test 19: stop_puls_processes nie rusza obcego procesu (parytet z Pesterem) ---
+test_stop_puls_ignores_foreign_process() {
+  sleep 10 &
+  local foreign=$!
+  sleep 0.3
+
+  stop_puls_processes "$SANDBOX/nieistniejaca-instalacja" > /dev/null
+
+  if kill -0 "$foreign" 2>/dev/null; then
+    pass "stop_puls_processes: obcy proces spoza katalogu instalacji przeżył"
+  else
+    problem "stop_puls_processes ubił obcy proces"
+  fi
+  kill "$foreign" 2>/dev/null || true
+  wait "$foreign" 2>/dev/null || true
+}
+
+# --- Test 20: stop_puls_processes ubija daemona URUCHOMIONEGO Z katalogu instalacji ---
+# Bez tego stary proces biegnie dalej ze STARYM kodem po podmianie katalogu, a setup.mjs
+# widzi żywy ping i nie startuje nowego serwera (user zostaje na starej wersji).
+test_stop_puls_kills_daemon_from_install_dir() {
+  local dir="$SANDBOX/stop-target" pid state alive=1
+  mkdir -p "$dir/.node/bin"
+  printf '#!/bin/sh\nsleep 10\n' > "$dir/.node/bin/node"
+  chmod +x "$dir/.node/bin/node"
+  "$dir/.node/bin/node" server.js &
+  pid=$!
+  sleep 0.3
+
+  stop_puls_processes "$dir" > /dev/null
+
+  # `|| true`: harness dziedziczy `set -e` z install.sh, a `ps` na martwym PID-zie
+  # kończy się kodem 1 (czyli dokładnie tym, czego test oczekuje).
+  state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+  case "$state" in
+    ""|Z*) alive=0 ;;
+  esac
+  if [ "$alive" = 0 ]; then
+    pass "stop_puls_processes: daemon z katalogu instalacji zatrzymany przed podmianą"
+  else
+    problem "stop_puls_processes zostawił daemona z katalogu instalacji (stat='$state')"
+  fi
+  kill -9 "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 echo "== install.sh — testy bootstrap/preserve =="
 test_preserve_moves_data_and_node
 test_preserve_noop_when_no_old
@@ -269,6 +443,13 @@ test_ask_install_dir_respects_env
 test_ask_install_dir_reads_from_tty
 test_ask_install_dir_without_tty_uses_default
 test_ask_install_dir_empty_line_uses_default
+test_install_dir_rejects_foreign_content
+test_install_dir_declined_confirmation_keeps_data
+test_install_dir_confirmed_replaces_content
+test_classify_install_target_kinds
+test_find_puls_pids_matches_only_install_dir
+test_stop_puls_ignores_foreign_process
+test_stop_puls_kills_daemon_from_install_dir
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

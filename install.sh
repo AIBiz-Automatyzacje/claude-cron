@@ -118,6 +118,122 @@ resolve_install_dir() {
 # udaje terminal) — w realnym przebiegu zawsze /dev/tty.
 INSTALL_TTY="${INSTALL_TTY:-/dev/tty}"
 
+# is_puls_install <dir> — czy katalog wygląda na instalację Pulsa (kod + stan).
+# Rozpoznajemy po ARTEFAKTACH instalacji, nie po nazwie katalogu: nazwa jest wolną
+# odpowiedzią usera, a decyzja „wolno to skasować" musi wisieć na zawartości.
+is_puls_install() {
+  local dir="$1"
+  if [ -f "$dir/package.json" ] \
+    && grep -q '"name"[[:space:]]*:[[:space:]]*"claude-cron"' "$dir/package.json" 2>/dev/null; then
+    return 0
+  fi
+  # Instalacja bootstrapowa: kod serwera + katalog stanu (data/) albo portable Node (.node/).
+  if [ -f "$dir/server.js" ] && { [ -d "$dir/data" ] || [ -d "$dir/.node" ]; }; then
+    return 0
+  fi
+  return 1
+}
+
+# classify_install_target <dir> — czysta klasyfikacja celu instalacji:
+#   forbidden = $HOME albo korzeń (podmiana = katastrofa, nigdy nie ruszamy)
+#   file      = ścieżka istnieje, ale nie jest katalogiem
+#   empty     = nie istnieje albo jest pusty (wolno zająć)
+#   puls      = rozpoznana instalacja Pulsa (re-run — wolno podmienić)
+#   foreign   = niepusty katalog z CUDZĄ zawartością (wymaga potwierdzenia)
+classify_install_target() {
+  local dir="$1" normalized
+  normalized="${dir%/}"
+
+  if [ -z "$normalized" ] || [ "$normalized" = "${HOME%/}" ]; then
+    printf 'forbidden'
+    return 0
+  fi
+  if [ -e "$dir" ] && [ ! -d "$dir" ]; then
+    printf 'file'
+    return 0
+  fi
+  if [ ! -d "$dir" ] || [ -z "$(ls -A "$dir" 2>/dev/null)" ]; then
+    printf 'empty'
+    return 0
+  fi
+  if is_puls_install "$dir"; then
+    printf 'puls'
+  else
+    printf 'foreign'
+  fi
+}
+
+# Guard PRZED destrukcyjnym `mv "$INSTALL_DIR" "$trash"`: kosz leży w katalogu tmp,
+# który `trap ... rm -rf` kasuje na wyjściu, więc pomyłka w odpowiedzi o katalog
+# („~", „~/Documents", literówka we wklejonej ścieżce z Findera) trwale kasowałaby
+# dane usera — `preserve_existing_dirs` ratuje wyłącznie data/ i .node/.
+# Fail-closed: obcą zawartość podmieniamy WYŁĄCZNIE po jawnym „t" z terminala;
+# brak terminala (curl|bash w CI) = odmowa, nie domyślna zgoda.
+assert_install_dir_replaceable() {
+  local dir="$1" kind answer=""
+  kind="$(classify_install_target "$dir")"
+
+  case "$kind" in
+    empty|puls) return 0 ;;
+    forbidden)
+      fail "Katalog instalacji '$dir' to katalog domowy albo korzeń — instalacja podmienia ten katalog w całości. Podaj podkatalog, np. $HOME/claude-cron."
+      ;;
+    file)
+      fail "Ścieżka instalacji '$dir' wskazuje plik, nie katalog. Podaj ścieżkę katalogu."
+      ;;
+  esac
+
+  warn "Katalog '$dir' nie jest pusty i NIE wygląda na instalację Pulsa."
+  warn "Instalacja podmienia go w całości — zachowane zostaną tylko data/ i .node/."
+  if ! has_tty; then
+    fail "Brak terminala, żeby potwierdzić skasowanie zawartości '$dir'. Podaj pusty katalog przez INSTALL_DIR albo uruchom instalator interaktywnie."
+  fi
+  printf "Skasować zawartość %s i zainstalować tam Pulsa? [t/N]: " "$dir"
+  IFS= read -r answer < "$INSTALL_TTY" || answer=""
+  case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+    t|tak|y|yes) ok "Potwierdzono podmianę katalogu $dir." ;;
+    *) fail "Przerwane na życzenie — zawartość '$dir' nietknięta. Uruchom instalator ponownie i podaj inny katalog." ;;
+  esac
+}
+
+# find_puls_pids <dir> <snapshot-ps> — czysta filtracja snapshotu `ps` po ŚCIEŻCE
+# instalacji. Nigdy po nazwie `node`: obce procesy Node (Claude Code, dev-serwery)
+# muszą przeżyć. Separator katalogu na końcu wzorca jest granicą — bez niego
+# „/x/puls" łapałoby „/x/puls-backup". Daemon ma ścieżkę instalacji w linii poleceń,
+# bo startuje portable Nodem z <dir>/.node/... (setup.mjs: spawnServer / hook).
+find_puls_pids() {
+  local dir="${1%/}" snapshot="$2"
+  [ -n "$dir" ] || return 0
+  printf '%s\n' "$snapshot" \
+    | awk -v needle="$dir/" 'index($0, needle) && index($0, "server.js") { print $1 }'
+}
+
+# Zatrzymuje daemona Pulsa działającego Z TEGO katalogu instalacji, PRZED podmianą
+# katalogu. Na Unixie przeniesienie otwartego katalogu jest legalne, więc bez tego
+# stary proces biegnie dalej ze STARYM kodem, a setup.mjs widzi żywy dashboard na
+# porcie i nie startuje nowego serwera — user po aktualizacji zostaje na starej wersji.
+# (Parytet ze Stop-PulsProcesses z install.ps1, gdzie powód jest inny: blokady plików.)
+stop_puls_processes() {
+  local dir="${1%/}" snapshot pids pid killed=0
+  [ -n "$dir" ] || return 0
+  command -v ps >/dev/null 2>&1 || return 0
+
+  # Snapshot PRZED odpaleniem filtra: inaczej awk (którego linia poleceń zawiera
+  # szukaną ścieżkę) trafiłby na własną listę.
+  snapshot="$(ps -axo pid=,command= 2>/dev/null || true)"
+  pids="$(find_puls_pids "$dir" "$snapshot")"
+
+  for pid in $pids; do
+    if [ "$pid" != "$$" ]; then
+      info "Zatrzymuję daemona Pulsa (PID $pid) — biegnie ze starego kodu w $dir."
+      kill "$pid" 2>/dev/null || true
+      killed=1
+    fi
+  done
+  [ "$killed" = 1 ] && sleep 1
+  return 0
+}
+
 # Czy da się CZYTAĆ z terminala. Test `-r /dev/tty` kłamie: na macOS węzeł urządzenia
 # istnieje i jest „czytelny" także dla procesu bez terminala kontrolującego, a dopiero
 # otwarcie zwraca „Device not configured" — pod `set -e` wywalało to instalator bez
@@ -194,9 +310,14 @@ extract_repo_from_tarball() {
 install_fresh_repo() {
   local fresh_dir="$1" tmp_dir="$2"
 
+  # Guard PRZED jakąkolwiek zmianą na dysku — katalog to wolna odpowiedź usera.
+  assert_install_dir_replaceable "$INSTALL_DIR"
+
   mkdir -p "$(dirname "$INSTALL_DIR")"
 
   if [ -d "$INSTALL_DIR" ]; then
+    # PRZED przenoszeniem: stary daemon musi zniknąć, inaczej biegnie dalej ze starym kodem.
+    stop_puls_processes "$INSTALL_DIR"
     preserve_existing_dirs "$INSTALL_DIR" "$fresh_dir"
     # Stara instalacja idzie do kosza w tmp (sprzątane przez trap EXIT).
     local trash="$tmp_dir/old-install"

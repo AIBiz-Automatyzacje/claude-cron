@@ -44,7 +44,11 @@ const EXPERIMENTAL_WARNING_FLAG = '--disable-warning=ExperimentalWarning';
 // Realny port setupu ustala resolveDashboardPort: kolizja z cudzym procesem jest błędem,
 // kolizja z NASZĄ starą instancją to zwykły re-run instalatora.
 export const DEFAULT_DASHBOARD_PORT = 7777;
-export const PORT_STATE = { FREE: 'free', OURS: 'ours', FOREIGN: 'foreign' };
+// OTHER_PULS: na porcie działa Puls, ale z INNEGO katalogu instalacji (od Unitu 7 katalog
+// jest wyborem usera, więc druga instancja obok pierwszej to scenariusz realny). Traktujemy
+// go jak kolizję, nie jak re-run — inaczej setup adoptowałby cudzy proces, nowa instalacja
+// nigdy by nie wstała, a hook autostartu celowałby w ten sam port z innego katalogu.
+export const PORT_STATE = { FREE: 'free', OURS: 'ours', OTHER_PULS: 'other-puls', FOREIGN: 'foreign' };
 // Ile razy pytamy o zastępczy port, zanim uznamy, że instalacja nie ma gdzie wstać.
 const PORT_RESOLVE_ATTEMPTS = 5;
 // Limit pollowania serwera po spawnie, zanim wypiszemy link / otworzymy przeglądarkę.
@@ -78,10 +82,31 @@ export function isPulsStatusPayload(payload) {
   );
 }
 
-// === Pure helper: stan portu z dwóch sygnałów (bind-test + odpowiedź /api/status) ===
-export function classifyPortState({ bindable, statusPayload }) {
+// === Pure helper: czy Puls z portu to TA SAMA instalacja co konfigurowana ===
+// `repo_dir` z GET /api/status vs katalog tego setupu. Brak pola (instancja sprzed tej
+// wersji) = „nie wiem" → null, NIE „to nie my": wymuszanie zmiany portu na zwykłym
+// re-runie nad starym daemonem byłoby gorsze niż ostrzeżenie (pole zniknie po restarcie).
+export function isSameInstallation(statusPayload, repoDir) {
+  const reported = statusPayload?.repo_dir;
+  if (typeof reported !== 'string' || !reported || !repoDir) return null;
+  return path.resolve(reported) === path.resolve(repoDir);
+}
+
+// === Pure helper: stan portu z sygnałów (bind-test + odpowiedź /api/status + katalog) ===
+export function classifyPortState({ bindable, statusPayload, repoDir = null }) {
   if (bindable) return PORT_STATE.FREE;
-  return isPulsStatusPayload(statusPayload) ? PORT_STATE.OURS : PORT_STATE.FOREIGN;
+  if (!isPulsStatusPayload(statusPayload)) return PORT_STATE.FOREIGN;
+  return isSameInstallation(statusPayload, repoDir) === false
+    ? PORT_STATE.OTHER_PULS
+    : PORT_STATE.OURS;
+}
+
+export function buildOtherPulsMessage(port) {
+  return [
+    `[warn] Port ${port} trzyma Puls z INNEGO katalogu instalacji — to nie jest re-run tej instalacji.`,
+    '       Dwie instancje na jednym porcie nie wstaną: podaj inny port albo zatrzymaj tamtą instancję.',
+    `       Kto trzyma port: lsof -nP -iTCP:${port} -sTCP:LISTEN`,
+  ].join('\n');
 }
 
 export function buildPortBusyMessage(port) {
@@ -112,7 +137,9 @@ export async function resolveDashboardPort({ initialPort, probePort, askPort, lo
       log(buildPortReuseMessage(port));
       return { port, reused: true };
     }
-    log(buildPortBusyMessage(port));
+    // OTHER_PULS i FOREIGN idą tą samą ścieżką (pytanie o zastępczy port), różnią się
+    // wyłącznie komunikatem — „inny Puls" wymaga innej porady niż „obcy program".
+    log(state === PORT_STATE.OTHER_PULS ? buildOtherPulsMessage(port) : buildPortBusyMessage(port));
     const answer = parsePortAnswer(await askPort(port), null);
     if (answer === null) {
       throw new Error(
@@ -500,38 +527,101 @@ async function pingDashboard(port) {
   return isPulsStatusPayload(await fetchStatusPayload(port));
 }
 
-// === I/O shell: czy port da się zbindować (0.0.0.0 — tak samo jak server.listen) ===
-function isPortBindable(port) {
+// Bind-test idzie po WILDCARDZIE i po LOOPBACKU. Na macOS/BSD bind na 0.0.0.0 UDAJE SIĘ,
+// gdy obcy proces trzyma 127.0.0.1:<port> (bardziej szczegółowy bind wygrywa ruch), więc
+// sam wildcard klasyfikował typowy dev-serwer na loopbacku jako „port wolny" i instalacja
+// kończyła się sukcesem z dashboardem pod cudzą aplikacją.
+const PROBE_BIND_HOSTS = ['0.0.0.0', '127.0.0.1'];
+
+function bindOnce(port, host) {
   return new Promise((resolve) => {
     const probe = net.createServer();
     probe.once('error', () => resolve(false));
     probe.once('listening', () => probe.close(() => resolve(true)));
-    probe.listen(port, '0.0.0.0');
+    probe.listen(port, host);
   });
+}
+
+// === I/O shell: czy port da się zbindować (wildcard ORAZ loopback) ===
+async function isPortBindable(port) {
+  for (const host of PROBE_BIND_HOSTS) {
+    if (!(await bindOnce(port, host))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // === I/O shell: stan portu = bind-test + (gdy zajęty) odpowiedź /api/status ===
 // Rozpoznanie po kontrakcie API, nie po nazwie procesu z lsof/Get-NetTCPConnection —
 // tamte narzędzia różnią się per OS i wersja, a i tak nie powiedzą, czyj to serwer.
-export async function probeDashboardPort(port) {
+export async function probeDashboardPort(port, repoDir = REPO_DIR) {
   const bindable = await isPortBindable(port);
   const statusPayload = bindable ? null : await fetchStatusPayload(port);
-  return classifyPortState({ bindable, statusPayload });
+  return classifyPortState({ bindable, statusPayload, repoDir });
 }
 
-// === I/O shell: port startowy = CLAUDE_CRON_PORT z env (re-run zachowuje wybór) ===
-// Śmieciowa wartość w env NIE może cicho przejść: lib/config.js robi na niej parseInt,
-// więc setup mówiłby o jednym porcie, a serwer wstawał na innym.
-function resolveInitialPort() {
-  const parsed = parsePortAnswer(process.env.CLAUDE_CRON_PORT, DEFAULT_DASHBOARD_PORT);
-  if (parsed === null) {
-    console.log(
-      `[warn] CLAUDE_CRON_PORT="${process.env.CLAUDE_CRON_PORT}" to nie jest poprawny port `
+// === Pure helper: port startowy z dwóch źródeł (env sesji + wartość utrwalona) ===
+// Env żyjącego terminala bywa NIEŚWIEŻE (learned pattern 2026-07-07): poprzedni setup
+// mógł zapisać 8080 do RC/rejestru, a stary terminal nadal nie ma zmiennej. Bez sięgnięcia
+// po wartość utrwaloną pytalibyśmy o port 7777, uznali go za wolny i postawili DRUGIEGO
+// demona na tej samej bazie (dwa schedulery = podwójne odpalanie jobów).
+export function pickInitialPort({ envValue, persistedValue, log = () => {} }) {
+  const rawEnv = String(envValue ?? '').trim();
+  if (rawEnv) {
+    const fromEnv = parsePortAnswer(rawEnv, null);
+    if (fromEnv !== null) return fromEnv;
+    log(
+      `[warn] CLAUDE_CRON_PORT="${rawEnv}" to nie jest poprawny port `
       + `(1-65535) — używam ${DEFAULT_DASHBOARD_PORT}.`,
     );
     return DEFAULT_DASHBOARD_PORT;
   }
-  return parsed;
+  const fromPersisted = parsePortAnswer(persistedValue, null);
+  if (fromPersisted !== null) {
+    log(`[info] Port ${fromPersisted} z poprzedniej instalacji (env tej sesji jest puste).`);
+    return fromPersisted;
+  }
+  return DEFAULT_DASHBOARD_PORT;
+}
+
+// Pure: komenda odczytu User-scoped env var z rejestru Windows (HKCU\Environment).
+export function buildGetUserEnvCommand(varName) {
+  const script = `[Environment]::GetEnvironmentVariable(${psSingleQuote(varName)}, 'User')`;
+  return { cmd: 'powershell', args: ['-NoProfile', '-Command', script] };
+}
+
+// === Pure helper: wartość `export VAR="..."` z treści RC (lustro upsertEnvLine) ===
+export function readEnvLineValue(rcContent, varName) {
+  const match = String(rcContent ?? '').match(new RegExp(`^export ${varName}=(.*)$`, 'm'));
+  if (!match) return null;
+  const raw = match[1].trim();
+  try {
+    return String(JSON.parse(raw));
+  } catch {
+    return raw.replace(/^["']|["']$/g, '');
+  }
+}
+
+// === I/O shell: wartość utrwalona przez POPRZEDNI setup (RC powłoki / rejestr HKCU) ===
+function readPersistedEnvVar(varName) {
+  if (process.platform === 'win32') {
+    const { cmd, args } = buildGetUserEnvCommand(varName);
+    const result = spawnSync(cmd, args, { encoding: 'utf-8' });
+    return result.status === 0 ? String(result.stdout ?? '').trim() : null;
+  }
+  const rcFile = resolveShellRc();
+  if (!fs.existsSync(rcFile)) return null;
+  return readEnvLineValue(fs.readFileSync(rcFile, 'utf-8'), varName);
+}
+
+// === I/O shell: port startowy = env sesji, a gdy puste — wartość utrwalona ===
+function resolveInitialPort() {
+  return pickInitialPort({
+    envValue: process.env.CLAUDE_CRON_PORT,
+    persistedValue: readPersistedEnvVar('CLAUDE_CRON_PORT'),
+    log: console.log,
+  });
 }
 
 // === I/O shell: spawn detached serwera portable Nodem (reuse wzorca z buildHookSource) ===
@@ -1069,13 +1159,20 @@ async function main() {
     // trzeba rozstrzygnąć wcześniej. Zapis do env (RC / rejestr Windows) daje serwerowi,
     // dashboardowi i autostartowi JEDNO źródło prawdy; bez tego dashboard pokazywałby
     // link na port, którego serwer nie słucha.
-    dashboardPort = (
-      await resolveDashboardPort({
-        initialPort: resolveInitialPort(),
-        probePort: probeDashboardPort,
-        askPort: (busyPort) => ask(rl, `Port dashboardu (${busyPort} zajęty) — podaj inny: `),
-      })
-    ).port;
+    const portChoice = await resolveDashboardPort({
+      initialPort: resolveInitialPort(),
+      probePort: probeDashboardPort,
+      askPort: (busyPort) => ask(rl, `Port dashboardu (${busyPort} zajęty) — podaj inny: `),
+    });
+    dashboardPort = portChoice.port;
+    if (portChoice.reused) {
+      // Reużyty proces to TA instalacja (klasyfikacja porównuje repo_dir), ale biegnie
+      // ze STARYM kodem — startServerAndOpen zobaczy żywy ping i nic nie zrestartuje.
+      console.log(
+        '[info] Na tym porcie działa już Twój Puls — po tej aktualizacji zrestartuj go '
+        + '(zamknij proces serwera albo zrestartuj komputer), żeby wziął nowy kod.',
+      );
+    }
     const portLoc = persistEnvVar('CLAUDE_CRON_PORT', String(dashboardPort), 'Claude-Cron dashboard port');
     console.log(`[ok] Port dashboardu: ${dashboardPort} (zapisano w ${portLoc})`);
 

@@ -194,6 +194,77 @@ try {
         $script:InstallDir = Join-Path $Sandbox "claude-cron" # przywróć
     }
 
+    # --- Test 9: GUARD - obcy katalog NIE zostaje skasowany ---
+    # Katalog instalacji jest wolną odpowiedzią usera, a stara zawartość leci do kosza
+    # w tmp kasowanego w finally. Literówka we wklejonej ścieżce nie może kosztować danych.
+    function Test-RejectsForeignInstallDir {
+        $target = Join-Path $Sandbox "obcy-katalog"
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        Set-Content -Path (Join-Path $target "moje-dane.txt") -Value "prywatne"
+        $script:InstallDir = $target
+        $fresh = Join-Path $Sandbox "t9-fresh"
+        $tmp   = Join-Path $Sandbox "t9-tmp"
+        New-Item -ItemType Directory -Path $fresh -Force | Out-Null
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        Set-Content -Path (Join-Path $fresh "server.js") -Value "code"
+        Set-Content -Path (Join-Path $fresh "setup.mjs") -Value "x"
+
+        $threw = $false
+        try {
+            # Bez interaktywnego potwierdzenia guard MUSI odmówić (fail-closed).
+            Confirm-InstallDirReplaceable -Dir $target
+        } catch {
+            $threw = $true
+        }
+
+        $dataAlive = (Test-Path -LiteralPath (Join-Path $target "moje-dane.txt")) -and
+                     ((Get-Content -Raw (Join-Path $target "moje-dane.txt")).Trim() -eq "prywatne")
+        $notInstalled = -not (Test-Path -LiteralPath (Join-Path $target "setup.mjs"))
+        if ($threw -and $dataAlive -and $notInstalled) {
+            Test-Pass "guard: obcy katalog odrzucony - dane usera nietkniete"
+        } else {
+            Test-Problem "guard: obcy katalog NIE zostal ochroniony (threw=$threw dane=$dataAlive)"
+        }
+        $script:InstallDir = Join-Path $Sandbox "claude-cron" # przywroc
+    }
+
+    # --- Test 10: klasyfikacja celu instalacji (parytet z classify_install_target) ---
+    function Test-InstallTargetKinds {
+        $empty = Join-Path $Sandbox "t10-pusty"
+        $puls  = Join-Path $Sandbox "t10-puls"
+        $file  = Join-Path $Sandbox "t10-plik.txt"
+        New-Item -ItemType Directory -Path $empty -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $puls "data") -Force | Out-Null
+        Set-Content -Path (Join-Path $puls "server.js") -Value "code"
+        Set-Content -Path $file -Value "to plik"
+
+        $okHome    = (Get-InstallTargetKind -Dir $HOME) -eq "forbidden"
+        $okRoot    = (Get-InstallTargetKind -Dir ([System.IO.Path]::GetPathRoot($Sandbox))) -eq "forbidden"
+        $okEmpty   = (Get-InstallTargetKind -Dir $empty) -eq "empty"
+        $okMissing = (Get-InstallTargetKind -Dir (Join-Path $Sandbox "nie-ma-mnie")) -eq "empty"
+        $okPuls    = (Get-InstallTargetKind -Dir $puls) -eq "puls"
+        $okFile    = (Get-InstallTargetKind -Dir $file) -eq "file"
+
+        if ($okHome -and $okRoot -and $okEmpty -and $okMissing -and $okPuls -and $okFile) {
+            Test-Pass "Get-InstallTargetKind: HOME/korzen=forbidden, pusty=empty, instalacja=puls, plik=file"
+        } else {
+            Test-Problem "Get-InstallTargetKind: home=$okHome root=$okRoot empty=$okEmpty missing=$okMissing puls=$okPuls file=$okFile"
+        }
+    }
+
+    # --- Test 11: filtr procesow ma GRANICE sciezki (C:\puls nie lapie C:\puls-backup) ---
+    function Test-StopPulsPathBoundary {
+        $prefix = Get-PulsProcessPathPrefix -Dir "C:\puls"
+        $own     = "C:\puls\.node\node-v22.17.0-win-x64\node.exe server.js"
+        $sibling = "C:\puls-backup\.node\node-v22.17.0-win-x64\node.exe server.js"
+
+        if ($prefix -eq "C:\puls\" -and $own.Contains($prefix) -and -not $sibling.Contains($prefix)) {
+            Test-Pass "Stop-PulsProcesses: filtr z granica sciezki nie lapie katalogu-rodzenstwa"
+        } else {
+            Test-Problem "Stop-PulsProcesses: prefix='$prefix' rodzenstwo dopasowane=$($sibling.Contains($prefix))"
+        }
+    }
+
     Write-Host "== install.ps1 - testy bootstrap/preserve =="
     Test-PreserveMovesDataAndNode
     Test-PreserveNoopWhenNoOld
@@ -203,6 +274,9 @@ try {
     Test-ResolveInstallDirEmptyAnswer
     Test-ResolveInstallDirSanitizes
     Test-CustomInstallDirReceivesRepo
+    Test-RejectsForeignInstallDir
+    Test-InstallTargetKinds
+    Test-StopPulsPathBoundary
 
     Write-Host ""
     Write-Host "Wynik: $Pass PASS / $($Pass + $Fail) total"

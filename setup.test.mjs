@@ -38,6 +38,11 @@ import {
   resolveDashboardPort,
   probeDashboardPort,
   buildStaleHookPortWarning,
+  isSameInstallation,
+  buildOtherPulsMessage,
+  pickInitialPort,
+  readEnvLineValue,
+  buildGetUserEnvCommand,
 } from './setup.mjs';
 
 import http from 'node:http';
@@ -1049,6 +1054,113 @@ test('probeDashboardPort: cudzy serwer na porcie → foreign (kolizja, nie re-ru
   });
 
   assert.equal(await probeDashboardPort(port), PORT_STATE.FOREIGN);
+});
+
+test('probeDashboardPort: serwer TYLKO na 127.0.0.1 → nie jest portem wolnym (BSD/macOS)', async (t) => {
+  // Regresja: bind-test wyłącznie na 0.0.0.0 UDAJE SIĘ przy zajętym loopbacku, więc
+  // typowy dev-serwer na 127.0.0.1 był klasyfikowany jako „port wolny", a dashboard
+  // po instalacji trafiał do cudzej aplikacji.
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<html>cudzy dev-serwer</html>');
+  });
+  const port = await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise((done) => server.close(done)));
+
+  assert.equal(await probeDashboardPort(port), PORT_STATE.FOREIGN);
+});
+
+// === Rozpoznanie CUDZEJ instalacji Pulsa na tym samym porcie ===
+
+test('isSameInstallation: repo_dir zgodny → true, inny → false, brak pola → null', () => {
+  const payload = { uptime: 1, queue_length: 0, total_jobs: 0, enabled_jobs: 0 };
+  assert.equal(isSameInstallation({ ...payload, repo_dir: '/home/u/puls' }, '/home/u/puls'), true);
+  assert.equal(isSameInstallation({ ...payload, repo_dir: '/home/u/puls/' }, '/home/u/puls'), true);
+  assert.equal(isSameInstallation({ ...payload, repo_dir: '/home/u/puls-test' }, '/home/u/puls'), false);
+  assert.equal(isSameInstallation(payload, '/home/u/puls'), null);
+});
+
+test('classifyPortState: Puls z INNEGO katalogu instalacji → other-puls (nie re-run)', () => {
+  const payload = {
+    uptime: 1, queue_length: 0, total_jobs: 0, enabled_jobs: 0, repo_dir: '/home/u/puls-test',
+  };
+  assert.equal(
+    classifyPortState({ bindable: false, statusPayload: payload, repoDir: '/home/u/puls' }),
+    PORT_STATE.OTHER_PULS,
+  );
+});
+
+test('classifyPortState: Puls z TEGO katalogu (albo bez pola) → ours', () => {
+  const base = { uptime: 1, queue_length: 0, total_jobs: 0, enabled_jobs: 0 };
+  assert.equal(
+    classifyPortState({
+      bindable: false,
+      statusPayload: { ...base, repo_dir: '/home/u/puls' },
+      repoDir: '/home/u/puls',
+    }),
+    PORT_STATE.OURS,
+  );
+  // Instancja sprzed tej wersji nie zna repo_dir — zostaje re-runem, nie kolizją.
+  assert.equal(
+    classifyPortState({ bindable: false, statusPayload: base, repoDir: '/home/u/puls' }),
+    PORT_STATE.OURS,
+  );
+});
+
+test('resolveDashboardPort: cudza instancja Pulsa → pyta o inny port zamiast ją adoptować', async () => {
+  const logs = [];
+  const states = { 7777: PORT_STATE.OTHER_PULS, 8123: PORT_STATE.FREE };
+  const result = await resolveDashboardPort({
+    initialPort: 7777,
+    probePort: (port) => Promise.resolve(states[port]),
+    askPort: () => Promise.resolve('8123'),
+    log: (line) => logs.push(line),
+  });
+
+  assert.deepEqual(result, { port: 8123, reused: false });
+  assert.ok(logs.join('\n').includes(buildOtherPulsMessage(7777)));
+});
+
+// === pickInitialPort — env sesji bywa nieświeże, wartość utrwalona jest zapasem ===
+
+test('pickInitialPort: env wygrywa nad wartością utrwaloną', () => {
+  assert.equal(pickInitialPort({ envValue: '9000', persistedValue: '8080' }), 9000);
+});
+
+test('pickInitialPort: puste env → port z poprzedniej instalacji, nie domyślny 7777', () => {
+  const logs = [];
+  assert.equal(
+    pickInitialPort({ envValue: '', persistedValue: '8080', log: (l) => logs.push(l) }),
+    8080,
+  );
+  assert.equal(pickInitialPort({ envValue: undefined, persistedValue: '8080' }), 8080);
+  assert.ok(logs.join('\n').includes('8080'));
+});
+
+test('pickInitialPort: brak obu źródeł → domyślny port; śmieć w env → warn + domyślny', () => {
+  const logs = [];
+  assert.equal(pickInitialPort({ envValue: '', persistedValue: null }), DEFAULT_DASHBOARD_PORT);
+  assert.equal(
+    pickInitialPort({ envValue: '7777x', persistedValue: '8080', log: (l) => logs.push(l) }),
+    DEFAULT_DASHBOARD_PORT,
+  );
+  assert.ok(logs.join('\n').includes('[warn]'));
+});
+
+test('readEnvLineValue: czyta wartość zapisaną przez upsertEnvLine (round-trip)', () => {
+  const rc = upsertEnvLine('# rc\n', 'CLAUDE_CRON_PORT', '8080', 'Claude-Cron dashboard port');
+  assert.equal(readEnvLineValue(rc, 'CLAUDE_CRON_PORT'), '8080');
+  assert.equal(readEnvLineValue(rc, 'CLAUDE_CRON_VPS_URL'), null);
+  assert.equal(readEnvLineValue('', 'CLAUDE_CRON_PORT'), null);
+});
+
+test('buildGetUserEnvCommand: odczyt HKCU bez profilu, nazwa w apostrofach', () => {
+  const { cmd, args } = buildGetUserEnvCommand('CLAUDE_CRON_PORT');
+  assert.equal(cmd, 'powershell');
+  assert.deepEqual(args.slice(0, 2), ['-NoProfile', '-Command']);
+  assert.ok(args[2].includes("GetEnvironmentVariable('CLAUDE_CRON_PORT', 'User')"));
 });
 
 // === buildStaleHookPortWarning — autostart i dashboard muszą pilnować tego samego portu ===
