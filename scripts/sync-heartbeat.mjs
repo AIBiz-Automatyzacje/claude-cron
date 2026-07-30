@@ -133,9 +133,20 @@ async function main() {
 
   const device = args.device || os.hostname();
 
-  // Najpierw zapis własnego znacznika — nawet gdy sprawdzenie zaraz zaalarmuje,
-  // druga strona musi dostać świeży dowód, że TA maszyna żyje. Poprzednią wersję
-  // czytamy PRZED nadpisaniem: jej wiek mówi, czy maszyna dopiero wstała.
+  // Offline = ani zapisu, ani kontroli. To nie skąpstwo: własny znacznik pełni
+  // rolę „ostatni run, w którym byłem online". Gdy pisaliśmy go też offline
+  // (30.07), stemp pozostawał świeży przez całą przerwę w sieci — po powrocie
+  // internetu gate „wake" nie zadziałał i kontrola odpaliła, zanim Obsidian Sync
+  // zdążył ściągnąć vps.md → fałszywy alarm „121 min". Bez zapisu offline powrót
+  // sieci wygląda jak pobudka: jeden run gracji, prawdziwy test w następnym.
+  const online = args.check ? await checkOnline() : true;
+  if (!online) {
+    console.log('[heartbeat] offline — pomijam zapis i kontrolę, sync i tak nie może działać.');
+    return;
+  }
+
+  // Poprzednią wersję własnego znacznika czytamy PRZED nadpisaniem: jej wiek
+  // mówi, czy maszyna była na chodzie (i online) w poprzednim oknie.
   let ownVerdict = null;
   if (args.write) {
     const target = path.resolve(workspace, args.write);
@@ -146,12 +157,9 @@ async function main() {
   }
 
   if (args.check) {
-    const online = await checkOnline();
     const gate = shouldSkipCheck({ ownVerdict, online, maxAgeMin });
     if (gate.skip) {
-      console.log(gate.reason === 'offline'
-        ? '[heartbeat] pomijam kontrolę — brak internetu, sync i tak nie może działać.'
-        : '[heartbeat] pomijam kontrolę — maszyna dopiero wstała, sync nie miał kiedy nadrobić; prawdziwy test w następnym runie.');
+      console.log('[heartbeat] pomijam kontrolę — maszyna dopiero wróciła (sen albo brak sieci), sync nie miał kiedy nadrobić; prawdziwy test w następnym runie.');
       return;
     }
 
