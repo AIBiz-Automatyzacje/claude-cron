@@ -21,6 +21,10 @@
       s.today_failed,
       s.next ? s.next.next_run : '',
       s.current_run ? s.current_run.id : '',
+      // Równoległość (R2): sam `current_run` to tylko PIERWSZY z biegnących — start
+      // i koniec drugiego runu nie zmieniłyby podpisu i historia zamarzłaby na 3 s
+      // dłużej niż trzeba. `runningRunsFrom` daje parytet ze starym polem.
+      runningRunsFrom(s).map((r) => r.id).join('+'),
     ].join('|');
     return `${list.length}#${runsSig}#${statusSig}`;
   }
@@ -199,6 +203,59 @@
     return fireMinutes >= startMinutes && fireMinutes <= endMinutes;
   }
 
+  // === Aktywne runy (równoległość — R2/R6) ===
+
+  // Lista biegnących runów z /api/status. Parytet pól: `current_runs` (nowe) wygrywa,
+  // ale instancja sprzed równoległości (np. starszy VPS za proxy /api/vps/*) oddaje tylko
+  // `current_run` — bez fallbacku jej pasek byłby pusty mimo biegnącego zadania.
+  function runningRunsFrom(status) {
+    const s = status || {};
+    if (Array.isArray(s.current_runs)) return s.current_runs;
+    return s.current_run ? [s.current_run] : [];
+  }
+
+  // Czas od startu runu: "12s" / "3m 7s" (styl formatDuration z app.js).
+  // Brak/nieparsowalny znacznik → '—'; ujemna różnica (rozjazd zegara przeglądarki
+  // z serwerem) domykana do zera, żeby pasek nie pokazywał czasu wstecz.
+  function formatElapsed(startedAt, nowMs) {
+    if (typeof startedAt !== 'string' || !startedAt) return '—';
+    const iso = startedAt + (startedAt.endsWith('Z') ? '' : 'Z');
+    const startMs = Date.parse(iso);
+    if (!Number.isFinite(startMs) || !Number.isFinite(nowMs)) return '—';
+    const totalSec = Math.max(0, Math.floor((nowMs - startMs) / 1000));
+    if (totalSec < 60) return `${totalSec}s`;
+    return `${Math.floor(totalSec / 60)}m ${totalSec % 60}s`;
+  }
+
+  // Wiersze kill-bara: { id, name, elapsed }. Nazwa z mapy jobów, z fallbackiem
+  // "Job #<id>" (job mógł zostać usunięty w trakcie runu). Runy bez liczbowego id
+  // są POMIJANE — id trafia do `onclick="killRun(<id>)"`, więc musi być liczbą.
+  function activeRunRows(runs, jobsMap, nowMs) {
+    const list = Array.isArray(runs) ? runs : [];
+    const jobs = jobsMap || {};
+    const rows = [];
+    for (const run of list) {
+      if (!run) continue;
+      const id = Number(run.id);
+      if (!Number.isInteger(id)) continue;
+      const job = jobs[run.job_id];
+      rows.push({
+        id,
+        name: job && job.name ? job.name : `Job #${run.job_id}`,
+        elapsed: formatElapsed(run.started_at, nowMs),
+      });
+    }
+    return rows;
+  }
+
+  // Podpis SZKIELETU listy aktywnych runów (id + nazwa). Czas trwania świadomie poza
+  // podpisem: tyka co sekundę, więc wchodząc do niego przebudowywałby innerHTML paska
+  // przy każdym pollu (migotanie). App.js dopisuje czas per wiersz przez textContent.
+  function activeRunsSignature(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    return list.map((r) => `${r.id}:${r.name}`).join(',') + '#' + list.length;
+  }
+
   // === Zespół (Team OS Hub) — członkowie skrzynki ===
   const MEMBER_NAME_MAX = 80;
 
@@ -259,6 +316,7 @@
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
     parseCronForCalendar, computeWeekOccurrences, startOfWeek, formatHourMinute,
     overlapsMaintenanceWindow,
+    runningRunsFrom, formatElapsed, activeRunRows, activeRunsSignature,
     isTabAvailable, resolveVisibleTab, DEFAULT_TAB,
     validateMemberName, memberRowData, MEMBER_NAME_MAX,
   };

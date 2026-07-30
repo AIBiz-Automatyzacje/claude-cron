@@ -243,7 +243,7 @@ mocne wzorce lokalne dla każdej potrzebnej decyzji.
 
 ### Faza 1 — Równoległość (rdzeń sprintu)
 
-- [ ] **Unit 1: Warstwa danych — kolumny, statystyki czasów, runy aktywne**
+- [x] **Unit 1: Warstwa danych — kolumny, statystyki czasów, runy aktywne**
 
 **Cel:** dać schedulerowi wszystko, czego potrzebuje do decyzji, i wprowadzić metrykę odbioru.
 
@@ -292,7 +292,7 @@ mocne wzorce lokalne dla każdej potrzebnej decyzji.
 
 ---
 
-- [ ] **Unit 2: Executor — mapa aktywnych runów i kill per run**
+- [x] **Unit 2: Executor — mapa aktywnych runów i kill per run**
 
 **Cel:** zdjąć globalny slot, nie ruszając ani jednego timera i ani jednego guardu.
 
@@ -347,7 +347,7 @@ jedyny test, który wykrywa przypadkowy powrót do semantyki singletonu.
 
 ---
 
-- [ ] **Unit 3: Scheduler — picker, slot rezerwowy, dzwonek**
+- [x] **Unit 3: Scheduler — picker, slot rezerwowy, dzwonek**
 
 **Cel:** serce zmiany. Zamienia „weź pierwszy i czekaj" na „startuj wszystko, co się kwalifikuje,
 i reaguj natychmiast, gdy pojawi się nowa praca".
@@ -420,7 +420,7 @@ implementacji i daje fałszywe zielone światło.
 
 ---
 
-- [ ] **Unit 4: API — kill per run, lista aktywnych, ustawienie limitu**
+- [x] **Unit 4: API — kill per run, lista aktywnych, ustawienie limitu**
 
 **Cel:** wystawić nowy stan na zewnątrz bez psucia istniejących klientów (dashboard, skill `/puls`).
 
@@ -468,7 +468,7 @@ implementacji i daje fałszywe zielone światło.
 
 ---
 
-- [ ] **Unit 5: Dashboard — lista biegnących runów, pole grupy, ustawienie limitu**
+- [x] **Unit 5: Dashboard — lista biegnących runów, pole grupy, ustawienie limitu**
 
 **Cel:** panel przestaje zakładać, że biegnie najwyżej jedno zadanie.
 
@@ -516,7 +516,7 @@ figma-design-to-code *(nominalnie — repo używa vanilla JS bez frameworka i be
 
 ---
 
-- [ ] **Unit 6: Seed, harmonogramy i dokumentacja skilla `/puls`**
+- [x] **Unit 6: Seed, harmonogramy i dokumentacja skilla `/puls`**
 
 **Cel:** domknąć znane kolizje i opisać nowy model tam, gdzie go używa człowiek i agent.
 

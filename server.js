@@ -287,9 +287,36 @@ async function handleApi(req, res) {
     }
   }
 
+  // GET/PUT /api/settings/concurrency — limit równoległych runów (state.max_concurrent).
+  // PRYWATNY (za guardem XFF jak cały dashboard): wartość steruje zużyciem wspólnego okna
+  // planu Claude na TEJ maszynie, więc nie ma powodu, by dało się ją zmienić z internetu.
+  // Bez guardu CSRF (isCrossOriginRequest) — endpoint nie zwraca ani nie przyjmuje sekretu,
+  // a ten guard jest zastrzeżony dla odpowiedzi z tokenami (/api/inbox/members).
+  if (urlPath === '/api/settings/concurrency') {
+    // GET — wartość rozwiązywana w momencie odczytu (state > default), nie przy require
+    if (method === 'GET') {
+      return json(res, { max_concurrent: scheduler.readMaxConcurrent() });
+    }
+
+    // PUT — walidacja fail-fast PRZED zapisem; wartość trzymamy jako string, bo cała
+    // tabela `state` jest key-value tekstowym (odczyt i tak idzie przez resolveMaxConcurrent).
+    if (method === 'PUT') {
+      const body = await parseBody(req);
+      const check = scheduler.sanitizeMaxConcurrent(body.max_concurrent);
+      if (!check.ok) return error(res, check.error);
+      db.setState(scheduler.MAX_CONCURRENT_STATE_KEY, String(check.value));
+      return json(res, { max_concurrent: scheduler.readMaxConcurrent() });
+    }
+  }
+
   // GET /api/status
   if (method === 'GET' && urlPath === '/api/status') {
-    const currentRun = db.getCurrentRun();
+    // Równoległość (R2): pełna lista biegnących runów. `current_run` zostaje jako pierwszy
+    // element — dashboard i skill /puls czytają je osobno i aktualizują się w innym tempie
+    // (parytet surface API). Jedno źródło (getRunningRuns) zamiast getCurrentRun, żeby oba
+    // pola nie mogły pokazać dwóch różnych stanów z dwóch odczytów.
+    const currentRuns = db.getRunningRuns();
+    const currentRun = currentRuns[0] || null;
     const queued = db.getQueuedRuns();
     const allJobs = db.getAllJobs();
     const autostart = platform.getStatus();
@@ -300,6 +327,7 @@ async function handleApi(req, res) {
     return json(res, {
       uptime: process.uptime(),
       current_run: currentRun,
+      current_runs: currentRuns,
       queue_length: queued.length,
       total_jobs: allJobs.length,
       enabled_jobs: allJobs.filter(j => j.enabled).length,
@@ -415,9 +443,37 @@ async function handleApi(req, res) {
     return json(res, db.getCurrentRun());
   }
 
-  // POST /api/runs/current/kill
+  // POST /api/runs/current/kill — shim sprzed równoległości (dashboard, skill /puls).
+  // 0 aktywnych → dzisiejsza odpowiedź { killed: false }; 1 → kill; >1 → 409 z listą
+  // aktywnych runów. Świadomie ZERO zgadywania, który ubić — losowy strzał zabiłby
+  // cudzy run, a klient nie miałby jak tego zauważyć. 409 = „doprecyzuj przez
+  // POST /api/runs/:id/kill".
   if (method === 'POST' && urlPath === '/api/runs/current/kill') {
     const killed = executor.killCurrent();
+    if (killed === null) {
+      return json(res, {
+        error: 'Kilka runów biegnie równolegle — wskaż konkretny run (POST /api/runs/:id/kill)',
+        current_runs: db.getRunningRuns(),
+      }, 409);
+    }
+    return json(res, { killed });
+  }
+
+  // POST /api/runs/:id/kill — kill KONKRETNEGO runu (R6). MUSI stać PO matcherze
+  // /api/runs/current/kill: 'current' nie jest liczbą, więc trafiłby tu na 400.
+  if (method === 'POST' && segments[0] === 'api' && segments[1] === 'runs' && segments[3] === 'kill') {
+    const runId = parseInt(segments[2], 10);
+    if (isNaN(runId)) return error(res, 'Invalid run ID');
+
+    // Świeży odczyt z DB wyłącznie po to, żeby odróżnić „run nie istnieje" (404) od
+    // „istnieje, ale już nie biegnie" (200 killed:false) — getRunWithPayload to jedyny
+    // getter pojedynczego runu, payload jest tu produktem ubocznym i nie wychodzi na zewnątrz.
+    if (!db.getRunWithPayload(runId)) return error(res, 'Run not found', 404);
+
+    // killed:false = run nie jest aktywny (skończył się sekundę wcześniej albo stoi
+    // w kolejce). To NIE jest błąd klienta — stan zmienił się między odczytem a kliknięciem,
+    // więc oddajemy 200 z prawdą o wyniku zamiast udawać, że żądanie było niepoprawne.
+    const killed = executor.killRun(runId);
     return json(res, { killed });
   }
 

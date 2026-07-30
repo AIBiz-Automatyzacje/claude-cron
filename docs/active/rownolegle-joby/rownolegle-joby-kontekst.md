@@ -1,7 +1,7 @@
 # Równoległe joby — kontekst techniczny
 
 **Branch:** `feature/rownolegle-joby`
-**Ostatnia aktualizacja:** 2026-07-30
+**Ostatnia aktualizacja:** 2026-07-30 — Faza 1 (Unit 1-6) zaimplementowana, `npm test` 707/707
 
 ## Źródła
 
@@ -92,6 +92,72 @@
   wyjść razem z deployem — dostanie nowy kod 409.
 - **Runtime:** Node ≥ 22.13 (`node:sqlite`), bez nowych zależności npm.
 - **Operacyjne:** zmiana cronów na VPS-ie i Macu (rozstrzelenie kolizji) — poza kodem.
+
+## Stan realizacji — Faza 1 (30.07)
+
+Unit 1-6 zamknięte. `npm test`: **707/707 pass, 0 fail** (baseline 640 → 67 nowych testów,
+zero modyfikacji istniejących — R7 utrzymane). Zero nowych zależności npm.
+
+### Decyzje podjęte w implementacji (poza literalnym brzmieniem planu)
+
+1. **Kształt `getQueueWaitStats(hours = 24)` → `{ count, avgMs, maxMs }`** (Unit 1). `count`
+   dołożony, bo bez liczby próbek średnia jest nieinterpretowalna. Okno liczone po
+   `started_at >= cutoff` — metryka dotyczy runów, które **w oknie wystartowały**; plan nie
+   precyzował znacznika.
+2. **`killRun` zapisuje `killed` do DB PRZED ubiciem procesu** (Unit 2) — to realizacja kontraktu
+   z planu, ale **odwrócenie kolejności** względem starego `killCurrent` (bił, potem zapisywał).
+   Stąd kontrakt „killed milczy" działa teraz także przy równoległych runach.
+3. **`killCurrent()` przy >1 aktywnych zwraca `null`, nie `false`** (Unit 2). `null` jest falsy,
+   więc stary call-site degraduje się do „nie zabito"; Unit 4 rozróżnia `null` od `false`, żeby
+   zwrócić **409** zamiast cichego „nic nie zrobiono".
+4. **Eksporty spoza listy planu:** `executor.getActiveRuns()` (snapshot `{runId, jobId, startedAt}`
+   bez uchwytów do procesów — karmi picker i testy), stała `EXIT_RELEASE_GRACE_MS` (test czeka na
+   karencję, nie zgaduje liczby). Timer SIGKILL dostał `.unref()` (wzorzec `lib/ask.js:175`).
+5. **Dzwonek dzwoni także z `processQueue()`**, nie wyłącznie z `enqueueJob` (Unit 3). Powód:
+   `server.js` (webhook) tworzy run przez `db.createRun` i woła `processQueue()` z pominięciem
+   `enqueueJob` — bez tego R1 byłby złamany na ścieżce webhooka.
+6. **Walidator limitu mieszka w `lib/scheduler.js`**, nie w `server.js` (Unit 4): czysta funkcja
+   `sanitizeMaxConcurrent` + `MAX_CONCURRENT_CEILING = 10` obok `readMaxConcurrent`. Wzorzec
+   `notify-config.js` (walidację ma moduł-właściciel domeny); `server.js` nie jest unit-testowalny,
+   bo przy `require` startuje DB i scheduler.
+7. **Endpoint limitu: `GET/PUT /api/settings/concurrency`** (nazwa wzorowana na
+   `/api/settings/notifications`). Odpowiedź minimalna `{max_concurrent}` — sufit komunikowany
+   wyłącznie w treści błędu 400, bez pól „na przyszłość". **Bez guardu CSRF** (`isCrossOriginRequest`)
+   — endpoint nie zwraca ani nie przyjmuje sekretu, a ten guard jest zastrzeżony dla odpowiedzi
+   z tokenami (`/api/inbox/members`). Za guardem XFF, jak cały dashboard.
+8. **Testy HTTP (`server.runs.test.js`) używają script-jobów ze śpiącym `node`**, nie atrapy CLI
+   Claude — ścieżka skryptowa nie odpala `caffeinate` i nie wymaga shebanga, więc scenariusz
+   „dwa runy naraz" działa identycznie na macOS/Linux/Windows, a `killRun` jest wspólny dla obu
+   ścieżek. Użyte override'y: `CLAUDE_CRON_DB_PATH`, `CLAUDE_CRON_INBOX_DB_PATH`,
+   `CLAUDE_CRON_WORKSPACE` (`CLAUDE_CRON_CLAUDE_BIN` nie był potrzebny).
+9. **Kill-bar przepisany na kolumnę + siatkę wierszy** (`public/style.css`: `.kill-rows`,
+   `.kill-row`, `.kill-dur`) — stary flex poziomy był zaprojektowany na JEDEN run i przy dwóch
+   wychodził poza ekran. Zmiana wyłącznie layoutowa, w istniejącym języku wizualnym.
+10. **`pollSignature` rozszerzony o identyfikatory biegnących runów** (`render-helpers.js`). Sam
+    `current_run` to tylko PIERWSZY z biegnących, więc start/koniec drugiego runu nie odświeżałby
+    historii. Istniejące testy podpisu przechodzą bez zmian.
+11. **`killCurrent()` usunięty z `public/app.js`** (martwy kod po przejściu na kill per wiersz).
+    Endpoint `POST /api/runs/current/kill` po stronie serwera **zostaje** — shim dla skilla `/puls`
+    i starych klientów.
+12. **Modal limitu chodzi przez `apiBase()`** (respektuje przełącznik LOKALNY/VPS), inaczej niż
+    modal powiadomień, który celowo jest local-only. Limit jest własnością maszyny odpalającej
+    agentów, a endpoint nie przenosi sekretu — proxy `/api/vps/*` przekazuje body PUT-a.
+13. **`CLAUDE.md` linia 38** („executor (jeden na raz)") poprawiona razem z sekcją o schedulerze —
+    po tej fazie było to zdanie nieprawdziwe. Skill `/puls` opisuje dodatkowo
+    `GET/PUT /api/settings/concurrency` (bez tego zdanie „prawdziwą dźwignią jest podniesienie
+    limitu" nie miałoby jak być wykonane przez agenta).
+
+### Dług do domknięcia
+
+- **`lib/scheduler.js` ma 426 linii** (limit z `.claude/rules/coding-rules.md` = 300). Podziału
+  świadomie **nie** robiono w tej fazie — plan wskazywał wyłącznie ten plik, a nieplanowany
+  refaktor rdzenia razem ze zmianą zachowania byłby zmianą na ślepo. Kandydat na osobny krok.
+- **Trzy scenariusze `[E2E]` z Unit 5 nie zostały odegrane** (dwa wiersze aktywnych runów, zapis
+  pola „Grupa wyłączności", trwałość „ile zadań naraz"). Wymagają żywego dashboardu przez
+  `/agent-browser`; pokrycie jednostkowe helperów (`activeRunRows`, `activeRunsSignature`,
+  `formatElapsed`, `runningRunsFrom`) i testy HTTP na żywym serwerze są zielone.
+- **Kroki `Operator:`** (rozstrzelenie cronów na VPS i Macu, ustawienie `max_concurrent`) — poza
+  kodem, do wykonania przy deployu.
 
 ## Kontrakty, których nie wolno naruszyć
 

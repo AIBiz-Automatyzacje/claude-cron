@@ -1,7 +1,7 @@
 # Równoległe joby — checklista zadań
 
 **Branch:** `feature/rownolegle-joby`
-**Ostatnia aktualizacja:** 2026-07-30
+**Ostatnia aktualizacja:** 2026-07-30 (Faza 1 zaimplementowana)
 
 Legenda: `Test:` = scenariusz testowy z planu technicznego · `Weryfikacja:` = automatyczne
 kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego nie odznacza).
@@ -14,19 +14,19 @@ kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego
 
 *Delegate to: feature-builder-data · Zależy od: —*
 
-- [ ] Migracja kolumny `lock_group TEXT` w `jobs` (`lib/db.js`, wzorzec z db.js:105-120)
-- [ ] Migracja kolumny `queued_at TEXT` w `runs` — **bez backfillu**, istniejące wiersze zostają `NULL`
-- [ ] `createRun` ustawia `queued_at` w momencie wstawienia
-- [ ] `lock_group` dopisane do allow-list `createJob` (db.js:169) **oraz** `updateJob` (db.js:179)
-- [ ] `getRunningRuns()` — `getCurrentRun` bez `LIMIT 1`; `getCurrentRun` zostaje (kompatybilność)
-- [ ] `getRecentSuccessDurations(jobId, limit = 10)` — czasy w ms liczone w JS, nie agregatem SQL
-- [ ] `getQueueWaitStats(hours)` — średnie/max oczekiwanie, runy bez `queued_at` pomijane
-- [ ] Test: `migrate()` odpalone dwukrotnie nie rzuca i nie duplikuje kolumn
-- [ ] Test: `createJob({lock_group})` zapisuje wartość; `updateJob` ją zmienia i czyści
-- [ ] Test: `createRun` ustawia `queued_at`; `getQueueWaitStats` pomija runy bez znacznika
-- [ ] Test: `getRunningRuns()` zwraca ≥2 wiersze `running`, `getCurrentRun()` dalej jeden
-- [ ] Test: `getRecentSuccessDurations` ignoruje `failed`/`timeout`/`killed` i runy bez `started_at`
-- [ ] Test: `getRecentSuccessDurations` zwraca **liczby** (`typeof === 'number'`), nie BigInt
+- [x] Migracja kolumny `lock_group TEXT` w `jobs` (`lib/db.js`, wzorzec z db.js:105-120)
+- [x] Migracja kolumny `queued_at TEXT` w `runs` — **bez backfillu**, istniejące wiersze zostają `NULL`
+- [x] `createRun` ustawia `queued_at` w momencie wstawienia
+- [x] `lock_group` dopisane do allow-list `createJob` (db.js:169) **oraz** `updateJob` (db.js:179)
+- [x] `getRunningRuns()` — `getCurrentRun` bez `LIMIT 1`; `getCurrentRun` zostaje (kompatybilność)
+- [x] `getRecentSuccessDurations(jobId, limit = 10)` — czasy w ms liczone w JS, nie agregatem SQL
+- [x] `getQueueWaitStats(hours)` — średnie/max oczekiwanie, runy bez `queued_at` pomijane
+- [x] Test: `migrate()` odpalone dwukrotnie nie rzuca i nie duplikuje kolumn
+- [x] Test: `createJob({lock_group})` zapisuje wartość; `updateJob` ją zmienia i czyści
+- [x] Test: `createRun` ustawia `queued_at`; `getQueueWaitStats` pomija runy bez znacznika
+- [x] Test: `getRunningRuns()` zwraca ≥2 wiersze `running`, `getCurrentRun()` dalej jeden
+- [x] Test: `getRecentSuccessDurations` ignoruje `failed`/`timeout`/`killed` i runy bez `started_at`
+- [x] Test: `getRecentSuccessDurations` zwraca **liczby** (`typeof === 'number'`), nie BigInt
 - [ ] Weryfikacja: `node --test lib/db.test.js` przechodzi bez błędów
 - [ ] Weryfikacja: `npm test` przechodzi w całości (640 istniejących testów bez modyfikacji)
 
@@ -35,18 +35,18 @@ kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego
 *Delegate to: feature-builder-data · Zależy od: — (równolegle z Unit 1)*
 *Notatka wykonawcza: zacznij od testu „dwa runy, kill jednego" — wykrywa powrót do semantyki singletonu.*
 
-- [ ] `currentProcess`/`currentRunId` → `activeRuns = Map(runId → {proc, jobId, startedAt})`
-- [ ] Rejestracja wpisu **synchronicznie** po udanym spawnie (obie ścieżki: claude i script)
-- [ ] Wyrejestrowanie w `close`/`error`/`finishScriptRun` — idempotentne, domknięte także na `'exit'` z karencją
-- [ ] `killCurrent()` → `killRun(runId)`; zapis `killed` do DB **przed** ubiciem procesu
-- [ ] `killCurrent()` zostaje jako shim: 0 → `false`, 1 → kill, >1 → sygnał niejednoznaczności
-- [ ] `isRunning()` → `activeRuns.size > 0`, `getCurrentRunId()` → pierwszy klucz (shimy dla R7)
-- [ ] Timery, guard `settled` i guard „kill przez usera" — bez zmian semantycznych
-- [ ] Test: dwa runy skryptowe równocześnie — `killRun(id1)` kończy run 1 jako `killed`, run 2 jako `success`
-- [ ] Test: `killRun` zapisuje `killed` przed ubiciem — `close` nie nadpisuje na `failed` i **nie wysyła ❌**
-- [ ] Test: `killRun(nieistniejący)` zwraca `false` i nie rzuca
-- [ ] Test: po zakończeniu obu runów `activeRuns.size === 0` i `isRunning() === false`
-- [ ] Test: proces bez `'close'` (ratunkowy timer) też zwalnia wpis w mapie
+- [x] `currentProcess`/`currentRunId` → `activeRuns = Map(runId → {proc, jobId, startedAt})`
+- [x] Rejestracja wpisu **synchronicznie** po udanym spawnie (obie ścieżki: claude i script)
+- [x] Wyrejestrowanie w `close`/`error`/`finishScriptRun` — idempotentne, domknięte także na `'exit'` z karencją
+- [x] `killCurrent()` → `killRun(runId)`; zapis `killed` do DB **przed** ubiciem procesu
+- [x] `killCurrent()` zostaje jako shim: 0 → `false`, 1 → kill, >1 → sygnał niejednoznaczności
+- [x] `isRunning()` → `activeRuns.size > 0`, `getCurrentRunId()` → pierwszy klucz (shimy dla R7)
+- [x] Timery, guard `settled` i guard „kill przez usera" — bez zmian semantycznych
+- [x] Test: dwa runy skryptowe równocześnie — `killRun(id1)` kończy run 1 jako `killed`, run 2 jako `success`
+- [x] Test: `killRun` zapisuje `killed` przed ubiciem — `close` nie nadpisuje na `failed` i **nie wysyła ❌**
+- [x] Test: `killRun(nieistniejący)` zwraca `false` i nie rzuca
+- [x] Test: po zakończeniu obu runów `activeRuns.size === 0` i `isRunning() === false`
+- [x] Test: proces bez `'close'` (ratunkowy timer) też zwalnia wpis w mapie
 - [ ] Weryfikacja: `node --test lib/executor.test.js` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 
@@ -55,28 +55,28 @@ kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego
 *Delegate to: feature-builder-data · Zależy od: Unit 1, Unit 2*
 *Notatka wykonawcza: test-first dla obu czystych funkcji i dla scenariusza „krótki dokolejkowany w trakcie długiego".*
 
-- [ ] Czysta funkcja `classifyJob(durations, thresholdMs)` → `'short' | 'long'`; pusta historia → `'long'`
-- [ ] Czysta funkcja `pickEligibleRuns({queued, jobsById, activeRuns, durationsByJob, maxConcurrent, fastThresholdMs})`
-- [ ] Reguła: globalny limit `maxConcurrent` (z `state`, default 3, sanityzacja ≥ 1)
-- [ ] Reguła: zadania długie najwyżej `maxConcurrent - 1` (min 1) — reszta to rezerwa dla krótkich
-- [ ] Reguła: brak aktywnego runu tego samego `job_id`
-- [ ] Reguła: brak aktywnego runu joba o tym samym niepustym `skill_name` **lub** `command`
-- [ ] Reguła: brak aktywnego runu z tą samą niepustą `lock_group`
-- [ ] Pętla drain: startuj kwalifikujące się → `Promise.race([...aktywne, sygnał])` → re-pick
-- [ ] **Dzwonek** — `enqueueJob` rozwiązuje sygnał nowej pracy; po wybudzeniu tworzony świeży
-- [ ] Guard `queueProcessing` zostaje; `processQueue()` nadal rozwiązuje się po opróżnieniu kolejki
-- [ ] Retry-check przeniesiony bez zmian semantycznych (świeży odczyt z DB + `countRecentFailedRuns`)
-- [ ] `max_concurrent` czytane w momencie pickowania (zmiana z dashboardu bez restartu)
-- [ ] Test: `classifyJob` — mediana odporna na wartość odstającą (`[0.2, 0.2, 0.3, 975]` → krótki)
-- [ ] Test: `classifyJob` — pusta historia → długi; wartość dokładnie na progu → długi
-- [ ] Test: przy `maxConcurrent=3` i dwóch aktywnych długich trzeci długi **nie** startuje, krótki **tak**
-- [ ] Test: nigdy dwa runy tego samego `job_id`
-- [ ] Test: dwa joby o tym samym `skill_name` nie biegną razem (bez deklaracji); to samo dla `command`
-- [ ] Test: dwa joby z `lock_group='dashboard'` nie biegną razem; drugi startuje po pierwszym (FIFO po `id ASC`)
-- [ ] Test: **(odbiór R1)** krótki run dokolejkowany **w trakcie** długiego kończy się **przed** nim
-- [ ] Test: retry (R9) działa przy równoległym drainie — fail → retry → ❌ dokładnie raz
-- [ ] Test: `processQueue()` rozwiązuje się po opróżnieniu kolejki (`scheduler.test.js:285` bez zmian)
-- [ ] Test: zmiana `max_concurrent` w `state` w trakcie życia procesu wpływa na kolejny pick
+- [x] Czysta funkcja `classifyJob(durations, thresholdMs)` → `'short' | 'long'`; pusta historia → `'long'`
+- [x] Czysta funkcja `pickEligibleRuns({queued, jobsById, activeRuns, durationsByJob, maxConcurrent, fastThresholdMs})`
+- [x] Reguła: globalny limit `maxConcurrent` (z `state`, default 3, sanityzacja ≥ 1)
+- [x] Reguła: zadania długie najwyżej `maxConcurrent - 1` (min 1) — reszta to rezerwa dla krótkich
+- [x] Reguła: brak aktywnego runu tego samego `job_id`
+- [x] Reguła: brak aktywnego runu joba o tym samym niepustym `skill_name` **lub** `command`
+- [x] Reguła: brak aktywnego runu z tą samą niepustą `lock_group`
+- [x] Pętla drain: startuj kwalifikujące się → `Promise.race([...aktywne, sygnał])` → re-pick
+- [x] **Dzwonek** — `enqueueJob` rozwiązuje sygnał nowej pracy; po wybudzeniu tworzony świeży
+- [x] Guard `queueProcessing` zostaje; `processQueue()` nadal rozwiązuje się po opróżnieniu kolejki
+- [x] Retry-check przeniesiony bez zmian semantycznych (świeży odczyt z DB + `countRecentFailedRuns`)
+- [x] `max_concurrent` czytane w momencie pickowania (zmiana z dashboardu bez restartu)
+- [x] Test: `classifyJob` — mediana odporna na wartość odstającą (`[0.2, 0.2, 0.3, 975]` → krótki)
+- [x] Test: `classifyJob` — pusta historia → długi; wartość dokładnie na progu → długi
+- [x] Test: przy `maxConcurrent=3` i dwóch aktywnych długich trzeci długi **nie** startuje, krótki **tak**
+- [x] Test: nigdy dwa runy tego samego `job_id`
+- [x] Test: dwa joby o tym samym `skill_name` nie biegną razem (bez deklaracji); to samo dla `command`
+- [x] Test: dwa joby z `lock_group='dashboard'` nie biegną razem; drugi startuje po pierwszym (FIFO po `id ASC`)
+- [x] Test: **(odbiór R1)** krótki run dokolejkowany **w trakcie** długiego kończy się **przed** nim
+- [x] Test: retry (R9) działa przy równoległym drainie — fail → retry → ❌ dokładnie raz
+- [x] Test: `processQueue()` rozwiązuje się po opróżnieniu kolejki (`scheduler.test.js:285` bez zmian)
+- [x] Test: zmiana `max_concurrent` w `state` w trakcie życia procesu wpływa na kolejny pick
 - [ ] Weryfikacja: `node --test lib/scheduler.test.js` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości — 640 istniejących testów bez modyfikacji
 
@@ -84,17 +84,17 @@ kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego
 
 *Delegate to: feature-builder-data · Zależy od: Unit 1-3*
 
-- [ ] `POST /api/runs/:id/kill` — kill konkretnego runu
-- [ ] `POST /api/runs/current/kill` — 1 aktywny → kill; **>1 → 409 z listą**; 0 → jak dziś
-- [ ] `GET /api/status` — nowe `current_runs` (tablica); `current_run` = pierwszy element
-- [ ] `GET/PUT` ustawienia `max_concurrent` — walidacja (liczba całkowita ≥ 1, rozsądny sufit)
-- [ ] Endpoint ustawień **za** guardem XFF (kontrakt kolejności matcherów nienaruszony)
-- [ ] Test: `POST /api/runs/:id/kill` ubija wskazany run, drugi aktywny żyje
-- [ ] Test: `POST /api/runs/current/kill` przy dwóch aktywnych → **409** + lista w treści
-- [ ] Test: `POST /api/runs/current/kill` przy jednym aktywnym → zachowanie jak dziś
-- [ ] Test: `GET /api/status` zwraca `current_runs` jako tablicę i `current_run` = pierwszy element
-- [ ] Test: `PUT` limitu odrzuca `0`, ujemne i tekst; przyjmuje `1` i `5`
-- [ ] Test: żądanie z `X-Forwarded-For` na endpoint ustawień → 403
+- [x] `POST /api/runs/:id/kill` — kill konkretnego runu
+- [x] `POST /api/runs/current/kill` — 1 aktywny → kill; **>1 → 409 z listą**; 0 → jak dziś
+- [x] `GET /api/status` — nowe `current_runs` (tablica); `current_run` = pierwszy element
+- [x] `GET/PUT` ustawienia `max_concurrent` — walidacja (liczba całkowita ≥ 1, rozsądny sufit)
+- [x] Endpoint ustawień **za** guardem XFF (kontrakt kolejności matcherów nienaruszony)
+- [x] Test: `POST /api/runs/:id/kill` ubija wskazany run, drugi aktywny żyje
+- [x] Test: `POST /api/runs/current/kill` przy dwóch aktywnych → **409** + lista w treści
+- [x] Test: `POST /api/runs/current/kill` przy jednym aktywnym → zachowanie jak dziś
+- [x] Test: `GET /api/status` zwraca `current_runs` jako tablicę i `current_run` = pierwszy element
+- [x] Test: `PUT` limitu odrzuca `0`, ujemne i tekst; przyjmuje `1` i `5`
+- [x] Test: żądanie z `X-Forwarded-For` na endpoint ustawień → 403
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 - [ ] Weryfikacja: `grep` w `server.js` potwierdza, że `/webhook`, `/ask`, `/inbox/v1` stoją **przed** guardem XFF, a ustawienia **za** nim
 
@@ -102,11 +102,11 @@ kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego
 
 *Delegate to: feature-builder-ui · Zależy od: Unit 4*
 
-- [ ] Kill-bar (`public/app.js:328-334`) → lista wierszy: nazwa joba + czas + „Zatrzymaj" per wiersz
-- [ ] Formularz joba: opcjonalne pole „Grupa wyłączności" z krótkim wyjaśnieniem
-- [ ] Ustawienia: „Ile zadań naraz" + informacja o slocie rezerwowym i zasięgu per maszyna
-- [ ] Zachowany guard pollingu (tani podpis payloadu — bez tego lista migocze co 3 s)
-- [ ] Test: czysty helper renderujący wiersz aktywnego runu (jeśli wyjdzie poza interpolację → `public/render-helpers.js` + test)
+- [x] Kill-bar (`public/app.js:328-334`) → lista wierszy: nazwa joba + czas + „Zatrzymaj" per wiersz
+- [x] Formularz joba: opcjonalne pole „Grupa wyłączności" z krótkim wyjaśnieniem
+- [x] Ustawienia: „Ile zadań naraz" + informacja o slocie rezerwowym i zasięgu per maszyna
+- [x] Zachowany guard pollingu (tani podpis payloadu — bez tego lista migocze co 3 s)
+- [x] Test: czysty helper renderujący wiersz aktywnego runu (jeśli wyjdzie poza interpolację → `public/render-helpers.js` + test)
 - [ ] Test: [E2E] dashboard z dwoma równoczesnymi runami pokazuje **dwa** wiersze; „Zatrzymaj" w pierwszym zostawia drugi
 - [ ] Test: [E2E] zapis i odczyt pola „Grupa wyłączności" po przeładowaniu
 - [ ] Test: [E2E] zmiana „ile zadań naraz" przeżywa przeładowanie strony
@@ -117,12 +117,12 @@ kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego
 
 *Delegate to: feature-builder-data · Zależy od: Unit 1, Unit 3*
 
-- [ ] `lib/inbox-seed.js` — job „Team OS — inbox sync" dostaje `lock_group: 'dashboard'` **tylko w `createJob`**
-- [ ] Skill `puls` (`skills/puls/SKILL.md`) — opis pola grupy, zasada klasyfikacji, kod **409** przy `current/kill`
-- [ ] `CLAUDE.md` — sekcja o `scheduler.js` opisuje limit + slot rezerwowy + klasyfikację z pomiaru
-- [ ] `docs/CONCEPTS.md` — hasła „zadanie krótkie / długie" i „slot rezerwowy"
-- [ ] Test: seed nadaje `lock_group='dashboard'` przy tworzeniu joba sync
-- [ ] Test: seed przy istniejącym jobie **nie** modyfikuje jego `lock_group` ani `enabled`
+- [x] `lib/inbox-seed.js` — job „Team OS — inbox sync" dostaje `lock_group: 'dashboard'` **tylko w `createJob`**
+- [x] Skill `puls` (`skills/puls/SKILL.md`) — opis pola grupy, zasada klasyfikacji, kod **409** przy `current/kill`
+- [x] `CLAUDE.md` — sekcja o `scheduler.js` opisuje limit + slot rezerwowy + klasyfikację z pomiaru
+- [x] `docs/CONCEPTS.md` — hasła „zadanie krótkie / długie" i „slot rezerwowy"
+- [x] Test: seed nadaje `lock_group='dashboard'` przy tworzeniu joba sync
+- [x] Test: seed przy istniejącym jobie **nie** modyfikuje jego `lock_group` ani `enabled`
 - [ ] Weryfikacja: `node --test lib/inbox-seed.test.js` przechodzi
 - [ ] Weryfikacja: `grep -c "lock_group" skills/puls/SKILL.md` > 0
 - [ ] Operator: przesunąć cron „CC Update" na VPS-ie, by nie pokrywał się z „Aktualizacja folderu .claude"

@@ -22,6 +22,7 @@ let maintenanceWindow = null; // { startHour, startMin, endHour, endMin } z /api
 let lastRunsSig = null;
 let lastJobsSig = null;
 let lastMembersSig = null;
+let lastKillBarSig = null; // podpis SZKIELETU kill-bara (id + nazwa runu, bez czasu trwania)
 let lastStatus = {}; // ostatni payload /api/status (część podpisu poll historii)
 
 const { mapStatus, mapTrigger } = EnumMap;
@@ -29,6 +30,7 @@ const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = Rende
 const { computeWeekOccurrences, startOfWeek } = RenderHelpers;
 const { overlapsMaintenanceWindow } = RenderHelpers;
 const { validateMemberName, memberRowData } = RenderHelpers;
+const { runningRunsFrom, activeRunRows, activeRunsSignature } = RenderHelpers;
 
 let zadaniaView = 'lista'; // 'lista' | 'kalendarz'
 
@@ -83,6 +85,7 @@ async function switchEnv(env) {
   lastJobsSig = null; // wymuś re-render po zmianie env (te same ID, inne dane)
   lastRunsSig = null;
   lastMembersSig = null;
+  lastKillBarSig = null; // te same id runów po drugiej stronie znaczą inne zadania
   try {
     await Promise.allSettled([loadSkills(), loadJobs(), loadStatus(), loadRuns(), loadMembers()]);
   } finally {
@@ -323,17 +326,38 @@ async function loadStatus() {
     const status = await API.get('/api/status');
     lastStatus = status;
     renderStatbar(status);
-
-    // Kill bar
-    const killBar = document.getElementById('kill-bar');
-    if (status.current_run) {
-      killBar.classList.add('show');
-      const job = jobsMap[status.current_run.job_id];
-      document.getElementById('kill-job-name').textContent = job ? job.name : `Job #${status.current_run.job_id}`;
-    } else {
-      killBar.classList.remove('show');
-    }
+    renderKillBar(status);
   } catch { /* silent — statbar degraduje cicho */ }
+}
+
+// Kill-bar: WSZYSTKIE biegnące runy, po jednym wierszu z własnym „Zatrzymaj" (R2/R6).
+// Dwa tempa aktualizacji, świadomie rozdzielone: szkielet wierszy (innerHTML) tylko gdy
+// zmieni się zbiór runów — guard podpisu; czas trwania (tyka co sekundę) dopisujemy przez
+// textContent na istniejących węzłach. Bez tego rozdziału pasek przebudowywałby się co 3 s
+// i migotał, a bez drugiej ścieżki czas stałby w miejscu do końca runu.
+function renderKillBar(status) {
+  const bar = document.getElementById('kill-bar');
+  if (!bar) return;
+  const rows = activeRunRows(runningRunsFrom(status), jobsMap, Date.now());
+  const sig = activeRunsSignature(rows);
+
+  if (sig !== lastKillBarSig) {
+    lastKillBarSig = sig;
+    bar.classList.toggle('show', rows.length > 0);
+    document.getElementById('kill-count').textContent = `${rows.length} ${plJobs(rows.length)}`;
+    document.getElementById('kill-rows').innerHTML = rows.map(r => `
+      <div class="kill-row">
+        <span class="job-name">${esc(r.name)}</span>
+        <span class="kill-dur" id="kill-dur-${r.id}">${esc(r.elapsed)}</span>
+        <button class="kill-btn" onclick="killRun(${r.id})" aria-label="Zatrzymaj ${escAttr(r.name)}">■ Zatrzymaj</button>
+      </div>`).join('');
+    return; // czas trwania jest już w świeżo wstawionym HTML
+  }
+
+  for (const r of rows) {
+    const durEl = document.getElementById(`kill-dur-${r.id}`);
+    if (durEl) durEl.textContent = r.elapsed;
+  }
 }
 
 // Statbar: Następne / Aktywne / Dziś+health / Kolejka / Uptime.
@@ -827,10 +851,13 @@ async function deleteJob(id) {
   }
 }
 
-async function killCurrent() {
+// Kill KONKRETNEGO runu (R6) — nigdy „bieżącego", bo przy równoległości nie ma jednego
+// bieżącego. Po odpowiedzi NIE zgadujemy stanu lokalnie: świeży /api/status rozstrzyga,
+// które runy jeszcze biegną (learned pattern: decyduj na świeżym odczycie).
+async function killRun(runId) {
   try {
-    await API.post('/api/runs/current/kill');
-    toast('Sygnał zatrzymania wysłany');
+    const res = await API.post(`/api/runs/${runId}/kill`);
+    toast(res && res.killed ? 'Sygnał zatrzymania wysłany' : 'Ten run już nie biegnie');
     loadStatus();
   } catch {
     toast('Błąd zatrzymywania', true);
@@ -849,6 +876,7 @@ function openCreateModal() {
   document.getElementById('form-timeout').value = '10';
   document.getElementById('form-idle-timeout').value = '5';
   document.getElementById('form-retries').value = '1';
+  document.getElementById('form-lock-group').value = '';
   document.getElementById('form-wake').checked = true;
   document.getElementById('form-discord').checked = false;
   document.getElementById('form-telegram').checked = false;
@@ -894,6 +922,7 @@ function openEditModal(id) {
   document.getElementById('form-timeout').value = msToMin(job.timeout_ms);
   document.getElementById('form-idle-timeout').value = msToMin(job.idle_timeout_ms ?? 300000);
   document.getElementById('form-retries').value = job.max_retries;
+  document.getElementById('form-lock-group').value = job.lock_group || '';
   document.getElementById('form-wake').checked = !!job.run_on_wake;
   document.getElementById('form-discord').checked = !!job.discord_notify;
   document.getElementById('form-telegram').checked = !!job.telegram_notify;
@@ -940,6 +969,9 @@ async function saveJob(e) {
   e.preventDefault();
   const id = document.getElementById('form-id').value;
   const jobType = document.getElementById('form-job-type').value;
+  // Pusta grupa = null (brak wyłączności), nie pusty string — `''` byłoby kolejną
+  // wartością znaczącą to samo w kolumnie, a przy edycji musi CZYŚCIĆ starą grupę.
+  const lockGroup = document.getElementById('form-lock-group').value.trim();
   const body = {
     name: document.getElementById('form-name').value,
     job_type: jobType,
@@ -954,6 +986,7 @@ async function saveJob(e) {
     discord_notify: document.getElementById('form-discord').checked,
     telegram_notify: document.getElementById('form-telegram').checked,
     routine: document.getElementById('form-routine').checked,
+    lock_group: lockGroup || null,
   };
 
   try {
@@ -1106,6 +1139,59 @@ async function pushNotifyToVps() {
     toast('Błąd sieci przy wysyłce na VPS', true);
   } finally {
     btn.disabled = false;
+  }
+}
+
+// === Modal: Ile zadań naraz (limit równoległości) ===
+// Świadomie przez API.get/API.put (apiBase), inaczej niż modal powiadomień: limit jest
+// własnością MASZYNY, która odpala agentów, więc konfiguruje się tę instancję, na którą
+// patrzy przełącznik LOKALNY/VPS. Zero sekretów w tym endpoincie — sama liczba.
+
+async function openConcurrencyModal() {
+  try {
+    const settings = await API.get('/api/settings/concurrency');
+    document.getElementById('concurrency-max').value = settings.max_concurrent ?? '';
+  } catch {
+    toast('Błąd pobierania limitu równoległości', true);
+    return;
+  }
+  clearConcurrencyError();
+  document.getElementById('concurrency-modal-overlay').hidden = false;
+}
+
+function hideConcurrencyModal() {
+  document.getElementById('concurrency-modal-overlay').hidden = true;
+}
+
+function closeConcurrencyModal(e) {
+  if (e.target === document.getElementById('concurrency-modal-overlay')) hideConcurrencyModal();
+}
+
+function showConcurrencyError(msg) {
+  const el = document.getElementById('concurrency-error');
+  el.textContent = msg;
+  el.hidden = false;
+}
+
+function clearConcurrencyError() {
+  const el = document.getElementById('concurrency-error');
+  el.textContent = '';
+  el.hidden = true;
+}
+
+async function saveConcurrency(e) {
+  e.preventDefault();
+  const value = document.getElementById('concurrency-max').value.trim();
+  try {
+    // Walidację zakresu robi serwer (sanitizeMaxConcurrent) — druga kopia progu w UI
+    // rozjechałaby się z nim przy pierwszej zmianie sufitu.
+    const res = await API.put('/api/settings/concurrency', { max_concurrent: value });
+    if (res && res.error) { showConcurrencyError(res.error); return; }
+    clearConcurrencyError();
+    toast(`Limit zapisany: ${res.max_concurrent} ${plJobs(res.max_concurrent)} naraz`);
+    hideConcurrencyModal();
+  } catch {
+    showConcurrencyError('Błąd zapisu limitu — spróbuj ponownie.');
   }
 }
 

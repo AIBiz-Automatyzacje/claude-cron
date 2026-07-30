@@ -26,6 +26,7 @@
           <button class="env-opt env-btn active" data-env="local" onclick="switchEnv('local')">LOKALNY</button>
           <button class="env-opt env-btn" data-env="vps" onclick="switchEnv('vps')">VPS</button>
         </div>
+        <button class="btn btn-ghost" onclick="openConcurrencyModal()" aria-haspopup="dialog">⚡ Ile naraz</button>
         <button class="btn btn-ghost" onclick="openNotifyModal()" aria-haspopup="dialog">🔔 Powiadomienia</button>
       </div>
     </header>
@@ -167,14 +168,14 @@
     </main>
   </div>
 
-  <!-- ── Kill bar ── -->
+  <!-- ── Kill bar — wiersz na KAŻDY biegnący run (R2/R6) ── -->
   <div class="kill-bar" id="kill-bar">
     <div class="run-info">
       <span class="badge badge-running">DZIAŁA</span>
       &nbsp;
-      <span class="job-name" id="kill-job-name">—</span>
+      <span class="job-name" id="kill-count">—</span>
     </div>
-    <button class="kill-btn" onclick="killCurrent()">■ Zatrzymaj</button>
+    <div class="kill-rows" id="kill-rows"></div>
   </div>
 
   <!-- ── Modal: Nowe / Edytuj zadanie ── -->
@@ -256,7 +257,7 @@
 
           <!-- Opcje zaawansowane -->
           <button type="button" class="accordion" id="accordion">
-            <span class="acc-caret">›</span> <b>Opcje zaawansowane</b> <span class="acc-hint">limity czasu · powtórzenia · Discord · Telegram</span>
+            <span class="acc-caret">›</span> <b>Opcje zaawansowane</b> <span class="acc-hint">limity czasu · powtórzenia · grupa wyłączności · Discord · Telegram</span>
           </button>
           <div class="accordion-body hidden" id="accordion-body">
             <div class="two-col">
@@ -271,6 +272,9 @@
             </div>
             <label class="field-label" for="form-retries">MAKS. POWTÓRZEŃ</label>
             <input type="number" class="input" id="form-retries" value="1" min="0" max="5" />
+            <label class="field-label" for="form-lock-group">GRUPA WYŁĄCZNOŚCI (opcjonalnie)</label>
+            <input type="text" class="input" id="form-lock-group" placeholder="np. plan-tygodnia.md" />
+            <div class="hint">Zadania z tą samą nazwą grupy nigdy nie biegną jednocześnie. Wpisuj tu wspólny plik lub artefakt, do którego oba piszą (np. konkretną notatkę) — nie cały vault. Puste = zadanie może biec równolegle z innymi.</div>
             <label class="check mt"><input type="checkbox" id="form-wake" /><span class="checkbox"></span> Uruchom po przebudzeniu (nadrobienie pominiętych)</label>
             <label class="check"><input type="checkbox" id="form-discord" /><span class="checkbox"></span> Powiadomienie Discord</label>
             <label class="check"><input type="checkbox" id="form-telegram" /><span class="checkbox"></span> Powiadomienie Telegram</label>
@@ -333,6 +337,30 @@
         <div class="modal-foot">
           <button type="button" class="btn btn-ghost" onclick="hideNotifyModal()">Anuluj</button>
           <button type="button" class="btn btn-ghost" id="notify-push-vps" onclick="pushNotifyToVps()" style="display:none">Wyślij na VPS</button>
+          <button type="submit" class="btn btn-primary">Zapisz</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── Modal: Ile zadań naraz (limit równoległości) ── -->
+  <div class="modal-overlay" id="concurrency-modal-overlay" onclick="closeConcurrencyModal(event)" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="concurrency-title" onclick="event.stopPropagation()">
+      <div class="modal-head">
+        <div class="modal-title-wrap"><span class="modal-ico">⚡</span><h3 id="concurrency-title">Ile zadań naraz</h3></div>
+        <button class="modal-close" onclick="hideConcurrencyModal()" aria-label="Zamknij">✕</button>
+      </div>
+      <form id="concurrency-form" onsubmit="saveConcurrency(event)">
+        <div class="modal-body">
+          <label class="field-label" for="concurrency-max">MAKS. RÓWNOCZESNYCH ZADAŃ</label>
+          <input type="number" class="input input-focus" id="concurrency-max" min="1" max="10" step="1" required />
+          <div class="form-error" id="concurrency-error" role="alert" hidden></div>
+          <div class="hint">Ustawienie dotyczy <b>tej maszyny</b>, na którą patrzy przełącznik LOKALNY/VPS — każda ma własny limit.</div>
+          <div class="hint">Jeden slot jest zawsze <b>zarezerwowany dla zadań krótkich</b>, żeby szybkie zadanie (np. synchronizacja skrzynki) nie czekało za długim. Przy limicie 3 równolegle biegną więc najwyżej 2 długie zadania.</div>
+          <div class="hint">Limit planu Claude jest wspólny dla wszystkich uruchomień — większa wartość nie daje więcej mocy, tylko szybciej zużywa okno.</div>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn btn-ghost" onclick="hideConcurrencyModal()">Anuluj</button>
           <button type="submit" class="btn btn-primary">Zapisz</button>
         </div>
       </form>

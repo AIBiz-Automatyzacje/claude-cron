@@ -78,8 +78,24 @@ Podsystem wymiany wiadomości w zespole (typy `task`/`query`/`reply`/`close`, st
 `pending`/`delivered`/`done`) z UI w pliku `Skrzynka.md` w vaultcie Obsidiana — nie w dashboardzie Pulsa.
 → [CLAUDE.md § Team OS — Skrzynka](../CLAUDE.md)
 
+## Slot rezerwowy
+
+Ostatni z `max_concurrent` slotów współbieżności, na który **nie wchodzi zadanie długie** (budżet
+długich = `max(1, limit-1)`). Nie jest to slot „dla ważnych jobów", tylko gwarancja, że run krótki
+(inbox sync co minutę) nie czeka za kwadransowym. Przy limicie 1 rezerwy nie ma z czego zrobić.
+→ [CLAUDE.md § `scheduler.js`](../CLAUDE.md)
+
 ## Wake
 
 Trigger runu dla joba przegapionego podczas downtime'u maszyny (sen Maca, restart). Kolejkowany po
 starcie na podstawie heartbeatu `last_active_at`, tylko dla jobów z `run_on_wake=1`.
+→ [CLAUDE.md § `scheduler.js`](../CLAUDE.md)
+
+## Zadanie krótkie / długie
+
+Klasyfikacja joba na potrzeby pickera kolejki, wyliczana **z pomiaru, nie z deklaracji**: mediana
+czasów ostatnich 10 **udanych** runów < 60 s = krótkie, inaczej długie; brak historii = długie
+(fail-safe). Kontrintuicyjne: **nie ma nic wspólnego z `job_type`** — najdłuższy job systemu (747 s)
+to `script`, a 18-sekundowy to `claude`. Mediana, nie średnia: pojedynczy run przespany przez
+maszynę (975 s) wrzuciłby najlżejszy job systemu do długich.
 → [CLAUDE.md § `scheduler.js`](../CLAUDE.md)
