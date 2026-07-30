@@ -606,7 +606,7 @@ figma-design-to-code *(nominalnie — repo używa vanilla JS bez frameworka i be
 
 ### Faza 3 — Autostart na Macu
 
-- [ ] **Unit 8: `installMac` przepisany pod wzorzec działającego plista**
+- [x] **Unit 8: `installMac` przepisany pod wzorzec działającego plista**
 
 **Cel:** panel przestaje kłamić, a instalowany plist faktycznie wstaje.
 

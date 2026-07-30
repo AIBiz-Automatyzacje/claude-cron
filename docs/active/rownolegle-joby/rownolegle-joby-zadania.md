@@ -239,16 +239,16 @@ kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego
 *Delegate to: feature-builder-data · Zależy od: —*
 *Notatka wykonawcza: `lib/platform.js` nie ma dziś żadnego testu — zacznij od characterization testu generatora plista.*
 
-- [ ] Characterization test obecnego `generatePlist()` **przed** zmianą zachowania
-- [ ] Wrapper `/bin/sh -c` z `cd <repo> && exec ./.node/<wersja>/bin/node server.js`
-- [ ] Logi w `~/Library/Logs/claude-cron/` (nie w `<repo>/data/` — TCC, `EX_CONFIG 78`)
-- [ ] Blok `EnvironmentVariables`: `PATH`, `HOME`, `CLAUDE_CRON_WORKSPACE`, `CLAUDE_CRON_VPS_URL`
-- [ ] Jedna stała etykiety używana przez `PLIST_PATH`, `installMac` i `getStatus` (koniec rozjazdu)
-- [ ] `getStatus()` radzi sobie z instalacją zrobioną ręcznie pod starą nazwą (bez cichego duplikatu agenta)
-- [ ] Test: plist zawiera wrapper `/bin/sh -c`, ścieżkę do portable Node z `.node/` i logi **poza** repo
-- [ ] Test: plist zawiera `CLAUDE_CRON_WORKSPACE` i `CLAUDE_CRON_VPS_URL`, gdy ustawione w środowisku
-- [ ] Test: `getStatus()` rozpoznaje agenta po etykiecie, którą instaluje `installMac()`
-- [ ] Test: etykieta to jedna stała — brak rozjazdu nazw między funkcjami
+- [x] Characterization test obecnego `generatePlist()` **przed** zmianą zachowania (7/7 GREEN przed zmianą, potem przepisany na nowy kontrakt — niezmienniki zachowane, wady zamienione w asercje odwrotne)
+- [x] Wrapper `/bin/sh -c` z `cd <repo> && exec ./.node/<wersja>/bin/node server.js`
+- [x] Logi w `~/Library/Logs/claude-cron/` (nie w `<repo>/data/` — TCC, `EX_CONFIG 78`)
+- [x] Blok `EnvironmentVariables`: `PATH`, `HOME`, `CLAUDE_CRON_WORKSPACE`, `CLAUDE_CRON_VPS_URL`
+- [x] Jedna stała etykiety używana przez `PLIST_PATH`, `installMac` i `getStatus` (koniec rozjazdu)
+- [x] `getStatus()` radzi sobie z instalacją zrobioną ręcznie pod starą nazwą (bez cichego duplikatu agenta) — `LEGACY_PLIST_LABELS`, `installMac()` unloaduje i kasuje stary plist przed load
+- [x] Test: plist zawiera wrapper `/bin/sh -c`, ścieżkę do portable Node z `.node/` i logi **poza** repo
+- [x] Test: plist zawiera `CLAUDE_CRON_WORKSPACE` i `CLAUDE_CRON_VPS_URL`, gdy ustawione w środowisku
+- [x] Test: `getStatus()` rozpoznaje agenta po etykiecie, którą instaluje `installMac()`
+- [x] Test: etykieta to jedna stała — brak rozjazdu nazw między funkcjami
 - [ ] Weryfikacja: `node --test lib/platform.test.js` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 - [ ] Operator: po instalacji `launchctl list | grep claude-cron` pokazuje agenta, panel „zainstalowany", daemon przeżywa reboot

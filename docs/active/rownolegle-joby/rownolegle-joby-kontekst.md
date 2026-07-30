@@ -1,8 +1,8 @@
 # Równoległe joby — kontekst techniczny
 
 **Branch:** `feature/rownolegle-joby`
-**Ostatnia aktualizacja:** 2026-07-30 — Faza 2 (Unit 7, instalator) zaimplementowana; `npm test`
-736/736, `bash install.test.sh` 13/13
+**Ostatnia aktualizacja:** 2026-07-30 — Faza 3 (Unit 8, autostart na Macu) zaimplementowana;
+`npm test` 772/772 (0 fail), `node --test lib/platform.test.js` 26/26
 
 ## Źródła
 
@@ -249,3 +249,90 @@ Instalator pyta o katalog (`install.sh` → `ask_install_dir`/`resolve_install_d
 5. **Seed nigdy nie robi `UPDATE` istniejących jobów** — chroni ręczne wyłączenia usera.
 6. **Kolejność matcherów w `server.js`:** webhook → ask → inbox → guard XFF → api/static.
    Ustawienie limitu jest prywatne, więc leży **za** guardem.
+
+## Review fazy 2 (2026-07-30)
+
+Raport: `docs/active/rownolegle-joby/review-faza-2.md` · Gate: **⛔ BLOKUJE** (1×P1, 6×P2, 11×P3
++ 2 findingi OPERATOR). Obie automatyczne `Weryfikacja:` przeszły (`bash install.test.sh` → 13/13,
+`node --test setup.test.mjs` → 102/102, oba exit 0).
+
+Wnioski kluczowe:
+
+1. **Katalog instalacji stał się wolnym wejściem usera, ale kod-konsument nie dostał guardu** —
+   to wspólny mianownik P1 (`install.sh:204`: `mv "$INSTALL_DIR"` do tmp kasowanego przez
+   `trap … rm -rf`, bez sprawdzenia czy to w ogóle instalacja Pulsa) i P2 (`install.ps1:152`:
+   `Contains` bez granicy ścieżki ubija cudze procesy `node`). Zmiana źródła wartości wymaga
+   przejrzenia KAŻDEGO miejsca, które na tej wartości robi coś destrukcyjnego.
+2. **Wykrywanie zajętego portu ma dziurę na macOS** — bind wyłącznie na `0.0.0.0` udaje się,
+   gdy obcy proces trzyma `127.0.0.1:<port>` (zweryfikowane na żywo). Trzeba probować oba adresy,
+   inaczej Unit 7 nie zamyka scenariusza, dla którego powstał.
+3. **`install.sh` nie ma odpowiednika `Stop-PulsProcesses`** — checkbox „ubijanie procesów filtrem
+   po ścieżce instalacji" odhaczono mając tylko implementację Windows; na macOS stary daemon
+   przeżywa podmianę katalogu i setup kończy się „Gotowe!" na starym kodzie.
+4. **Klasyfikacja OURS zakłada jedną instalację na maszynie** — a ta sama faza dodała drugą.
+   `/api/status` nie zdradza katalogu instalacji, więc cudzy Puls jest nieodróżnialny od re-runu.
+
+## Faza 3 — Autostart na Macu (Unit 8, 2026-07-30)
+
+`lib/platform.js` przepisany pod wzorzec plista, który realnie wstaje; `lib/platform.test.js`
+to pierwsze pokrycie tego modułu (26 testów). `npm test` 772/772.
+
+### Co się zmieniło
+
+- **`generatePlist()` → cienka skorupa nad czystym `buildPlist({label, repoDir, nodeBin, logFile, env})`.**
+  Wrapper `/bin/sh -c` z `cd <repo> && exec <node> --disable-warning=ExperimentalWarning server.js`
+  zamiast gołego `[node, server.js]` — jedno miejsce na cwd i flagi, ta sama flaga co `npm start`.
+- **Logi w `~/Library/Logs/claude-cron/daemon.log`, nie w `<repo>/data/`.** Repo stoi
+  w `~/Documents`, a launchd nie ma zgody TCC na ten katalog → agent padał na `EX_CONFIG (78)`
+  bez wpisu w logu (bo logu nie było gdzie zapisać). `installMac()` tworzy katalog logów **przed**
+  `load` — launchd sam go nie utworzy.
+- **Node z `.node/`, nie z `which node`** (`resolvePortableNodeBin`): launchd startuje z minimalnym
+  PATH, a instalatory celowo nie dotykają systemowego Node. Kolejność: `process.execPath` (gdy sam
+  biegnie z `.node/`) → istniejący dyst w `.node/` (pinowany ma pierwszeństwo przed „pierwszym
+  alfabetycznie", bo po podbiciu wersji leżą dwa) → pinowana wersja jako ostatni fallback.
+- **`EnvironmentVariables`: `PATH`, `HOME`, `CLAUDE_CRON_WORKSPACE`, `CLAUDE_CRON_VPS_URL`**
+  ze środowiska INSTALACJI (`pickPlistEnv`). Klucz pusty/whitespace jest POMIJANY, nie wpisywany
+  pustym stringiem — pusty `CLAUDE_CRON_VPS_URL` wygląda na skonfigurowany i myli diagnozę proxy
+  (503 „brak env" vs 502/504 „sieć"; learned-pattern 2026-07-07).
+- **`escapeXml` na wszystkich wartościach** — `&&` w komendzie musi być encją, inaczej plist jest
+  niepoprawnym XML-em; ścieżki cytowane dla `/bin/sh -c` (`shellQuote`).
+- **`getStatus()` czyta pełny `launchctl list` i filtruje czystym `parseLaunchctlList`.**
+  Decyduje **kolumna PID** (`-` = wczytany, ale nie biegnie), nie substring linii — stara wersja
+  robiła `!out.includes('-')`, a myślnik siedzi w samej nazwie `claude-cron`, więc `running` był
+  zawsze `false`. Dopasowanie po CAŁEJ etykiecie (`com.claude-cron.scheduler.backup` ≠ nasz agent).
+  To dokładnie learned-pattern „dokładna fraza, nie substring".
+
+### Decyzje
+
+- **Etykieta kanoniczna zostaje `com.claude-cron.scheduler`** — CLAUDE.md wymienia ją jako
+  identyfikator techniczny; zmiana psuje istniejące instalacje. Rozjazd z ręcznie postawionym
+  `com.claude-cron.daemon` (23.07) rozwiązany w drugą stronę: nowa stała `LEGACY_PLIST_LABELS`.
+  `getStatus()` rozpoznaje legacy agenta (gdy kanonicznego nie ma), a `installMac()` unloaduje go
+  i kasuje plik **przed** `load` nowego — dwa agenty startujące ten sam serwer biją się o port 7777
+  i user widzi „daemon działa" przy losowym zwycięzcy wyścigu.
+- **`getStatus()` na macOS zwraca ADDYTYWNIE `label` i `legacy`**; kontrakt
+  `{installed, running, platform}` bez zmian, więc `server.js` (`/api/status`) i dashboard działają
+  jak dotąd.
+- **`execFileSync` z tablicą argumentów zamiast `execSync` z interpolacją** wszędzie, gdzie doszła
+  nowa ścieżka (`load`, `unload`, `list`) — ścieżka instalacji jest od Fazy 2 wolnym wejściem usera.
+- **`unloadAgent` zwraca `{ok, error}` zamiast łykać pad po cichu.** Przy własnej etykiecie pad to
+  norma (pierwsza instalacja — nie ma czego odpinać, a realny problem wyjdzie głośno na `load`
+  ze `stdio:'inherit'`); przy kasowaniu legacy oznacza sierotę trzymającą port 7777 do reboota,
+  więc leci `console.warn` z instrukcją. Zero pustych `catch {}` w nowym kodzie.
+- **`readLaunchctlList()` ostrzega RAZ na proces** — `getStatus()` wisi pod `/api/status`, które
+  dashboard odpytuje co 3 s; logowanie przy każdym padzie zalałoby log daemona.
+- **`resolvePortableNodeBin` świadomie duplikuje `detectPortableNodeBin` z `setup.mjs`** — granica
+  CJS/ESM, brak synchronicznego importu; wspólny shim byłby droższy niż 10 linii (reguła
+  „Duplication > Complexity"). `PINNED_NODE_VERSION = '22.17.0'` to **trzecia** kopia pinu
+  (`install.sh`, `setup.mjs`, `platform.js`) — używana wyłącznie jako ostatni fallback.
+- **Characterization test napisany i przepuszczony na GREEN (7/7) PRZED zmianą**, potem — zgodnie
+  z planem — przepisany na nowy kontrakt: niezmienniki (kształt XML, `RunAtLoad`/`KeepAlive`,
+  etykieta) zostały, wady (`<repo>/data/*.log`, `which node`) zamienione w asercje odwrotne.
+
+### Dług do domknięcia (Faza 3)
+
+- **Krok operatora niezweryfikowany**: po instalacji `launchctl list | grep claude-cron` musi
+  pokazać agenta, panel „zainstalowany", a daemon przeżyć reboot Maca. Testy pokrywają czyste
+  funkcje — realnego `launchctl load` nikt jeszcze nie odpalił na tej maszynie.
+- **Baseline testów w dokumentach był nieaktualny** (plan mówi 640, zadania 736): przed Fazą 3 repo
+  miało 746 testów, po niej 772. Żaden istniejący plik testowy nie został tknięty.
