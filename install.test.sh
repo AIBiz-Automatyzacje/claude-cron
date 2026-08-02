@@ -386,6 +386,49 @@ test_classify_install_target_home_with_trailing_slashes() {
   fi
 }
 
+# --- Test 17c: GUARD katalogu domowego redukuje segmenty "." i ".." ---
+# Druga runda review CodeRabbita (PR #2): samo obcięcie ukośników nie łapie ścieżek
+# RÓWNOWAŻNYCH katalogowi domowemu — „~/." i „~/podkatalog/.." wychodziły jako `foreign`,
+# więc instalator pytał [t/N] o skasowanie $HOME zamiast odmówić.
+test_classify_install_target_home_with_dot_segments() {
+  local fake_home="$SANDBOX/fake-home-dots" dot dotdot dot_slash deep
+  mkdir -p "$fake_home/podkatalog/glebiej"
+  echo "moje dane" > "$fake_home/waz.txt"
+
+  dot="$(HOME="$fake_home" classify_install_target "$fake_home/.")"
+  dotdot="$(HOME="$fake_home" classify_install_target "$fake_home/podkatalog/..")"
+  dot_slash="$(HOME="$fake_home" classify_install_target "$fake_home/./")"
+  deep="$(HOME="$fake_home" classify_install_target "$fake_home/podkatalog/glebiej/../..")"
+
+  if [ "$dot" = "forbidden" ] && [ "$dotdot" = "forbidden" ] \
+    && [ "$dot_slash" = "forbidden" ] && [ "$deep" = "forbidden" ]; then
+    pass "classify_install_target: \$HOME zapisany przez '.' i '..' też jest forbidden"
+  else
+    problem "classify_install_target kropki: '.'='$dot' '..'='$dotdot' './'='$dot_slash' glebokie='$deep'"
+  fi
+}
+
+# --- Test 17d: kanonizacja NIE psuje zwykłych katalogów ---
+# Płot po drugiej stronie: redukcja ścieżek nie może zamienić legalnego celu instalacji
+# w `forbidden` ani zgubić rozpoznania istniejącej instalacji Pulsa.
+test_classify_install_target_canonicalization_keeps_normal_dirs() {
+  local fake_home="$SANDBOX/fake-home-normal" puls_dir sub empty_kind puls_kind
+  mkdir -p "$fake_home"
+  puls_dir="$fake_home/puls"
+  mkdir -p "$puls_dir/data"
+  echo "code" > "$puls_dir/server.js"
+  sub="$fake_home/nowy"
+
+  empty_kind="$(HOME="$fake_home" classify_install_target "$sub")"
+  puls_kind="$(HOME="$fake_home" classify_install_target "$fake_home/puls/.")"
+
+  if [ "$empty_kind" = "empty" ] && [ "$puls_kind" = "puls" ]; then
+    pass "classify_install_target: kanonizacja zachowuje 'empty' i rozpoznanie instalacji Pulsa"
+  else
+    problem "classify_install_target kanonizacja: nieistniejacy='$empty_kind' puls-z-kropka='$puls_kind'"
+  fi
+}
+
 # --- Test 18: find_puls_pids filtruje po ŚCIEŻCE z granicą katalogu ---
 # Regresja klasy „C:\puls łapie C:\puls-backup" (parytet z install.ps1) — obce procesy
 # node MUSZĄ przeżyć, filtr nigdy nie idzie po nazwie binarki.
@@ -471,6 +514,8 @@ test_install_dir_declined_confirmation_keeps_data
 test_install_dir_confirmed_replaces_content
 test_classify_install_target_kinds
 test_classify_install_target_home_with_trailing_slashes
+test_classify_install_target_home_with_dot_segments
+test_classify_install_target_canonicalization_keeps_normal_dirs
 test_find_puls_pids_matches_only_install_dir
 test_stop_puls_ignores_foreign_process
 test_stop_puls_kills_daemon_from_install_dir

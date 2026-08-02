@@ -506,21 +506,26 @@ function pickFolderGui(promptText, spawn = spawnSync) {
 function fetchStatusPayload(port) {
   return new Promise((resolve) => {
     const req = http.get(`${buildDashboardUrl(port)}/api/status`, { timeout: 1000 }, (res) => {
-      let body = '';
-      res.setEncoding('utf-8');
+      // Zbieramy BUFORY, nie string: bez `setEncoding` każdy chunk ma `length` w bajtach,
+      // więc cap mierzy to, co deklaruje jego nazwa. Po `setEncoding('utf-8')` liczylibyśmy
+      // jednostki UTF-16 — przy wielobajtowym UTF-8 realny limit byłby nawet 3× wyższy.
+      const chunks = [];
+      let bytes = 0;
       res.on('data', (chunk) => {
-        body += chunk;
         // Twardy cap: na sondowanym porcie siedzi NIEZNANY proces, a `timeout` pilnuje
         // tylko BEZCZYNNOŚCI socketu — równy strumień danych nigdy go nie wyzwoli.
         // Bez tego sondowanie portu rosłoby w pamięci i nie kończyło się nigdy.
-        if (body.length > STATUS_PAYLOAD_MAX_BYTES) {
+        bytes += chunk.length;
+        if (bytes > STATUS_PAYLOAD_MAX_BYTES) {
           req.destroy();
           resolve(null); // nadmiarowa odpowiedź = na pewno nie nasz /api/status
+          return;
         }
+        chunks.push(chunk);
       });
       res.on('end', () => {
         try {
-          resolve(JSON.parse(body));
+          resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8')));
         } catch {
           resolve(null); // cudze API na tym porcie — nie nasze, ale też nie awaria setupu
         }

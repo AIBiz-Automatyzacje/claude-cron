@@ -1073,6 +1073,21 @@ test('probeDashboardPort: serwer streamujący bez końca → foreign, sondowanie
   clearInterval(stop);
 });
 
+test('probeDashboardPort: poprawny status z wielobajtowym UTF-8 przechodzi cap (bajty ≠ znaki)', async (t) => {
+  // Cap liczy BAJTY (nazwa stałej), a nie jednostki UTF-16 — ale nie może przy okazji
+  // odrzucać legalnej odpowiedzi z polskimi znakami. Płot po obu stronach: bufory muszą
+  // wrócić poprawnie zdekodowane do JSON.parse.
+  const port = await startServerOnFreePort(t, (req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({
+      uptime: 1, queue_length: 0, total_jobs: 0, enabled_jobs: 0,
+      next: { job_name: 'Zażółć gęślą jaźń — ćwierć łokcia' },
+    }));
+  });
+
+  assert.equal(await probeDashboardPort(port), PORT_STATE.OURS);
+});
+
 test('probeDashboardPort: cudzy serwer na porcie → foreign (kolizja, nie re-run)', async (t) => {
   const port = await startServerOnFreePort(t, (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });

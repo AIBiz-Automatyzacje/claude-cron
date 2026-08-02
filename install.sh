@@ -140,16 +140,30 @@ is_puls_install() {
 #   empty     = nie istnieje albo jest pusty (wolno zająć)
 #   puls      = rozpoznana instalacja Pulsa (re-run — wolno podmienić)
 #   foreign   = niepusty katalog z CUDZĄ zawartością (wymaga potwierdzenia)
+# Sprowadza ścieżkę do postaci porównywalnej z $HOME. Dwa kroki, bo dotyczą dwóch
+# różnych klas zapisu tego samego katalogu:
+#   1) wszystkie końcowe ukośniki („~//" → „$HOME") — `${dir%/}` zdejmuje tylko jeden,
+#   2) segmenty „." i ".." („~/." , „~/kat/.." → „$HOME") — dla ścieżek ISTNIEJĄCYCH
+#      robi to jądro przez `cd` + `pwd -P` (rozwija przy okazji symlinki).
+# Ścieżki nieistniejącej nie ma czego kanonizować — i tak wyjdzie `empty`.
+canonicalize_dir_path() {
+  local p="$1" resolved
+  while [ "$p" != "${p%/}" ]; do p="${p%/}"; done
+  if [ -d "$p" ] && resolved="$(cd "$p" 2>/dev/null && pwd -P)" && [ -n "$resolved" ]; then
+    printf '%s' "$resolved"
+    return 0
+  fi
+  printf '%s' "$p"
+}
+
 classify_install_target() {
   local dir="$1" normalized home_normalized
-  # Obcinamy WSZYSTKIE końcowe ukośniki, nie jeden: `${dir%/}` zdejmuje tylko ostatni,
-  # więc odpowiedź „~//" dawała „$HOME/" ≠ „$HOME" i katalog domowy wychodził jako
-  # `foreign` — czyli pytanie [t/N] zamiast twardej odmowy, a po „t" `mv "$HOME//"`
-  # do kosza kasowanego trapem. Sam „/" nadal redukuje się do pustego = forbidden.
-  normalized="$dir"
-  while [ "$normalized" != "${normalized%/}" ]; do normalized="${normalized%/}"; done
-  home_normalized="$HOME"
-  while [ "$home_normalized" != "${home_normalized%/}" ]; do home_normalized="${home_normalized%/}"; done
+  # Guard MUSI porównywać skanonizowane ścieżki: „~/." i „~/kat/.." wskazują katalog
+  # domowy, a bez redukcji wychodziły jako `foreign` — czyli pytanie [t/N] zamiast
+  # twardej odmowy. (Samo `mv` odmawia przeniesienia ścieżki kończącej się na „."/„..",
+  # więc dane ocalały, ale user dostawał kryptyczny błąd systemowy zamiast komunikatu.)
+  normalized="$(canonicalize_dir_path "$dir")"
+  home_normalized="$(canonicalize_dir_path "$HOME")"
 
   if [ -z "$normalized" ] || [ "$normalized" = "$home_normalized" ]; then
     printf 'forbidden'
