@@ -1,0 +1,364 @@
+# Równoległe joby — checklista zadań
+
+**Branch:** `feature/rownolegle-joby`
+**Ostatnia aktualizacja:** 2026-07-30 (review Fazy 4 — gate 🔴 BLOKUJE, 1×P1 w detekcji wybudzenia)
+
+Legenda: `Test:` = scenariusz testowy z planu technicznego · `Weryfikacja:` = automatyczne
+kryterium PASS/FAIL · `Operator:` = krok wymagający człowieka (autopilot tego nie odznacza).
+
+---
+
+## Faza 1 — Równoległość
+
+### Unit 1: Warstwa danych — kolumny, statystyki czasów, runy aktywne (M)
+
+*Delegate to: feature-builder-data · Zależy od: —*
+
+- [x] Migracja kolumny `lock_group TEXT` w `jobs` (`lib/db.js`, wzorzec z db.js:105-120)
+- [x] Migracja kolumny `queued_at TEXT` w `runs` — **bez backfillu**, istniejące wiersze zostają `NULL`
+- [x] `createRun` ustawia `queued_at` w momencie wstawienia
+- [x] `lock_group` dopisane do allow-list `createJob` (db.js:169) **oraz** `updateJob` (db.js:179)
+- [x] `getRunningRuns()` — `getCurrentRun` bez `LIMIT 1`; `getCurrentRun` zostaje (kompatybilność)
+- [x] `getRecentSuccessDurations(jobId, limit = 10)` — czasy w ms liczone w JS, nie agregatem SQL
+- [x] `getQueueWaitStats(hours)` — średnie/max oczekiwanie, runy bez `queued_at` pomijane
+- [x] Test: `migrate()` odpalone dwukrotnie nie rzuca i nie duplikuje kolumn
+- [x] Test: `createJob({lock_group})` zapisuje wartość; `updateJob` ją zmienia i czyści
+- [x] Test: `createRun` ustawia `queued_at`; `getQueueWaitStats` pomija runy bez znacznika
+- [x] Test: `getRunningRuns()` zwraca ≥2 wiersze `running`, `getCurrentRun()` dalej jeden
+- [x] Test: `getRecentSuccessDurations` ignoruje `failed`/`timeout`/`killed` i runy bez `started_at`
+- [x] Test: `getRecentSuccessDurations` zwraca **liczby** (`typeof === 'number'`), nie BigInt
+- [x] Weryfikacja: `node --test lib/db.test.js` przechodzi bez błędów
+- [x] Weryfikacja: `npm test` przechodzi w całości (640 istniejących testów bez modyfikacji)
+
+### Unit 2: Executor — mapa aktywnych runów i kill per run (M)
+
+*Delegate to: feature-builder-data · Zależy od: — (równolegle z Unit 1)*
+*Notatka wykonawcza: zacznij od testu „dwa runy, kill jednego" — wykrywa powrót do semantyki singletonu.*
+
+- [x] `currentProcess`/`currentRunId` → `activeRuns = Map(runId → {proc, jobId, startedAt})`
+- [x] Rejestracja wpisu **synchronicznie** po udanym spawnie (obie ścieżki: claude i script)
+- [x] Wyrejestrowanie w `close`/`error`/`finishScriptRun` — idempotentne, domknięte także na `'exit'` z karencją
+- [x] `killCurrent()` → `killRun(runId)`; zapis `killed` do DB **przed** ubiciem procesu
+- [x] `killCurrent()` zostaje jako shim: 0 → `false`, 1 → kill, >1 → sygnał niejednoznaczności
+- [x] `isRunning()` → `activeRuns.size > 0`, `getCurrentRunId()` → pierwszy klucz (shimy dla R7)
+- [x] Timery, guard `settled` i guard „kill przez usera" — bez zmian semantycznych
+- [x] Test: dwa runy skryptowe równocześnie — `killRun(id1)` kończy run 1 jako `killed`, run 2 jako `success`
+- [x] Test: `killRun` zapisuje `killed` przed ubiciem — `close` nie nadpisuje na `failed` i **nie wysyła ❌**
+- [x] Test: `killRun(nieistniejący)` zwraca `false` i nie rzuca
+- [x] Test: po zakończeniu obu runów `activeRuns.size === 0` i `isRunning() === false`
+- [x] Test: proces bez `'close'` (ratunkowy timer) też zwalnia wpis w mapie
+- [x] Weryfikacja: `node --test lib/executor.test.js` przechodzi
+- [x] Weryfikacja: `npm test` przechodzi w całości
+
+### Unit 3: Scheduler — picker, slot rezerwowy, dzwonek (L) 🔴 rdzeń
+
+*Delegate to: feature-builder-data · Zależy od: Unit 1, Unit 2*
+*Notatka wykonawcza: test-first dla obu czystych funkcji i dla scenariusza „krótki dokolejkowany w trakcie długiego".*
+
+- [x] Czysta funkcja `classifyJob(durations, thresholdMs)` → `'short' | 'long'`; pusta historia → `'long'`
+- [x] Czysta funkcja `pickEligibleRuns({queued, jobsById, activeRuns, durationsByJob, maxConcurrent, fastThresholdMs})`
+- [x] Reguła: globalny limit `maxConcurrent` (z `state`, default 3, sanityzacja ≥ 1)
+- [x] Reguła: zadania długie najwyżej `maxConcurrent - 1` (min 1) — reszta to rezerwa dla krótkich
+- [x] Reguła: brak aktywnego runu tego samego `job_id`
+- [x] Reguła: brak aktywnego runu joba o tym samym niepustym `skill_name` **lub** `command`
+- [x] Reguła: brak aktywnego runu z tą samą niepustą `lock_group`
+- [x] Pętla drain: startuj kwalifikujące się → `Promise.race([...aktywne, sygnał])` → re-pick
+- [x] **Dzwonek** — `enqueueJob` rozwiązuje sygnał nowej pracy; po wybudzeniu tworzony świeży
+- [x] Guard `queueProcessing` zostaje; `processQueue()` nadal rozwiązuje się po opróżnieniu kolejki
+- [x] Retry-check przeniesiony bez zmian semantycznych (świeży odczyt z DB + `countRecentFailedRuns`)
+- [x] `max_concurrent` czytane w momencie pickowania (zmiana z dashboardu bez restartu)
+- [x] Test: `classifyJob` — mediana odporna na wartość odstającą (`[0.2, 0.2, 0.3, 975]` → krótki)
+- [x] Test: `classifyJob` — pusta historia → długi; wartość dokładnie na progu → długi
+- [x] Test: przy `maxConcurrent=3` i dwóch aktywnych długich trzeci długi **nie** startuje, krótki **tak**
+- [x] Test: nigdy dwa runy tego samego `job_id`
+- [x] Test: dwa joby o tym samym `skill_name` nie biegną razem (bez deklaracji); to samo dla `command`
+- [x] Test: dwa joby z `lock_group='dashboard'` nie biegną razem; drugi startuje po pierwszym (FIFO po `id ASC`)
+- [x] Test: **(odbiór R1)** krótki run dokolejkowany **w trakcie** długiego kończy się **przed** nim
+- [x] Test: retry (R9) działa przy równoległym drainie — fail → retry → ❌ dokładnie raz
+- [x] Test: `processQueue()` rozwiązuje się po opróżnieniu kolejki (`scheduler.test.js:285` bez zmian)
+- [x] Test: zmiana `max_concurrent` w `state` w trakcie życia procesu wpływa na kolejny pick
+- [x] Weryfikacja: `node --test lib/scheduler.test.js` przechodzi
+- [x] Weryfikacja: `npm test` przechodzi w całości — 640 istniejących testów bez modyfikacji
+
+### Unit 4: API — kill per run, lista aktywnych, ustawienie limitu (M)
+
+*Delegate to: feature-builder-data · Zależy od: Unit 1-3*
+
+- [x] `POST /api/runs/:id/kill` — kill konkretnego runu
+- [x] `POST /api/runs/current/kill` — 1 aktywny → kill; **>1 → 409 z listą**; 0 → jak dziś
+- [x] `GET /api/status` — nowe `current_runs` (tablica); `current_run` = pierwszy element
+- [x] `GET/PUT` ustawienia `max_concurrent` — walidacja (liczba całkowita ≥ 1, rozsądny sufit)
+- [x] Endpoint ustawień **za** guardem XFF (kontrakt kolejności matcherów nienaruszony)
+- [x] Test: `POST /api/runs/:id/kill` ubija wskazany run, drugi aktywny żyje
+- [x] Test: `POST /api/runs/current/kill` przy dwóch aktywnych → **409** + lista w treści
+- [x] Test: `POST /api/runs/current/kill` przy jednym aktywnym → zachowanie jak dziś
+- [x] Test: `GET /api/status` zwraca `current_runs` jako tablicę i `current_run` = pierwszy element
+- [x] Test: `PUT` limitu odrzuca `0`, ujemne i tekst; przyjmuje `1` i `5`
+- [x] Test: żądanie z `X-Forwarded-For` na endpoint ustawień → 403
+- [x] Weryfikacja: `npm test` przechodzi w całości
+- [x] Weryfikacja: `grep` w `server.js` potwierdza, że `/webhook`, `/ask`, `/inbox/v1` stoją **przed** guardem XFF, a ustawienia **za** nim
+
+### Unit 5: Dashboard — lista biegnących runów, pole grupy, ustawienie limitu (M)
+
+*Delegate to: feature-builder-ui · Zależy od: Unit 4*
+
+- [x] Kill-bar (`public/app.js:328-334`) → lista wierszy: nazwa joba + czas + „Zatrzymaj" per wiersz
+- [x] Formularz joba: opcjonalne pole „Grupa wyłączności" z krótkim wyjaśnieniem
+- [x] Ustawienia: „Ile zadań naraz" + informacja o slocie rezerwowym i zasięgu per maszyna
+- [x] Zachowany guard pollingu (tani podpis payloadu — bez tego lista migocze co 3 s)
+- [x] Test: czysty helper renderujący wiersz aktywnego runu (jeśli wyjdzie poza interpolację → `public/render-helpers.js` + test)
+- [ ] Test: [E2E] dashboard z dwoma równoczesnymi runami pokazuje **dwa** wiersze; „Zatrzymaj" w pierwszym zostawia drugi (SKIP po review fazy 1 — Operator checklist)
+- [ ] Test: [E2E] zapis i odczyt pola „Grupa wyłączności" po przeładowaniu (SKIP po review fazy 1 — Operator checklist)
+- [ ] Test: [E2E] zmiana „ile zadań naraz" przeżywa przeładowanie strony (SKIP po review fazy 1 — Operator checklist)
+- [x] Weryfikacja: `npm test` przechodzi (helpery frontu)
+- [ ] Weryfikacja: scenariusz E2E przez `/agent-browser` — dwa wiersze aktywnych runów widoczne jednocześnie (screenshot), po „Zatrzymaj" zostaje jeden (SKIP — dashboard w przeglądarce nieodegrany; równoważny scenariusz zweryfikowany wyłącznie na poziomie HTTP na odizolowanej instancji → Operator checklist)
+
+### Unit 6: Seed, harmonogramy i dokumentacja (S)
+
+*Delegate to: feature-builder-data · Zależy od: Unit 1, Unit 3*
+
+- [x] `lib/inbox-seed.js` — job „Team OS — inbox sync" dostaje `lock_group: 'dashboard'` **tylko w `createJob`**
+- [x] Skill `puls` (`skills/puls/SKILL.md`) — opis pola grupy, zasada klasyfikacji, kod **409** przy `current/kill`
+- [x] `CLAUDE.md` — sekcja o `scheduler.js` opisuje limit + slot rezerwowy + klasyfikację z pomiaru
+- [x] `docs/CONCEPTS.md` — hasła „zadanie krótkie / długie" i „slot rezerwowy"
+- [x] Test: seed nadaje `lock_group='dashboard'` przy tworzeniu joba sync
+- [x] Test: seed przy istniejącym jobie **nie** modyfikuje jego `lock_group` ani `enabled`
+- [x] Weryfikacja: `node --test lib/inbox-seed.test.js` przechodzi
+- [x] Weryfikacja: `grep -c "lock_group" skills/puls/SKILL.md` > 0 (= 5)
+- [ ] Operator: przesunąć cron „CC Update" na VPS-ie, by nie pokrywał się z „Aktualizacja folderu .claude"
+- [ ] Operator: rozstrzelić poniedziałkowy blok 8:00 na Macu (Weekly memory + Reflect tygodniowy)
+- [ ] Operator: ustawić `max_concurrent` (VPS: 3, Mac: 2) i obserwować tydzień
+
+---
+
+## Do poprawy po review fazy 1
+
+*Raport: `docs/active/rownolegle-joby/review-faza-1.md` · Gate: ⚠️ ZASTRZEŻENIA (0×P1, 5×P2)*
+
+- [x] 🟠 [P2] **server.js:295** — Nowe endpointy mutujące (`PUT /api/settings/concurrency`, `POST /api/runs/:id/kill`, `POST /api/runs/current/kill`) bez guardu cross-origin przy globalnym `Access-Control-Allow-Origin: *` — dowolna strona odwiedzona przez usera podmienia limit współbieżności i ubija biegnące runy (preflight przechodzi, kill to simple request). Guard XFF tego NIE łapie (żądanie z przeglądarki idzie bez `X-Forwarded-For` — learned pattern 2026-07-24). Fix: `isCrossOriginRequest(req)` → 403 na gałęziach `server.js:302`, `server.js:452`, `server.js:464`, wzorem `/api/inbox/members` (server.js:502). Proxy `/api/vps/*` nie wysyła `Origin`, więc guard go przepuszcza.
+- [x] 🟠 [P2] **lib/scheduler.js:198** — Livelock pętli drain, gdy `executor.executeRun()` odrzuci obietnicę: `startRun` loguje błąd i czyści `inFlight`, ale nie zmienia statusu runu → run zostaje `queued`, jest pickowany w kółko bez backoffu, `processQueue()` nigdy się nie rozwiązuje i pętla nie oddaje kontroli do fazy timerów (zweryfikowane: `setTimeout(3000)` nie odpalił przez 20 s) = zamrożony heartbeat, cron i HTTP. Wyzwalacz: SQLITE_BUSY/IO w `db.getJob`/`db.updateRun` albo synchroniczny throw ze `spawn()`. Fix: w `catch` oznaczyć run jako `failed` (albo `queued` + opóźnienie), by opuścił kolejkę + test „executeRun rzuca → run `failed`, `processQueue()` rozwiązuje się, `executeRun` wołany raz".
+- [x] 🟠 [P2] **lib/scheduler.js:191** — Zwolnienie wpisu na `'exit'` z karencją nie przekłada się na slot pickera: `mergeActiveRuns` bierze SUMĘ `executor.getActiveRuns()` i `inFlight`, a `inFlight` czyści się dopiero w `finally` po `await executor.executeRun(run)`, czyli na `'close'`. Zmierzone: `getActiveRuns().length === 0` po 2 s, kolejny run startuje po 12,2 s. Gdy `'close'` nie przyjdzie nigdy (ścieżka `claude` nie ma ratunkowego timera z `executor.js:455`), slot przepada na stałe i `queueProcessing` zostaje `true` do restartu. Fix: domknąć wpis `inFlight` sygnałem z executora, a okno retry-checku pokryć osobnym licznikiem.
+- [x] 🟠 [P2] **server.js:307** — Zapis „Ile zadań naraz" z dashboardu nie budzi drainu: `PUT /api/settings/concurrency` robi tylko `db.setState(...)`, a pętla czeka na `Promise.race([...aktywne, waitForNewWork()])` bez okresowego re-picku. Odtworzone na żywo: przy 1 runie biegnącym i 1 w kolejce podniesienie limitu do 3 nie wystartowało nic przez 15 s; dopiero `POST /api/jobs/:id/trigger` (dzwonek) ruszył kolejkę. Fix: po `db.setState(...)` dołożyć `scheduler.processQueue().catch(...)` (wzorzec z `enqueueJob`, scheduler.js:272) + test „PUT z wyższym limitem startuje run bez dodatkowego enqueue".
+- [x] 🟠 [P2] **lib/scheduler.test.js:584** — Test „(odbiór R1)" nie mierzy tego, co R1 gwarantuje: oba joby (`r1-long`, `r1-short`) nie mają żadnego udanego runu, więc `classifyJob` klasyfikuje OBA jako `'long'`, a przy `max_concurrent=3` budżet długich = 2 → krótki startuje z wolnego slotu, nie z rezerwy. Test przechodzi także przy zepsutej klasyfikacji; szew `getRecentSuccessDurations → classifyJob → pickEligibleRuns` nie ma pokrycia integracyjnego (learned pattern 2026-07-03). Fix: test drainu z `max_concurrent=2`, jobem krótkim z realną historią ~1 s i długim bez historii — krótki startuje, drugi długi zostaje `queued`.
+
+### P3 (opcjonalne, nie blokują gate'u)
+
+- [ ] 🟡 [P3] **lib/inbox-seed.js:45** — `lock_group:'dashboard'` żyje tylko w `createJob`, więc na każdej istniejącej instalacji job „Team OS — inbox sync" ma `lock_group = NULL` i ochrona R5 przed kolizją na `Zadania/Dashboard.md` nie działa. Fix: backfill w `migrate()` za sentinelem w `state` (wzorzec `wake_backfill_done`) albo jawny krok `Operator:`.
+- [ ] 🟡 [P3] **lib/scheduler.js:225** — N+1: `getRecentSuccessDurations` wołane per job, w każdej iteracji pętli drain (dzwoni każdy `enqueueJob`/webhook/trigger). Fix: `getRecentSuccessDurationsByJob(jobIds)` na `ROW_NUMBER() OVER (PARTITION BY job_id …)` (wzorzec `getRecentRunsPerJob`, db.js:256) + memoizacja w obrębie `processQueue`.
+- [ ] 🟡 [P3] **lib/executor.js:313** — Bufor `stdout`/`stderr` rośnie bez limitu do finalizacji, a faza mnoży to przez `max_concurrent` (sufit 10) → ryzyko OOM na VPS 1 GB. Fix: przycinanie przyrostowe w handlerze `data` (ogon zgodny z `truncate` i `extractResult`).
+- [ ] 🟡 [P3] **lib/scheduler.js:1** — 452 linie (limit 300) i trzy odpowiedzialności; polityka współbieżności to komplet czystych funkcji. Fix: `lib/queue-picker.js` + kolokowany test, re-eksport nazw w schedulerze.
+- [ ] 🟡 [P3] **lib/db.js:366** — `getQueueWaitStats` bez call-site'u, a to podstawowa metryka odbioru sprintu (R8). Fix: `GET /api/metrics/queue-wait` za guardem XFF + wiersz w `skills/puls/SKILL.md`, albo usunięcie funkcji z adnotacją w kontekście.
+- [ ] 🟡 [P3] **lib/db.js:341** — `getRunningRuns()` robi `SELECT *`, więc `/api/status` (polling co 3 s) i treść 409 niosą `webhook_payload` (publiczne body do 64 KB), `stdout` i `stderr`. Fix: jawna lista kolumn (`id, job_id, status, trigger_type, queued_at, started_at, finished_at`) — front używa tylko `id`, `job_id`, `started_at`.
+- [ ] 🟡 [P3] **server.js:464** — Run zwolniony ratunkowo po `'exit'` znika z `activeRuns`, ale w DB zostaje `running` do total timeoutu → kill-bar pokazuje wiersz, którego kill nie domyka („Ten run już nie biegnie"). Fix: gdy `executor.killRun()` zwróci `false`, a świeży wiersz ma `status === 'running'` — dopisać `db.updateRun(..., {status:'killed'})`.
+- [ ] 🟡 [P3] **server.js:442** — `GET /api/runs/current` wciąż woła `db.getCurrentRun()` (`LIMIT 1` bez `ORDER BY`), gdy `/api/status` przeszło na `getRunningRuns()[0]` — dwie definicje „pierwszego biegnącego". Fix: `db.getRunningRuns()[0] || null`.
+- [ ] 🟡 [P3] **lib/scheduler.js:54** — `resolveMaxConcurrent` sanityzuje tylko dolną granicę: `state.max_concurrent='999'` → picker wystartuje 999 agentów. Fix: `Math.min(parsed, MAX_CONCURRENT_CEILING)` + asercja w istniejącym teście.
+- [ ] 🟡 [P3] **lib/scheduler.test.js:484** — Wyłączność (`lock_group`/`skill_name`/`command`) bez testu na żywej pętli drain (tylko czysta funkcja z ręcznie usuwanym runem). Fix: test integracyjny na script-jobach — `started_at` drugiego ≥ `finished_at` pierwszego, kolejka pusta po `processQueue()`.
+- [ ] 🟡 [P3] **lib/scheduler.js:126** — Gałąź runu osieroconego (`job` brak → `'long'` + brak kluczy wyłączności) bez testu, a to jedyna reguła świadomie puszczająca run mimo braku danych. Fix: test „run bez joba w `jobsById` jest puszczany i nie wnosi kluczy wyłączności".
+- [ ] 🟡 [P3] **lib/scheduler.js:102** — Podwójna sanityzacja limitu (`readMaxConcurrent` już zwraca liczbę, `pickEligibleRuns` sanityzuje ponownie) zaciera kontrakt czystej funkcji. Fix: `const limit = maxConcurrent;`.
+- [ ] 🟡 [P3] **lib/scheduler.js:448** — Martwe eksporty `FAST_THRESHOLD_MS` i `DEFAULT_MAX_CONCURRENT` (testy używają literałów, `server.js` ich nie tyka). Fix: usunąć z `module.exports`.
+- [ ] 🟡 [P3] **lib/executor.js:27** — Martwe pole `startedAt` w `activeRuns` i w `getActiveRuns()` (nikt nie czyta; UI liczy czas z `run.started_at` z DB). Fix: usunąć.
+- [ ] 🟡 [P3] **lib/executor.js:538** — `getCurrentRunId` eksportowany jako „shim dla starych call-site'ów", których nie ma (jedyne użycie: wewnętrzne w `killCurrent`). Fix: usunąć z `module.exports` razem z mylącym komentarzem.
+- [ ] 🟡 [P3] **lib/executor.js:49** — `killProcessTree` duplikuje `gracefulKillProc` (executor.js:238-252) i inline kill ze ścieżki skryptowej (449-450); kopie już się rozjechały (`.unref()` tylko w nowej). Trzecia kopia siedzi w `lib/ask.js:169`. Fix: jeden helper (naturalne miejsce: `lib/claude-spawn.js`).
+
+---
+
+## Operator checklist faza 1
+
+*Warunki środowiskowe — NIE zadania do fix. Autopilot nie liczy ich do ukończenia fazy.*
+
+- [ ] Operator: lokalny daemon Pulsa serwuje kod SPRZED commita `bde391d` — `GET localhost:7777/api/settings/concurrency` zwraca 404, `/api/status` nie emituje `current_runs`, a nowy `public/app.js` (czytany z dysku) woła endpointy, których proces nie zna; równoległość NIE jest aktywna na maszynie usera mimo zmergowanego kodu — Operator action: (1) zrestartować daemona (`launchctl kickstart -k gui/$(id -u)/com.claude-cron.scheduler` albo ubić PID 8290 i `npm start` z NOWO otwartego terminala — learned pattern o nieświeżym env), (2) `curl -s localhost:7777/api/settings/concurrency` → oczekiwane `{"max_concurrent":3}`, (3) to samo na VPS-ie.
+- [ ] Operator: trzy scenariusze `[E2E]` z Unit 5 (linie 110-112) + `Weryfikacja:` E2E z linii 114 nieodegrane — niepokryte pozostają dwutorowy render `renderKillBar` (`public/app.js:340-360`: `innerHTML` przy zmianie podpisu vs `textContent` czasu), globalna dostępność `killRun` wołanego z `onclick` i round-trip pól `form-lock-group` oraz modala limitu — Operator action: odpalić dashboard w przeglądarce (`/agent-browser`), (1) uruchomić dwa równoczesne runy i potwierdzić screenshotem dwa wiersze, (2) kliknąć „Zatrzymaj" w pierwszym — drugi ma zostać, (3) zapisać „Grupę wyłączności" i limit, przeładować stronę i potwierdzić odczyt.
+- [ ] Operator: kill per run przy DWÓCH równoczesnych drzewach procesów na Windowsie (`taskkill /PID <pid> /T /F`, `lib/executor.js:44`) jest nieweryfikowalny na macOS — cała suita równoległości jedzie na `spawn('node', …)` z Uniksa, a plan wymienia to jako ryzyko wprost — Operator action: na maszynie Windows uruchomić dwa równoległe script-joby, wysłać `POST /api/runs/:id/kill` na pierwszy i potwierdzić, że pierwszy jest `killed`, a drugi dalej `running`.
+
+---
+
+## Faza 2 — Instalator
+
+### Unit 7: Konfigurowalny katalog instalacji + wykrycie zajętego portu (M)
+
+*Delegate to: feature-builder-data · Zależy od: — (niezależne od Fazy 1)*
+
+- [x] Pytanie o katalog instalacji przez `/dev/tty` z domyślną wartością `$HOME/claude-cron` (`install.sh:30`)
+- [x] Symetryczna ścieżka na Windowsie (`install.ps1` / `setup.mjs`)
+- [x] Wykrycie zajętego `CLAUDE_CRON_PORT` przed startem + czytelny komunikat
+- [x] Zapis wybranego portu do konfiguracji (dashboard i autostart używają tej samej wartości)
+- [x] Rozróżnienie „port zajęty przez cudzy proces" vs „przez naszą starą instancję" (re-run, nie błąd)
+- [x] Ubijanie procesów filtrem po **ścieżce instalacji**, nigdy po nazwie binarki (pułapka Windows 28.07)
+- [x] Test: instalacja w niestandardowym katalogu działa i tam startuje
+- [x] Test: zajęty port → komunikat z numerem portu i sugestią; brak cichego „sukcesu" z martwym serwerem
+- [x] Test: port zajęty przez naszą starą instancję → ścieżka re-runu
+- [x] Test: pusta odpowiedź na pytanie o katalog → wartość domyślna
+- [x] Weryfikacja: `bash install.test.sh` przechodzi
+- [x] Weryfikacja: `node --test setup.test.mjs` przechodzi
+- [ ] Weryfikacja: przebieg przez **prawdziwy pipe** (`curl … | bash` z env-override źródła), nie lokalne `bash install.sh` — wymaga operatora (checklist)
+- [ ] Operator: przebieg instalatora na Windowsie (suita macOS nie pokrywa blokad plików) — patrz „Operator checklist faza 2"
+
+---
+
+## Do poprawy po review fazy 2
+
+*Raport: `docs/active/rownolegle-joby/review-faza-2.md` · Gate: ⛔ BLOKUJE (1×P1, 6×P2, 11×P3)*
+
+- [x] 🔴 [P1] **install.sh:204** — Katalog instalacji jest teraz WOLNĄ odpowiedzią użytkownika, a `install_fresh_repo` nadal bezwarunkowo robi `mv "$INSTALL_DIR" "$trash"` do katalogu tmp, który `trap 'rm -rf "$tmp_dir"' EXIT` kasuje na końcu przebiegu (`install.ps1:185` + `finally { Remove-Item -Recurse -Force $tmpDir }` — identycznie). Zero guardu, zero potwierdzenia, zero sprawdzenia CZY to w ogóle instalacja Pulsa. `resolve_install_dir` jawnie wspiera `~` → `$HOME` (`install.sh:145`), więc odpowiedź `~`, `~/Documents`, `/Users/x/Projekty` albo literówka we wklejonej ścieżce z Findera = przeniesienie CAŁEGO katalogu do `/var/folders/...` i trwałe `rm -rf` przy wyjściu; `preserve_existing_dirs` ratuje wyłącznie `data/` i `.node/`. Łamie regułę „nie uruchamiaj `rm -rf` bez explicit user confirmation" i learned-pattern o guardzie. Fix: PRZED `mv` wymagać, by cel nie istniał / był pusty / był rozpoznaną instalacją Pulsa (`server.js` + `data/claude-cron.db` albo `package.json` z `name=claude-cron`), inaczej jawne potwierdzenie z `$INSTALL_TTY` albo `fail`; to samo w `Install-FreshRepo` (`install.ps1:172-190`); dodatkowo odrzucać `$HOME` i korzeń dysku.
+- [x] 🟠 [P2] **setup.mjs:504** — `isPortBindable` robi bind-test WYŁĄCZNIE na `0.0.0.0`, a `classifyPortState` na `bindable:true` zwraca FREE bez odpytania `/api/status`. Na macOS bind na wildcard UDAJE SIĘ, gdy obcy proces trzyma `127.0.0.1:<port>` (zweryfikowane na tej maszynie: `listen(port,'127.0.0.1')` → `probeDashboardPort(port)` zwrócił `free`). Skutek: kolizja z dev-serwerem na loopbacku jest niewykrywalna, setup zapisuje `CLAUDE_CRON_PORT`, wypala port w hooku autostartu i startuje serwer, a `http://localhost:<port>` trafia do cudzej aplikacji — dokładnie „cichy sukces z martwym dashboardem", który Unit 7 miał zamknąć. Fix: bindować `0.0.0.0` ORAZ `127.0.0.1` (zajęty = którykolwiek bind pada), dopiero potem klasyfikować przez `/api/status`.
+- [x] 🟠 [P2] **install.ps1:152** — `Stop-PulsProcesses` ubija każdy `node.exe`, którego `CommandLine` ZAWIERA (`Contains`, substring bez granicy ścieżki) katalog instalacji — a ten katalog jest od tej fazy dowolną odpowiedzią usera. Odpowiedź `C:\Users\<user>` albo korzeń dysku matchuje praktycznie każdy proces node tego użytkownika (Claude Code, dev-serwery) i wszystkie giną przez `Stop-Process -Force` bez pytania; nawet przy normalnej ścieżce `C:\puls` łapie `C:\puls-backup`. Komentarz obiecuje „NIE zabijamy cudzych procesow node" — gwarancja przestała obowiązywać. Fix: porównanie z granicą ścieżki (`$Dir.TrimEnd('\') + '\'` po `[System.IO.Path]::GetFullPath`) + odmowa działania dla katalogu domowego i korzenia dysku (ten sam guard co P1).
+- [x] 🟠 [P2] **setup.mjs:111** — Gałąź `PORT_STATE.OURS` zakłada JEDNĄ instalację na maszynie, a ta sama faza dodała konfigurowalny katalog instalacji (komentarze `install.sh:29`/`install.ps1:28` wprost mówią o „drugiej instancji obok pierwszej"). `/api/status` nie zdradza katalogu instalacji, więc CUDZA instancja Pulsa jest nieodróżnialna od re-runu; flaga `reused` jest w `main()` wyrzucana (`).port`). Scenariusz: druga instancja w `~/puls-test` (albo re-run na macOS, gdzie `install.sh` NIE ubija starego demona) → OURS → `[ok] to re-run, nie kolizja` → `startServerAndOpen` widzi żywy ping i nie spawnuje serwera → „Gotowe!" otwiera dashboard STAREJ instalacji, nowa nie wstaje nigdy, a hook autostartu wskazuje nowy katalog na tym samym porcie. Fix: wykorzystać `reused` — porównać instalację (np. `install_dir` w `/api/status`) albo zapytać usera, zamiast milcząco adoptować cudzy proces.
+- [x] 🟠 [P2] **setup.mjs:525** — `resolveInitialPort` czyta port WYŁĄCZNIE z `process.env.CLAUDE_CRON_PORT`, choć setup sam zapisuje tę wartość do RC/rejestru (`persistEnvVar`, `setup.mjs:1079`), a learned-pattern 2026-07-07 mówi wprost, że env żyjącego terminala bywa nieświeże. Scenariusz: poprzedni setup wybrał 8080 i zapisał w `~/.zshrc`; re-run w starym terminalu bez `source` → `resolveInitialPort()` zwraca 7777, proba mówi FREE, setup nadpisuje port, przepisuje hook i odpala DRUGI serwer, gdy stary daemon słucha na 8080 → dwa demony na tej samej bazie SQLite = dwa schedulery i podwójne odpalanie jobów (sprzeczne z celem sprintu). Fix: przy pustym env odczytać wartość utrwaloną (linia z RC przez istniejący `upsertEnvLine`, HKCU na Windowsie) zanim spadniesz do `DEFAULT_DASHBOARD_PORT`.
+- [x] 🟠 [P2] **setup.mjs:517** — Ścieżka OURS nie ma akcji domykającej na macOS: `resolveDashboardPort` zwraca `{reused:true}`, `startServerAndOpen` (`setup.mjs:1156`) widzi żywy ping i nie spawnuje serwera. Tymczasem `install_fresh_repo` (`install.sh:204`) właśnie podmienił katalog — stary proces biegnie dalej ze STAREGO kodu (na Unixie przeniesienie otwartego katalogu jest legalne), a setup kończy „🕹️ Gotowe!". Po aktualizacji user działa na starej wersji, a jedynym sygnałem jest jej brak. `install.ps1` ma `Stop-PulsProcesses -Dir $InstallDir` (`install.ps1:148`), `install.sh` odpowiednika nie ma. Fix: `stop_puls_processes <dir>` w `install.sh` (pgrep/ps filtrowane po ścieżce instalacji, nigdy po nazwie `node`) wołane w `install_fresh_repo` przed `mv` + test analogiczny do `Test-StopPulsIgnoresForeignNode`.
+- [x] 🟠 [P2] **install.test.sh:110** — Dziewięć nowych testów (5-13) pokrywa wyłącznie ścieżki szczęśliwe i pusty input: sanityzacja stringa, tylda, ścieżka względna, env-override, brak tty, sam Enter. Zero scenariuszy „zła odpowiedź": (a) istniejący NIEPUSTY katalog niebędący instalacją Pulsa (patrz P1 — dziś taki test by PRZESZEDŁ, bo kod bez mrugnięcia kasuje cudzy katalog), (b) odpowiedź `~`/`$HOME`, (c) odpowiedź wskazująca PLIK (`mv fresh_dir file` pada pod `set -e` z komunikatem systemowym, nie instalatora), (d) katalog z niezapisywalnym rodzicem. To samo w `install.ps1.Tests.ps1` (testy 6-8 tylko poprawne wejścia). Fix: test asertujący, że guard ODRZUCA katalog z obcą zawartością (sandbox z `moje-dane.txt`) i że plik istnieje po `install_fresh_repo`; symetryczny `Test-RejectsForeignInstallDir`.
+
+### P3 (opcjonalne, nie blokują gate'u)
+
+- [ ] 🟡 [P3] **setup.mjs:476** — `fetchStatusPayload` buforuje ciało bez limitu (`body += chunk`) i bez globalnego deadline'u (`{timeout:1000}` w `http.get` to timeout BEZCZYNNOŚCI, więc drip po bajcie co 900 ms go nie odpali), a odpytuje port zajęty przez DOWOLNY obcy proces (granica zaufania); wołane do 5× w `resolveDashboardPort` i 21× w `pingDashboard`/`waitForDashboard` → OOM albo zwis bez komunikatu. Fix wzorem `readTextBody`/`inbox-api`: cap 64 KB + `req.destroy()` + twardy timer na całe żądanie.
+- [ ] 🟡 [P3] **setup.mjs:506** — `isPortBindable` traktuje każdy błąd bindu jednakowo, więc port <1024 (przepuszczany przez `parsePortAnswer` od 1) daje EACCES i jest klasyfikowany jako FOREIGN: „Port 80 zajmuje inny program (to nie jest Puls)" + podpowiedź `lsof`, choć portu nikt nie zajmuje. Fix: rozróżnić `error.code` (`EADDRINUSE` vs `EACCES`) albo zawęzić `parsePortAnswer` do 1024-65535.
+- [ ] 🟡 [P3] **install.sh:101** — `resolve_install_dir` usuwa WSZYSTKIE wystąpienia `"`, `'` i `\`, nie tylko z brzegów: `/Users/x/Kacper's puls` → `/Users/x/Kacpers puls` i instalacja ląduje w złym miejscu. `Resolve-InstallDir` (`install.ps1:62`) trimuje tylko brzegi — rozjazd parytetu, którego testy nie łapią. Fix: cudzysłowy tylko z brzegów, backslash jako escape.
+- [ ] 🟡 [P3] **setup.mjs:619** — Nazwa pliku hooka `'claude-cron-autostart.js'` zaszyta w dwóch miejscach (`warnIfHookPortStale`, `writeHook` `setup.mjs:631`) mimo istniejącej stałej `HOOK_MARKER`; rozjazd literałów nie wywoła błędu — `fs.existsSync` zwróci false i ostrzeżenie o starym porcie zniknie po cichu. Fix: `hookFilePath(workspace)` w obu.
+- [ ] 🟡 [P3] **setup.mjs:608** — `buildStaleHookPortWarning` broni się przed `typeof hookSource !== 'string'`, choć jedyny wywołujący podaje `fs.readFileSync(..., 'utf-8')` — defensive code na niemożliwy scenariusz. Fix: skróć do `if (hookSource.includes(...)) return null;`.
+- [ ] 🟡 [P3] **setup.mjs:221** — Domyślna wartość `port = DEFAULT_DASHBOARD_PORT` w `buildHookSource` bez wywołującego w produkcji; trzyma ją tylko test kształtu API (`setup.test.mjs:1044`), a przy okazji maskowałaby zgubiony argument. Fix: parametr wymagany + usunięcie tego testu.
+- [ ] 🟡 [P3] **setup.mjs:116** — `parsePortAnswer(await askPort(port), null)` podaje jawnie wartość identyczną z domyślną (`fallback = null`, `setup.mjs:63`); domyślna wartość parametru nie jest nigdzie używana. Fix: usuń argument albo default.
+- [ ] 🟡 [P3] **setup.test.mjs:1023** — Test „resolveDashboardPort: same zajęte porty → rzuca po wyczerpaniu prób" asertuje `asks > 0 && asks < 50` zamiast dokładnej liczby; zmiana `PORT_RESOLVE_ATTEMPTS` z 5 na 1 albo 40 przejdzie bez śladu. Fix: eksport stałej + `assert.equal(asks, PORT_RESOLVE_ATTEMPTS)`.
+- [ ] 🟡 [P3] **setup.mjs:618** — `warnIfHookPortStale` (I/O shell) bez pokrycia — testy dotykają tylko czystego `buildStaleHookPortWarning`. To jedyny mechanizm broniący przed rozjazdem „dashboard vs autostart" na ścieżce odmowy reinstalacji hooka (`setup.mjs:1107`). Fix: eksport z wstrzykiwanym `log` + test na tmp-workspace (hook z 7777, wywołanie dla 8123 → jeden log z '8123'; brak pliku → zero logów).
+- [ ] 🟡 [P3] **install.ps1.Tests.ps1:145** — Testy 6-8 pokrywają tylko czyste `Resolve-InstallDir` i `Install-FreshRepo`; `Read-InstallDir` (`install.ps1:79`) — faktyczna ścieżka decyzyjna — nie ma testu, choć bash ma symetryczne testy 10 (env pomija pytanie) i 12 (brak wejścia → default bez zwisu). Fix: `Test-ReadInstallDirRespectsEnv` + `Test-ReadInstallDirFallsBackWithoutInput`.
+- [ ] 🟡 [P3] **install.test.sh:557** — Testy `ask_install_dir` mutują globalne `INSTALL_DIR_EXPLICIT` i nie przywracają go (test 10 zostawia 1, testy 11-13 ustawiają 0), przywracają za to `INSTALL_DIR`/`INSTALL_TTY`; suita przechodzi tylko dzięki kolejności wywołań. Fix: przywracanie `INSTALL_DIR_EXPLICIT=0` w testach 10-13 albo wspólny helper setup/teardown.
+
+---
+
+## Operator checklist faza 2
+
+*Warunki środowiskowe — NIE zadania do fix. Autopilot nie liczy ich do ukończenia fazy.*
+
+- [ ] Operator: trzy nowe testy Pester (6-8: pusta odpowiedź → default, sanityzacja ścieżki z Explorera, instalacja w niestandardowym katalogu) NIE zostały uruchomione — na maszynie deweloperskiej (macOS) nie ma `pwsh`/`powershell`, więc windowsowa ścieżka `Read-InstallDir`/`Resolve-InstallDir` oraz interakcja wybranego katalogu z blokadami plików i `Stop-PulsProcesses` są niezweryfikowane wykonaniem — Operator action: na maszynie Windows (1) `Invoke-Pester .\install.ps1.Tests.ps1` i potwierdzić zielone 6-8, (2) przepuścić pełny `irm … | iex` z wybranym niestandardowym katalogiem przy DZIAŁAJĄCYM daemonie i potwierdzić, że `Stop-PulsProcesses` odblokował pliki (brak „Proces nie moze uzyskac dostepu do pliku"), (3) potwierdzić, że obcy proces `node` spoza katalogu instalacji przeżył.
+- [ ] Operator: checkbox „Weryfikacja: przebieg przez **prawdziwy pipe**" pozostaje nieodhaczony — suita podstawia za `/dev/tty` plik przez `INSTALL_TTY`, więc nie pokrywa ani `has_tty` na prawdziwym terminalu kontrolującym, ani `exec … < /dev/tty` w `handoff_to_setup`, ani pytania o port z `setup.mjs` (readline na stdin przekazanym z instalatora); learned-pattern: „Testuj ZAWSZE przez prawdziwy pipe, nie lokalne `bash install.sh`" — Operator action: (1) `curl -fsSL <RAW_URL po SHA commita> | bash` z env-override źródła (ZIP/TARBALL URL + TOPDIR) na czystym koncie/VM, odpowiedzieć na pytanie o katalog i o port z klawiatury, (2) to samo przez `irm <URL> | iex` na Windowsie, (3) potwierdzić, że dashboard wstał na wybranym porcie (`curl -s localhost:<port>/api/status`).
+
+---
+
+## Faza 3 — Autostart na Macu
+
+### Unit 8: `installMac` przepisany pod wzorzec działającego plista (M)
+
+*Delegate to: feature-builder-data · Zależy od: —*
+*Notatka wykonawcza: `lib/platform.js` nie ma dziś żadnego testu — zacznij od characterization testu generatora plista.*
+
+- [x] Characterization test obecnego `generatePlist()` **przed** zmianą zachowania (7/7 GREEN przed zmianą, potem przepisany na nowy kontrakt — niezmienniki zachowane, wady zamienione w asercje odwrotne)
+- [x] Wrapper `/bin/sh -c` z `cd <repo> && exec ./.node/<wersja>/bin/node server.js`
+- [x] Logi w `~/Library/Logs/claude-cron/` (nie w `<repo>/data/` — TCC, `EX_CONFIG 78`)
+- [x] Blok `EnvironmentVariables`: `PATH`, `HOME`, `CLAUDE_CRON_WORKSPACE`, `CLAUDE_CRON_VPS_URL`
+- [x] Jedna stała etykiety używana przez `PLIST_PATH`, `installMac` i `getStatus` (koniec rozjazdu)
+- [x] `getStatus()` radzi sobie z instalacją zrobioną ręcznie pod starą nazwą (bez cichego duplikatu agenta) — `LEGACY_PLIST_LABELS`, `installMac()` unloaduje i kasuje stary plist przed load
+- [x] Test: plist zawiera wrapper `/bin/sh -c`, ścieżkę do portable Node z `.node/` i logi **poza** repo
+- [x] Test: plist zawiera `CLAUDE_CRON_WORKSPACE` i `CLAUDE_CRON_VPS_URL`, gdy ustawione w środowisku
+- [x] Test: `getStatus()` rozpoznaje agenta po etykiecie, którą instaluje `installMac()`
+- [x] Test: etykieta to jedna stała — brak rozjazdu nazw między funkcjami
+- [x] Weryfikacja: `node --test lib/platform.test.js` przechodzi
+- [x] Weryfikacja: `npm test` przechodzi w całości
+- [ ] Operator: po instalacji `launchctl list | grep claude-cron` pokazuje agenta, panel „zainstalowany", daemon przeżywa reboot — wymaga operatora (checklist), patrz „Operator checklist faza 3"
+
+**Zakres Unitu 8 (rozstrzygnięcie po review fazy 3):** Unit 8 dostarcza **moduł** — generator plista,
+sprzątanie legacy i status czytany po tej samej etykiecie. **Wpięcie w ścieżkę usera** (`setup.mjs` /
+`POST /api/autostart` / pole `autostart` na dashboardzie) świadomie **NIE wchodzi w zakres Fazy 3** —
+patrz „Follow-up po Fazie 3" niżej i uzasadnienie w `rownolegle-joby-kontekst.md` (sekcja „Fix po
+review fazy 3"). Do czasu wpięcia jedyną ścieżką instalacji launchd jest wywołanie ręczne operatora:
+`node -e "console.log(require('./lib/platform').install())"`.
+
+---
+
+## Follow-up po Fazie 3 (poza zakresem sprintu)
+
+*Nie są zadaniami fazy — autopilot nie liczy ich do ukończenia Fazy 3 (ta sama konwencja co „Operator checklist").*
+
+- [ ] Unit 10: wpięcie `platform.install()` w ścieżkę usera — decyzja produktowa „hook Claude Code vs launchd" (dziś autostart na Macu robi hook z `setup.mjs:1197`, więc oba mechanizmy naraz = dwa serwery na porcie 7777), potem `setup.mjs` albo `POST /api/autostart` (guard XFF + cross-origin jak przy `/api/inbox/members`) i renderowanie `status.autostart` w `public/app.js`.
+- [ ] Unit 10a: po wpięciu rozstrzygnąć dwa sprzeczne findingi P3 wokół `buildMacStatus` (asymetryczne DI vs YAGNI gałęzi legacy) — konsument w UI przesądza, czy pola `label`/`legacy` zostają.
+
+---
+
+## Do poprawy po review fazy 3
+
+*Raport: `docs/active/rownolegle-joby/review-faza-3.md` · Gate: ⚠️ ZASTRZEŻENIA (0×P1, 3×P2, 14×P3)*
+
+- [x] 🟠 [P2] **lib/platform.js:169** — Cel Unitu 8 („panel przestaje kłamić, a instalowany plist faktycznie wstaje") jest nieosiągalny żadną ścieżką usera: `installMac()`/`install()` nie ma ANI JEDNEGO wywołania w kodzie produkcyjnym (grep po repo: `lib/platform` importuje wyłącznie `server.js:13`, i tylko po `getStatus()` w `/api/status`; `install.sh`/`install.ps1` nigdzie nie wołają `launchctl`; realny autostart z `setup.mjs:1197` to hook Claude Code `claude-cron-autostart.js`, nie launchd). Dodatkowo `public/app.js`/`index.html` nie renderują pola `autostart` w ogóle. Efekt: cała naprawa generatora plista, sprzątanie legacy i nowy `buildMacStatus` to dziś kod martwy dla usera, a `/api/status.autostart` po instalacji oficjalnym instalatorem nadal raportuje `installed:false`. Fix: albo wpiąć `platform.install()` w ścieżkę autostartu (`setup.mjs` / endpoint `POST /api/autostart`) i pokazać `autostart` na dashboardzie, albo jawnie zapisać w planie/kontekście, że Unit 8 przygotowuje moduł, a wpięcie idzie w osobnym Unicie — bo w obecnym kształcie checkbox operatora „panel pokazuje zainstalowany" nie ma jak przejść.
+- [x] 🟠 [P2] **lib/platform.test.js:1** — Nowe funkcje z I/O — `installMac()` (kolejność: mkdir logów → unload własnej etykiety → sprzątanie legacy → zapis plista → load), `removeLegacyAgents()`, `unloadAgent()`, `readLaunchctlList()` — nie mają ANI JEDNEGO testu (26 testów pokrywa wyłącznie czyste generatory i parsery). Checkbox „`installMac()` unloaduje i kasuje stary plist przed load" odhaczono, a przetestowana jest tylko połowa czytająca (`buildMacStatus`); reguła projektu wymaga min. 1 happy path + 1 error case na funkcję, a learned-pattern 2026-07-28 ostrzega, że testy czystych funkcji przechodzą przy złamanym zachowaniu systemowym. Fix: wydzielić czysty plan sprzątania (`planLegacyCleanup(labels, existsFn)`) albo wstrzyknąć runner (`runLaunchctl`) do `installMac()` i pokryć: (a) unload PRZED zapisem plista i przed `load`, (b) nieudany unload nie kasuje pliku, (c) katalog logów powstaje przed `load`.
+- [x] 🟠 [P2] **lib/platform.test.js:210** — Test „buildMacStatus: etykieta statusu = etykieta z PLIST_PATH (jedna stała)" jest nieprzenośny: asertuje `path.basename(platform.PLIST_PATH)`, a `PLIST_PATH` to `''` na każdej platformie != darwin (`lib/platform.js:14`). Zweryfikowane empirycznie (`node --require <preload z process.platform='linux'> --test lib/platform.test.js` → 25 pass / 1 fail; na macOS 26/26). Repo działa produkcyjnie na Linuksie (VPS), więc `npm test` odpalony tam daje FAŁSZYWY czerwony wynik. Fix: asercja niezależna od platformy (`platform.PLIST_PATH === '' || path.basename(...) === PLIST_LABEL + '.plist'`) albo `{ skip: process.platform !== 'darwin' }` + osobna asercja spójności `PLIST_LABEL` z `buildMacStatus`.
+
+### P3 (opcjonalne, nie blokują gate'u)
+
+- [ ] 🟡 [P3] **lib/platform.test.js:50** — Brak testu cytowania powłokowego (`shellQuote`) — jedynej bariery między wolnym katalogiem instalacji (Faza 2) a komendą `/bin/sh -c` odpalaną przy każdym boocie. FIXTURE ma tylko czystą ścieżkę `/Users/tester/claude-cron`; test „escapuje znaki XML" pokrywa `escapeXml` na env, nie interakcję shellQuote→escapeXml w komendzie. Fix: test `buildPlist` z `repoDir: "/Users/te'ster/A B"` i asercją na dokładny wynik cytowania (analogicznie `nodeBin`).
+- [ ] 🟡 [P3] **lib/platform.test.js:203** — Szew `getStatus() → buildMacStatus` bez ani jednej asercji: scenariusz planu „getStatus() rozpoznaje agenta po etykiecie" odhaczono testem czystej `buildMacStatus` z ręcznie podanym `legacyAgents`. Usunięcie mapowania `legacyAgents` w `getStatus()` (`lib/platform.js:244-254`) zostawia suitę na zielono. Fix: wstrzyknięcie I/O (`getStatus({ readList = readLaunchctlList, exists = fs.existsSync } = {})`) + test: launchctl z samą etykietą legacy + `exists` true → `{installed:true, legacy:true, label:'com.claude-cron.daemon'}`.
+- [ ] 🟡 [P3] **lib/platform.js:239** — `uninstallMac()` został z `execSync(\`launchctl unload "${PLIST_PATH}"\`)` (interpolacja do stringa powłoki), gdy reszta funkcji macOS przeszła w tej fazie na `execFileSync` z tablicą argumentów. Dziś hardening (ścieżka z `HOME`), ale łamie własną konwencję modułu. Fix: `execFileSync('launchctl', ['unload', PLIST_PATH], { stdio: 'inherit' })`.
+- [ ] 🟡 [P3] **lib/platform.js:98** — `resolvePortableNodeBin` akceptuje `process.execPath` po substringu `includes(\`${path.sep}.node${path.sep}\`)` — bez granicy katalogu, więc Node z `.node/` INNEJ instalacji zostanie wypalony w pliście tej instalacji (po Fazie 2 dwie instalacje są realne). Ten sam antywzorzec, który review Fazy 2 zgłosiło dla `install.ps1`. Fix: `execPath.startsWith(path.join(repoDir, '.node') + path.sep)`.
+- [ ] 🟡 [P3] **lib/platform.js:21** — Plist zapisywany bez `mode` (→ 0644, czytelny dla innych lokalnych użytkowników), a `EnvironmentVariables` powstaje z whitelisty `PLIST_ENV_KEYS`. Dziś whitelista jest czysta, ale nic tego nie utrwala — dopisanie `TELEGRAM_BOT_TOKEN`/`ASK_SECRET`/`DISCORD_WEBHOOK_URL` (kuszące, bo launchd nie widzi shell RC) zamieni plist w plaintextowy magazyn sekretów. Fix: komentarz-guard przy `PLIST_ENV_KEYS` + zapis `{ mode: 0o600 }`.
+- [ ] 🟡 [P3] **lib/platform.js:244** — `getStatus()` przy każdym `GET /api/status` spawnuje SYNCHRONICZNIE `launchctl list`, a dashboard poluje co 3 s razy liczba kart (zmierzone: 3,3 ms blokady event-loopu, 18,8 KB outputu na wywołanie) — do pola, którego `public/` nie renderuje. Wywołanie bez `timeout`: zaklinowany launchctl blokuje jednowątkowy daemon bezterminowo. Fix: `timeout: 2000` + memoizacja `buildMacStatus` z TTL ~5 s unieważniana w `installMac()`/`uninstallMac()`.
+- [ ] 🟡 [P3] **lib/platform.test.js:157** — Trzy testy `resolvePortableNodeBin` sprzątają `mkdtempSync` dopiero ostatnią linią ciała testu, więc każdy czerwony przebieg zostawia w `/var/folders/.../platform-node-*` katalog z podrobionymi binarkami `bin/node`. Fix: `test('...', (t) => {...})` + `t.after(() => fs.rmSync(repoDir, { recursive: true, force: true }))` zaraz po `mkdtempSync`.
+- [ ] 🟡 [P3] **lib/platform.js:105** — Fallback `installed[installed.length - 1]` po leksykograficznym `.sort()`: `node-v22.9.0` wypada PO `node-v22.17.0`, więc przy dwóch dystach bez pinowanego wybierze starszą wersję, a Node < 22.13 wywala runtime-guard (`node:sqlite`). Komentarz (linie 100-101) mówi o „pierwszym alfabetycznie", kod bierze ostatni. Fix: porównanie numeryczne (parse `node-v(\d+)\.(\d+)\.(\d+)`) + poprawka komentarza.
+- [ ] 🟡 [P3] **lib/platform.js:18** — `PINNED_NODE_VERSION = '22.17.0'` to trzecia kopia pinu (`install.sh:22`, `setup.mjs:37`), a CLAUDE.md wymaga spójności — dziś nic tego nie pilnuje. Fix: test w `lib/platform.test.js` czytający `install.sh` (`NODE_VERSION="([\d.]+)"`) i `setup.mjs` (`export const NODE_VERSION = '...'`) i asertujący równość.
+- [ ] 🟡 [P3] **lib/platform.js:143** — `buildMacStatus()` ma asymetryczne DI: `legacyAgents` przychodzi parametrem, a etykieta kanoniczna z modułowej stałej `PLIST_LABEL` — przez co nie da się przetestować scenariusza rozjazdu etykiet (pierwotny bug modułu). Fix: parametr `label = PLIST_LABEL` używany w obu gałęziach i w returnie. *(rozstrzygnij łącznie z findingiem YAGNI poniżej — są sprzeczne)*
+- [ ] 🟡 [P3] **lib/platform.js:143** — YAGNI: gałąź legacy w `buildMacStatus` nie ma konsumenta (`getStatus()` trafia tylko do `/api/status`, a `public/app.js` nie czyta pola `autostart` — grep = 0 trafień). Plan wymagał „migracja ALBO czytelna informacja", a migrację realizuje już `removeLegacyAgents()`. Fix: usunąć parametr `legacyAgents` i pola `label`/`legacy` (kontrakt wraca do `{installed, running, platform}`), mapowanie w `getStatus()` (`lib/platform.js:249-252`) oraz test `lib/platform.test.js:676`; `LEGACY_PLIST_LABELS` + `removeLegacyAgents()` zostają. *(sprzeczne z dwoma findingami powyżej — jedna decyzja: albo gałąź legacy dostaje konsumenta w UI, albo znika w całości)*
+- [ ] 🟡 [P3] **lib/platform.js:127** — Martwe pole kontraktu: `parseLaunchctlList` zwraca `pid`, którego nie czyta żaden konsument (`buildMacStatus` używa `found`/`running`; `pid` żyje tylko w `deepStrictEqual` w testach). Fix: usunąć z returnów (`lib/platform.js:128, 133-135`) i asercji (`lib/platform.test.js:603-636`).
+- [ ] 🟡 [P3] **lib/platform.js:23** — Parametr bez użycia: `macLogFile(home = HOME)` — oba wywołania (linie 164, 174) i żaden test nie przekazują argumentu. Fix: `function macLogFile()` z `HOME` bezpośrednio.
+- [ ] 🟡 [P3] **lib/platform.js:104** — Redundantne gałęzie: `resolvePortableNodeBin` buduje tę samą ścieżkę `path.join(nodeBase, pinnedDist, 'bin', 'node')` w liniach 104 i 107, przez co trzy `return` opisują dwa przypadki. Fix: jeden wybór katalogu + jeden `return`.
+
+---
+
+## Operator checklist faza 3
+
+*Warunki środowiskowe — NIE zadania do fix. Autopilot nie liczy ich do ukończenia fazy.*
+
+- [ ] Operator: checkbox Unitu 8 „po instalacji `launchctl list | grep claude-cron` pokazuje agenta, panel „zainstalowany", daemon przeżywa reboot" jest niewykonalny headless — wymaga realnego `launchctl load` w sesji GUI i restartu Maca; nikt jeszcze nie odpalił nowego plista, testy pokrywają wyłącznie czyste funkcje — Operator action: (1) `cp ~/Library/LaunchAgents/com.claude-cron.daemon.plist ~/com.claude-cron.daemon.plist.bak` PRZED pierwszym `installMac()` (ręczny agent, PID 8290, wskazuje na `/Users/kacper_trzepiecinski/Documents/Kodowanie/claude-cron`, zostanie odpięty i BEZPOWROTNIE skasowany), (2) odpalić instalację autostartu — dopóki nie ma wpięcia w setup (patrz „Follow-up po Fazie 3"), robi się to ręcznie: `cd <katalog instalacji> && node -e "console.log(require('./lib/platform').install())"`, (3) `launchctl list | grep claude-cron` → agent pod nową etykietą, (4) `curl -s localhost:7777/api/status | grep autostart` → `installed:true`, (5) reboot Maca i potwierdzić, że daemon wstał sam, (6) dopiero wtedy porzucić kopię `.bak`.
+- [ ] Operator: pierwsze uruchomienie nowego `installMac()` ubija DZIAŁAJĄCY, ręcznie postawiony agent `com.claude-cron.daemon` (z 23.07, wzorzec dla tej fazy) i podmienia go na plist, którego launchd jeszcze nigdy nie wczytał — ryzyka nie da się zamknąć headless: jeśli nowy plist nie wstanie (TCC, ścieżka portable Node, uprawnienia), user zostaje BEZ autostartu, który przed instalacją działał — Operator action: (1) zachować kopię starego plista do czasu potwierdzenia nowego, (2) po `launchctl load` sprawdzić `~/Library/Logs/claude-cron/` pod kątem błędu startu (`EX_CONFIG 78` = zła ścieżka/TCC), (3) w razie padu przywrócić `.bak` przez `launchctl load ~/Library/LaunchAgents/com.claude-cron.daemon.plist` i zgłosić log.
+
+---
+
+## Faza 4 — Opóźnienie startu po wybudzeniu
+
+### Unit 9: Karencja sieciowa po wykryciu wybudzenia (S)
+
+*Delegate to: feature-builder-data · Zależy od: Unit 3*
+
+- [x] Czysta funkcja `shouldDeferAfterWake(lastActiveAt, now, graceMs)` — bez zegara i bez sieci
+- [x] Wykrycie wybudzenia z luki w heartbeacie (wzorzec progu: `executor.js:20-31`, `SLEEP_GAP_MS`)
+- [x] Odroczenie pierwszego startu runu o 30-60 s po wybudzeniu; retry bez zmian
+- [x] Rozstrzygnąć w implementacji: karencja dla wszystkich jobów czy tylko `run_on_wake`; sztywne czekanie czy probe sieci
+- [x] Test: `shouldDeferAfterWake` → `true` tuż po luce, `false` po karencji, `false` przy normalnej pracy
+- [x] Test: run zakolejkowany w oknie karencji startuje **po** jej upływie — nie ginie i nie jest `failed`
+- [x] Test: zwykły ruch kolejki (bez wybudzenia) nie jest opóźniany o ani jeden tick
+- [x] Weryfikacja: `node --test lib/scheduler.test.js` przechodzi (review fazy 4: exit 0; 51 pass / 0 fail)
+- [x] Weryfikacja: `npm test` przechodzi w całości (review fazy 4: exit 0; 790 pass / 0 fail) — **uwaga: zielona suita nie jest dowodem poprawności fazy, patrz P1 i P2 TEST poniżej**
+
+---
+
+## Do poprawy po review fazy 4
+
+*Raport: `docs/active/rownolegle-joby/review-faza-4.md` · Gate: 🔴 BLOKUJE (1×P1, 2×P2, 9×P3)*
+
+- [x] 🔴 [P1] **lib/scheduler.js:528** — Próg detekcji snu jest RÓWNY okresowi heartbeatu, więc KAŻDE normalne tyknięcie jest brane za wybudzenie i zamraża kolejkę. `isWakeGap(lastHeartbeatAt, now)` używa domyślnego `executor.SLEEP_GAP_MS = 60_000`, a `startHeartbeat` tyka `setInterval(..., HEARTBEAT_INTERVAL_MS = 60_000)`. Timery libuv gwarantują „nie wcześniej niż", więc realny gap to zawsze 60_00x ms. Zmierzone na bezczynnym procesie (odtworzenie 1:1 heartbeatu, node 22): `tick 1: gap=60003 → isWakeGap=true`, `tick 2: gap=60002 → isWakeGap=true` (2/2). Repro na produkcyjnym module: `t.mock.timers.setTime(Date.now()+2); t.mock.timers.tick(60_000)` → `getWakeDetectedAt() === 60002` zamiast `null`. SKUTEK: co ~60 s `markWakeDetected(now)`, więc `processQueue` odracza start WSZYSTKICH runów o 45 s z każdych 60 s — runy startują tylko w ~15-sekundowym oknie na minutę. Łamie R1 na całym systemie, opóźnia inbox sync co 1 min oraz retry i zalewa log fałszywym alarmem „wybudzenie" co minutę. Fix: dla ścieżki heartbeatu użyć progu ostro większego od okresu tyknięcia, np. stała `WAKE_GAP_MS = HEARTBEAT_INTERVAL_MS + executor.SLEEP_GAP_MS` (120 s) przekazana jawnie do `isWakeGap` w `startHeartbeat` (w executorze `SLEEP_GAP_MS` działa tylko dlatego, że tam tick to 5 s = 12× zapasu).
+- [x] 🟠 [P2] **lib/scheduler.test.js:892** — Test szwu heartbeat→karencja („zwykłe tyknięcie NIE jest wybudzeniem") przechodzi wyłącznie dzięki idealnie deterministycznemu zegarowi mocka: `t.mock.timers.tick(60_000)` daje gap równy progowi (`gap > sleepGapMs` = false). Na realnym event loopie ta wartość nie występuje (zmierzone 60002–60003 ms), więc test jest zielony przy złamanym zachowaniu produkcyjnym — wzorzec z learned-patterns („testy obu stron przechodzą przy złamanym zachowaniu systemowym"). Fix: przed tyknięciem dodać realistyczny jitter — `t.mock.timers.setTime(Date.now() + 2); t.mock.timers.tick(60_000);` — i asercję `assert.equal(scheduler.getWakeDetectedAt(), null, 'tyknięcie spóźnione o kilka ms NIE jest wybudzeniem')`. To guard regresji dla P1; bez niego poprawka progu nie ma pokrycia.
+- [x] 🟠 [P2] **lib/scheduler.js:402** — Karencja włącza się DOPIERO w callbacku heartbeatu (linia 528), a produkcyjne joby o krótkim cronie mogą wyprzedzić ten callback po pobudce. Po wybudzeniu libuv odpala zaległe timery w kolejności due-time: dla joba `* * * * *` („Team OS — inbox sync", script-job co 1 min, `telegram_notify=1`) due-time crona wypada na najbliższej granicy minuty po zaśnięciu, czyli TYPOWO wcześniej niż kolejne tyknięcie heartbeatu. Wtedy `enqueueJob` → `processQueue` → `startEligibleRuns` biegnie synchronicznie, `wakeDetectedAt` jest jeszcze `null`, run startuje BEZ karencji i pada na ENOTFOUND — dokładnie symptom R11, dla joba, który generuje go najczęściej. Fix (bez łamania R1: żadnego await ani zapytania do DB na normalnej ścieżce): w `processQueue`, tuż po `const now = Date.now()`, dołożyć `if (isWakeGap(lastHeartbeatAt, now)) { markWakeDetected(now); lastHeartbeatAt = now; }` — detekcja przestaje zależeć od kolejności timerów. Wdrażać RAZEM z P1: z dzisiejszym progiem ten guard tylko rozszerzyłby fałszywą detekcję na pętlę kolejki.
+
+### P3 (opcjonalne, nie blokują gate'u)
+
+- [x] 🟡 [P3] **lib/scheduler.js:556** — `detectWakeFromDowntime` porównuje `now - Date.parse(last_active_at)` z tym samym progiem 60 s, ale znacznik `last_active_at` jest zapisywany tylko co 60 s — w chwili zatrzymania daemona jest przestarzały o 0–60 s (średnio 30 s). Zwykły restart serwisu trafia więc w karencję zawsze, gdy staleness + downtime > 60 s (~50 % restartów przy 30 s downtime'u). Zweryfikowane: `db.setState('last_active_at', now-65_000)` + `scheduler.start()` → `[scheduler] start po 65 s przerwy — karencja 45 s`. Łamie kontrakt testu „krótka przerwa (zwykły restart serwisu) NIE włącza karencji", który przechodzi tylko dzięki znacznikowi now-5 s — nieosiągalnemu przy granulacji 60 s. Fix: `isWakeGap(lastMs, now, executor.SLEEP_GAP_MS + HEARTBEAT_INTERVAL_MS)` + test graniczny z `last_active_at = now - 65_000` asertujący BRAK karencji.
+- [ ] 🟡 [P3] **lib/scheduler.test.js:404** — Brak testu na guard `hasPendingRuns` (`lib/scheduler.js:364`, decyzja #6: „przy pustej kolejce pętla ma się domknąć, a nie trzymać `queueProcessing` przez pół minuty"). Usunięcie tego warunku nie wywali dziś ani jednego testu — pętla trzymałaby flagę `queueProcessing` przez pełne 45 s po każdym wybudzeniu, a `stop()` tego nie przerywa. Fix: obok testu karencji `scheduler.markWakeDetected(Date.now())` + ZERO runów w kolejce → zmierzyć `Date.now()` wokół `await scheduler.processQueue()` i asertować rozwiązanie w < 1000 ms (oraz `t.after(() => scheduler.markWakeDetected(null))`).
+- [ ] 🟡 [P3] **lib/scheduler.js:1** — `lib/scheduler.js` urósł do 655 linii przy limicie 300 z `.claude/rules/coding-rules.md` (po Fazie 1 było 426, Faza 4 dołożyła +141). Szew jest wyraźny, a wyjęcie go nie dotyka pętli kolejki. Fix: przenieść blok „karencja po wybudzeniu" do nowego `lib/scheduler-wake.js` (`WAKE_GRACE_MS`, `isWakeGap`, `wakeGraceRemainingMs`, `shouldDeferAfterWake`, `markWakeDetected`/`getWakeDetectedAt`, `delayPromise`, `detectWakeFromDowntime` + `start/stopHeartbeat`) i re-eksportować ze `scheduler.js` dla zgodności istniejących importów i testów; `scheduler.js` schodzi do ~480 linii, a nowy moduł dostaje własny plik testowy.
+- [ ] 🟡 [P3] **lib/scheduler.js:544** — `stopHeartbeat()` zeruje `lastHeartbeatAt`, ale `wakeDetectedAt` zostaje ustawione po zatrzymaniu schedulera — stan asymetryczny. Po sekwencji `stop()` → `start()` w tym samym procesie karencja z poprzedniego cyklu żyje dalej, mimo że `start()` i tak sam rozstrzyga wybudzenie przez `detectWakeFromDowntime`. Dlatego każdy test tej fazy musi ręcznie wołać `scheduler.markWakeDetected(null)` w Arrange i w `t.after`. Fix: dopisać `wakeDetectedAt = null;` obok `lastHeartbeatAt = null;` w `stopHeartbeat()`.
+- [ ] 🟡 [P3] **lib/scheduler.js:344** — N+1 w pętli drain: `startEligibleRuns` woła `db.getRecentSuccessDurations(jobId, 10)` osobno dla KAŻDEGO joba z kolejki i z aktywnych runów, przy każdej iteracji pętli (zwolnienie slotu, `enqueueJob`, webhook, a od tej fazy również wygaśnięcie karencji). Każde zapytanie to `WHERE job_id=? AND status='success' ORDER BY id DESC LIMIT 10` po `idx_runs_job_id` — dla joba routine trzymającego dobę runów (inbox sync ≈ 1440 wierszy) skan + sort na wywołanie, mnożony przez liczbę jobów. Fix zgodny z learned-patternem projektu („Top N per grupa = window function"): `db.getRecentSuccessDurationsForJobs(jobIds, limit)` z `ROW_NUMBER() OVER (PARTITION BY job_id ORDER BY id DESC)` + filtr `rn <= limit` i jedno wywołanie budujące `durationsByJob`.
+- [ ] 🟡 [P3] **docs/active/rownolegle-joby/rownolegle-joby-kontekst.md:453** — Zapis długu podaje nieaktualny rozmiar pliku: „`lib/scheduler.js` urósł do ~560 linii", a `wc -l lib/scheduler.js` na HEAD daje 655 (limit z coding-rules = 300). To jedyny ślad tego długu przed decyzją o wydzieleniu modułu „wake", więc liczba powinna być prawdziwa. Fix: poprawić „~560" na 655.
+- [ ] 🟡 [P3] **lib/scheduler.js:176** — Martwe guardy defensywne na scenariusz, który nie może wystąpić i który i tak jest obsłużony przez arytmetykę. W `isWakeGap` (l. 176) `Number.isFinite(gap) && gap > sleepGapMs` — dla `gap = NaN` porównanie `NaN > x` jest już `false`; jedyny wołający z zewnętrznym wejściem (`detectWakeFromDowntime`, l. 556) ma własny `Number.isFinite(lastMs)`. Analogicznie w `wakeGraceRemainingMs` (l. 185) `!Number.isFinite(since)` — dla NaN dalsze `since < 0` i `since < graceMs` są `false`, więc funkcja i bez tego zwraca 0. Żaden test nie pokrywa tych gałęzi. Fix: usunąć `Number.isFinite(gap) &&` z l. 176 i `!Number.isFinite(since) ||` z l. 185 (zostawić `Number.isFinite(lastMs)` w `detectWakeFromDowntime` jako jedyną realną walidację `Date.parse`).
+- [ ] 🟡 [P3] **lib/scheduler.test.js:404** — Testowany jest wyłącznie run stojący w kolejce PRZED wejściem w pętlę drain; brak przypadku „run zakolejkowany W TRAKCIE karencji", czyli ścieżki, dla której timer karencji jest własnym bodźcem (decyzja #6). Fix: w teście karencji odpalić `scheduler.processQueue()` z PUSTĄ kolejką po `markWakeDetected(Date.now() - (WAKE_GRACE_MS - 400))`, potem `db.createRun(...)` + `scheduler.enqueueJob(job.id, 'scheduled')` w oknie karencji i asertować `status === 'success'` oraz `started_at - t0 >= remainingMs - 50`.
+- [ ] 🟡 [P3] **lib/scheduler.test.js:453** — Brak testu invalid input dla `detectWakeFromDowntime`: guard `Number.isFinite(lastMs)` (`lib/scheduler.js:556`) chroni przed śmieciowym `last_active_at` (`Date.parse` → NaN), ale żaden test go nie dotyka — usunięcie guardu przechodzi na zielono. Fix: `db.setState('last_active_at', 'nie-data'); scheduler.markWakeDetected(null); scheduler.start(); assert.equal(scheduler.getWakeDetectedAt(), null)` z tym samym `t.after` co sąsiednie testy `start()`.
+
+---
+
+## Operator checklist faza 4
+
+*Warunki środowiskowe — NIE zadania do fix. Autopilot nie liczy ich do ukończenia fazy.*
+
+Brak — faza 4 nie ma warstwy UI ani checkboxów `Weryfikacja:` wymagających przeglądarki lub realnego środowiska; obie weryfikacje CLI odegrano headless w review.
+
+---
+
+## Odbiór całości
+
+- [ ] Wszystkie Unity 1-9 zamknięte
+- [ ] `npm test` — 640 istniejących testów bez modyfikacji + nowe zielone
+- [ ] Metryka: średnie oczekiwanie „Team OS — inbox sync" w kolejce spadło z minut do sekund (pon. 8:00-10:00)
+- [ ] Metryka kontrolna: liczba runów `failed`/`timeout` w tygodniu po wdrożeniu nie wzrosła
+- [ ] Deploy: Mac → obserwacja poniedziałku → VPS, razem z aktualizacją skilla `/puls`

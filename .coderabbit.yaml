@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Konfiguracja CodeRabbit AI code review
+# Dokumentacja: https://docs.coderabbit.ai/reference/configuration
+
+language: pl-PL
+
+tone_instructions: "Pisz po polsku, konkretnie, bez wierszyków. Łap realne bugi, problemy z type safety i bezpieczeństwem. Nie nitpickuj nazewnictwa. Komentarze 1-3 zdania. Cytuj reguły z coding-rules.md gdy kod je łamie."
+
+early_access: false
+
+reviews:
+  profile: assertive            # bardziej dociekliwy review (drugi tryb to 'chill')
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  changed_files_summary: true
+  sequence_diagrams: false
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  suggested_reviewers: false
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    base_branches:
+      - main
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+
+  path_filters:
+    - "!node_modules/**"
+    - "!docs/**"
+    - "!.claude/**"
+    - "!package-lock.json"
+    - "!*.lock"
+    - "!.node/**"        # przenośny Node pobierany przez instalatory
+    - "!data/**"         # stan runtime (SQLite, sekrety) — nigdy w repo
+
+  path_instructions:
+    - path: "**/*.{js,mjs,cjs}"
+      instructions: |
+        Projekt bez TypeScriptu: backend to czysty CommonJS, frontend to
+        vanilla JS bez buildu. Trzymaj się reguł z .claude/rules/coding-rules.md,
+        .claude/rules/learned-patterns.md i CLAUDE.md.
+        Krytyczne:
+        - Pliki > 300 linii = sygnalizuj refaktor
+        - Funkcje > 50 linii = sygnalizuj podział; > 6 argumentów = obiekt konfiguracyjny
+        - Nesting > 2 poziomy = early return
+        - Zero pustych `catch {}` — loguj albo re-throw; łap konkretne błędy
+        - Fail fast — waliduj inputy na początku funkcji
+        - Boolean: prefix `is`/`has`/`should`/`can`; handlery: prefix `handle`
+        - setTimeout/setInterval = jawny clearTimeout/clearInterval; timery
+          trzymające proces przy życiu = `unref()`
+        - Zero nowych zależności bez uzasadnienia (projekt ma ich 4)
+    - path: "lib/**/*.js"
+      instructions: |
+        Rdzeń backendu (scheduler, executor, DB, powiadomienia, hub skrzynki).
+        - I/O to cienka skorupa — logika decyzyjna w czystych, testowalnych
+          funkcjach z argumentami zamiast globali (wzorzec `computeMissedJobs`,
+          `pickEligibleRuns`).
+        - Po zapisie do DB decyduj na ŚWIEŻYM odczycie, nie na obiekcie
+          sprzed operacji (udokumentowana pułapka: martwe retry).
+        - `migrate()` leci przy KAŻDYM boocie — backfill danych tylko za
+          sentinelem w tabeli `state`, nigdy gołe `UPDATE`.
+        - SQLite: granica doby w `localtime`; Top-N per grupa przez
+          `ROW_NUMBER() OVER (PARTITION BY ...)`, nie globalny `LIMIT`;
+          agregaty (`COUNT`/`SUM`) w node:sqlite bywają BigInt.
+        - Zawsze parametryzowane zapytania — zero konkatenacji inputu do SQL.
+        - Konfigurację czytaj w momencie użycia (zmiana z dashboardu bez
+          restartu), nie przy `require`.
+        - Progi wykrywające lukę między okresowymi śladami życia muszą być
+          ostro większe niż okres tykania.
+    - path: "server.js"
+      instructions: |
+        Ręczny router na node:http — granica bezpieczeństwa.
+        - KONTRAKT KOLEJNOŚCI matcherów: webhook → ask → inbox → guard
+          X-Forwarded-For → api/static. Publiczne endpointy PRZED guardem,
+          guard PRZED api/static — przestawienie robi dashboard publicznym
+          albo zabija endpoint za Funnelem.
+        - Body czytaj z twardym capem rozmiaru PRZED autoryzacją.
+        - Porównania tokenów przez `timingSafeEqual`, zawsze wszystkie
+          (czas odpowiedzi nie może zdradzać trafienia).
+        - Endpoint mutujący zwracający sekret wymaga guardu cross-origin
+          (`Origin` ≠ `Host` → 403) — guard XFF go NIE chroni.
+        - Rate limiting na każdym publicznym endpoincie.
+    - path: "public/**/*.js"
+      instructions: |
+        Vanilla JS, zero frameworka i buildu — ładowane bezpośrednio
+        przez <script>. Bez importów ESM i bez składni wymagającej
+        transpilacji. Czyste helpery wydzielaj do osobnych plików
+        (testowalne), stan i DOM zostają w app.js. Timeouty w UI są
+        w minutach, w bazie/executorze w ms — nie mieszaj jednostek.
+    - path: "scripts/**/*.mjs"
+      instructions: |
+        Skrypty ESM odpalane jako script-joby. Konfigurację czytaj
+        z `process.env` w MOMENCIE wywołania (env żyjącego procesu bywa
+        nieświeże). Kontrakt maszynowy dla wołającego to KOD WYJŚCIA,
+        nigdy parsowany tekst. Sekrety w komunikatach błędów redaguj —
+        token bywa w ścieżce URL, którą undici osadza w błędzie.
+        Retry tylko dla operacji idempotentnych.
+    - path: "**/*.test.{js,mjs}"
+      instructions: |
+        Testy na wbudowanym node:test, kolokowane obok źródła.
+        Arrange-Act-Assert. Min 1 asercja per test. NIE mockuj testowanego
+        kodu — mockuj tylko zewnętrzne serwisy. NIE osłabiaj asercji żeby
+        test przeszedł. Przy mock timers dokładaj jawny jitter — tick
+        dokładnie równy progowi daje zieleń przy złamanym zachowaniu.
+    - path: "{install.sh,install.ps1,scripts/*.sh,scripts/*.ps1}"
+      instructions: |
+        Instalatory uruchamiane przez `curl|bash` / `irm|iex`.
+        - stdin to pipe z treścią skryptu — interaktywne pytania przez
+          /dev/tty (Unix) / CONIN$ (Windows).
+        - Katalog instalacji to wolne wejście usera: każdy destrukcyjny
+          konsument tej wartości wymaga guardu (`rm -rf "${var:?}/..."`).
+        - Status zewnętrznego CLI czytaj z zakotwiczonej frazy, nie
+          substringu i nie kodu wyjścia.
+        - Plik .ps1 trzymaj w czystym ASCII (BOM/diakrytyki łamią PS 5.1).
+        - Na Windowsie podmiana katalogu aplikacji wymaga wcześniejszego
+          ubicia procesów filtrowanych po ŚCIEŻCE instalacji.
+
+  tools:
+    # JavaScript/TypeScript
+    eslint:
+      enabled: true
+    biome:
+      enabled: false  # nie używamy biome — eslint wystarczy
+    oxc:
+      enabled: false  # nie używamy oxlint — eslint wystarczy
+    # GitHub Actions + YAML
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    # Security
+    gitleaks:
+      enabled: true
+    trufflehog:
+      enabled: true
+    semgrep:
+      enabled: true
+    osvScanner:
+      enabled: true
+    # Disabled — szum dla nas
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+
+chat:
+  auto_reply: true
+  art: false
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: true
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - ".claude/rules/coding-rules.md"
+      - ".claude/rules/learned-patterns.md"
+      - "CLAUDE.md"
+  learnings:
+    scope: auto
+  issues:
+    scope: auto
+  pull_requests:
+    scope: auto
+
+code_generation:
+  docstrings:
+    language: pl-PL

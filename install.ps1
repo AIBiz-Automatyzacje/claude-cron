@@ -25,8 +25,11 @@ $NodeVersion = "22.17.0"
 $ZipUrl    = if ($env:CLAUDE_CRON_ZIP_URL) { $env:CLAUDE_CRON_ZIP_URL } else { "https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/main.zip" }
 $ZipTopDir = if ($env:CLAUDE_CRON_ZIP_TOPDIR) { $env:CLAUDE_CRON_ZIP_TOPDIR } else { "claude-cron-main" }
 
-# Docelowy katalog instalacji w trybie bootstrap (override przez env w testach).
-$InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { Join-Path $HOME "claude-cron" }
+# Docelowy katalog instalacji w trybie bootstrap. Env-override (testy, automatyzacja,
+# druga instancja obok pierwszej) wygrywa i POMIJA pytanie - inaczej nieinteraktywny
+# przebieg z jawnie podanym katalogiem i tak pytalby o niego uzytkownika.
+$InstallDirDefault = Join-Path $HOME "claude-cron"
+$InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { $InstallDirDefault }
 
 # Katalogi przenoszone ze starej instalacji do swiezej (allowlist, NIE blacklist).
 # data\  = baza SQLite + logi (NIGDY nie kasowac przy re-run).
@@ -42,6 +45,139 @@ function Get-NodeArch {
         "x86"   { return "x86" }
         default { throw "Nieobslugiwana architektura: $($env:PROCESSOR_ARCHITECTURE)." }
     }
+}
+
+# ============ KATALOG INSTALACJI ============
+
+# Czysta zamiana odpowiedzi uzytkownika na sciezke instalacji (parytet z resolve_install_dir
+# w install.sh). Puste (sam Enter) -> katalog domyslny. Explorer wkleja sciezki w cudzyslowach,
+# a "~" nie jest przez PowerShell rozwijane w wartosci z Read-Host - bez tego powstalby
+# katalog o nazwie "~". Sciezka wzgledna -> absolutna, bo cwd instalatora bywa przypadkowy.
+function Resolve-InstallDir {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Answer,
+        [Parameter(Mandatory = $true)][string] $Fallback,
+        [string] $Base = $PWD.Path
+    )
+    $value = $Answer.Trim().Trim('"').Trim("'").Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) { return $Fallback }
+
+    if ($value -eq "~") { return $HOME }
+    if ($value.StartsWith("~")) {
+        return (Join-Path $HOME $value.Substring(1).TrimStart('\', '/'))
+    }
+    if (-not [System.IO.Path]::IsPathRooted($value)) {
+        return (Join-Path $Base $value)
+    }
+    return $value
+}
+
+# Pytanie o katalog instalacji (tylko tryb bootstrap). Pod irm|iex konsola jest stdin-em
+# procesu (zweryfikowane 2026-07-01 na Windows 11 + PS 5.1), wiec Read-Host czyta klawiature.
+# Gdy stdin jest przekierowany (CI, potok), Read-Host oddaje pusty string albo rzuca -
+# obie drogi konczy sie katalogiem domyslnym, nigdy zawieszeniem instalatora.
+function Read-InstallDir {
+    if ($env:INSTALL_DIR) {
+        Write-Host "[info] Katalog instalacji z env INSTALL_DIR: $InstallDir" -ForegroundColor Cyan
+        return $InstallDir
+    }
+    $answer = ""
+    try {
+        $answer = Read-Host "Katalog instalacji [$InstallDirDefault]"
+    }
+    catch {
+        Write-Host "[warn] Brak interaktywnego wejscia - instaluje w katalogu domyslnym." -ForegroundColor Yellow
+    }
+    $resolved = Resolve-InstallDir -Answer $answer -Fallback $InstallDirDefault
+    Write-Host "[ok] Katalog instalacji: $resolved" -ForegroundColor Green
+    return $resolved
+}
+
+# Czy katalog wyglada na instalacje Pulsa (kod + stan). Rozpoznajemy po ARTEFAKTACH,
+# nie po nazwie katalogu: nazwa jest wolna odpowiedzia usera, a decyzja "wolno to
+# skasowac" musi wisiec na zawartosci.
+function Test-PulsInstallDir {
+    param([Parameter(Mandatory = $true)][string] $Dir)
+
+    $pkg = Join-Path $Dir "package.json"
+    if ((Test-Path -LiteralPath $pkg -PathType Leaf) -and
+        ((Get-Content -Raw -LiteralPath $pkg -ErrorAction SilentlyContinue) -match '"name"\s*:\s*"claude-cron"')) {
+        return $true
+    }
+    # Instalacja bootstrapowa: kod serwera + katalog stanu (data\) albo portable Node (.node\).
+    $server = Join-Path $Dir "server.js"
+    if ((Test-Path -LiteralPath $server -PathType Leaf) -and
+        ((Test-Path -LiteralPath (Join-Path $Dir "data") -PathType Container) -or
+         (Test-Path -LiteralPath (Join-Path $Dir ".node") -PathType Container))) {
+        return $true
+    }
+    return $false
+}
+
+# Katalog domowy i korzen dysku sa POZA zasiegiem instalatora: Install-FreshRepo podmienia
+# katalog w calosci, a Stop-PulsProcesses ubija procesy spod tej sciezki - obie operacje
+# na $HOME albo C:\ to katastrofa.
+function Test-ForbiddenInstallDir {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string] $Dir)
+
+    if ([string]::IsNullOrWhiteSpace($Dir)) { return $true }
+    try {
+        $full = [System.IO.Path]::GetFullPath($Dir).TrimEnd('\')
+    }
+    catch {
+        return $true  # nieparsowalna sciezka - fail-closed
+    }
+    if ($full -eq ([System.IO.Path]::GetFullPath($HOME).TrimEnd('\'))) { return $true }
+    if ($full -eq ([System.IO.Path]::GetPathRoot($full).TrimEnd('\'))) { return $true }
+    return $false
+}
+
+# Klasyfikacja celu instalacji (parytet z classify_install_target w install.sh):
+#   forbidden | file | empty | puls | foreign
+function Get-InstallTargetKind {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string] $Dir)
+
+    if (Test-ForbiddenInstallDir -Dir $Dir) { return "forbidden" }
+    if (Test-Path -LiteralPath $Dir -PathType Leaf) { return "file" }
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return "empty" }
+
+    $items = @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)
+    if ($items.Count -eq 0) { return "empty" }
+    if (Test-PulsInstallDir -Dir $Dir) { return "puls" }
+    return "foreign"
+}
+
+# Guard PRZED destrukcyjnym Move-Item: kosz lezy w katalogu tmp kasowanym w finally,
+# wiec pomylka w odpowiedzi o katalog (korzen dysku, katalog dokumentow, literowka we
+# wklejonej sciezce) trwale kasowalaby dane usera - Move-PreservedDirs ratuje wylacznie
+# data\ i .node\. Fail-closed: obca zawartosc podmieniamy WYLACZNIE po jawnym "t";
+# brak interaktywnego wejscia = odmowa, nie domyslna zgoda.
+function Confirm-InstallDirReplaceable {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string] $Dir)
+
+    $kind = Get-InstallTargetKind -Dir $Dir
+    if ($kind -eq "empty" -or $kind -eq "puls") { return }
+
+    if ($kind -eq "forbidden") {
+        throw "Katalog instalacji '$Dir' to katalog domowy albo korzen dysku - instalacja podmienia ten katalog w calosci. Podaj podkatalog, np. $(Join-Path $HOME 'claude-cron')."
+    }
+    if ($kind -eq "file") {
+        throw "Sciezka instalacji '$Dir' wskazuje plik, nie katalog. Podaj sciezke katalogu."
+    }
+
+    Write-Host "[warn] Katalog '$Dir' nie jest pusty i NIE wyglada na instalacje Pulsa." -ForegroundColor Yellow
+    Write-Host "[warn] Instalacja podmienia go w calosci - zachowane zostana tylko data\ i .node\." -ForegroundColor Yellow
+    $answer = ""
+    try {
+        $answer = Read-Host "Skasowac zawartosc $Dir i zainstalowac tam Pulsa? [t/N]"
+    }
+    catch {
+        throw "Brak interaktywnego wejscia, zeby potwierdzic skasowanie zawartosci '$Dir'. Podaj pusty katalog przez INSTALL_DIR."
+    }
+    if ($answer.Trim().ToLower() -notin @("t", "tak", "y", "yes")) {
+        throw "Przerwane na zyczenie - zawartosc '$Dir' nietknieta. Uruchom instalator ponownie i podaj inny katalog."
+    }
+    Write-Host "[ok] Potwierdzono podmiane katalogu $Dir." -ForegroundColor Green
 }
 
 # ============ BOOTSTRAP (irm|iex, bez git) ============
@@ -94,13 +230,41 @@ function Expand-RepoFromZip {
 # serwer trzyma data\claude-cron.db, wiec re-run instalatora padal na Move-Item
 # ("Proces nie moze uzyskac dostepu do pliku..."). Na Unixie problemu nie ma (przenoszenie
 # otwartego pliku jest legalne), dlatego install.sh tego nie potrzebuje.
-# Filtr po CommandLine zawierajacym $InstallDir - NIE zabijamy cudzych procesow node.
+# Filtr po CommandLine z GRANICA SCIEZKI (znormalizowany katalog + '\') - NIE zabijamy
+# cudzych procesow node. Goly Contains lapal rodzenstwo ("C:\puls" trafialo w proces
+# z "C:\puls-backup"), a przy odpowiedzi usera w rodzaju katalogu domowego - kazdy proces
+# node tego uzytkownika. Katalog domowy i korzen dysku sa odrzucane wprost (fail-closed).
 # Daemon wstaje z powrotem po instalacji (hook autostartu / Task Scheduler).
+function Get-PulsProcessPathPrefix {
+    param([Parameter(Mandatory = $true)][string] $Dir)
+    return ([System.IO.Path]::GetFullPath($Dir).TrimEnd('\') + '\')
+}
+
+# Czyste dopasowanie linii polecen do prefiksu sciezki instalacji - wydzielone, zeby
+# test sprawdzal ZACHOWANIE filtra, a nie powtarzal wyrazenia z Where-Object.
+# Porownanie MUSI byc case-insensitive: sciezki Windows nie rozrozniaja wielkosci liter,
+# wiec daemon zapisany jako "C:\Puls\..." przezywal filtr zbudowany z "C:\puls\" i
+# blokowal pliki -> Move-Item padal na "Proces nie moze uzyskac dostepu do pliku".
+function Test-PulsProcessPath {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowNull()][string] $CommandLine,
+        [Parameter(Mandatory = $true)][string] $Prefix
+    )
+    if ([string]::IsNullOrEmpty($CommandLine)) { return $false }
+    return $CommandLine.IndexOf($Prefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
 function Stop-PulsProcesses {
     param([Parameter(Mandatory = $true)][string] $Dir)
 
+    if (Test-ForbiddenInstallDir -Dir $Dir) {
+        Write-Host "[warn] Pomijam zatrzymywanie procesow: '$Dir' to katalog domowy albo korzen dysku." -ForegroundColor Yellow
+        return
+    }
+    $prefix = Get-PulsProcessPathPrefix -Dir $Dir
+
     $procs = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine.Contains($Dir) })
+        Where-Object { Test-PulsProcessPath -CommandLine $_.CommandLine -Prefix $prefix })
     if ($procs.Count -eq 0) { return }
 
     foreach ($p in $procs) {
@@ -118,6 +282,9 @@ function Install-FreshRepo {
         [Parameter(Mandatory = $true)][string] $FreshDir,
         [Parameter(Mandatory = $true)][string] $TmpDir
     )
+
+    # Guard PRZED jakakolwiek zmiana na dysku - katalog to wolna odpowiedz usera.
+    Confirm-InstallDirReplaceable -Dir $InstallDir
 
     $parent = Split-Path -Parent $InstallDir
     if ($parent -and -not (Test-Path -LiteralPath $parent)) {
@@ -146,6 +313,12 @@ function Invoke-Bootstrap {
     Write-Host ""
     Write-Host "CLAUDE-CRON - instalacja jedna komenda" -ForegroundColor Cyan
     Write-Host "========================================"
+    Write-Host ""
+
+    # Katalog PRZED pobraniem czegokolwiek - Install-FreshRepo i Stop-PulsProcesses
+    # dostaja juz docelowa sciezke (filtr procesow idzie po sciezce instalacji).
+    $script:InstallDir = Read-InstallDir
+
     Write-Host ""
     Write-Host "  Pobieram repo do $InstallDir (bez git) i konfiguruje." -ForegroundColor DarkGray
     Write-Host ""

@@ -7,6 +7,7 @@ const {
   overlapsMaintenanceWindow,
   validateMemberName, memberRowData, MEMBER_NAME_MAX,
   isTabAvailable, resolveVisibleTab,
+  runningRunsFrom, formatElapsed, activeRunRows, activeRunsSignature,
 } = require('./render-helpers');
 
 const MAINTENANCE_WINDOW = { startHour: 2, startMin: 0, endHour: 2, endMin: 15 };
@@ -397,4 +398,138 @@ test('resolveVisibleTab: aktywna zakładka znika po przełączeniu env → fallb
 test('resolveVisibleTab: nieznana zakładka nie wywraca renderu', () => {
   assert.equal(resolveVisibleTab(undefined, { hubConfigured: false }), 'jobs');
   assert.equal(resolveVisibleTab('nieistniejaca', { hubConfigured: true }), 'nieistniejaca');
+});
+
+// === runningRunsFrom / formatElapsed / activeRunRows / activeRunsSignature (R2/R6) ===
+
+test('runningRunsFrom: current_runs zwracane w całości (kilka runów naraz)', () => {
+  const status = { current_runs: [{ id: 1 }, { id: 2 }] };
+  assert.deepEqual(runningRunsFrom(status).map((r) => r.id), [1, 2]);
+});
+
+test('runningRunsFrom: instancja bez current_runs → fallback na current_run (parytet API)', () => {
+  assert.deepEqual(runningRunsFrom({ current_run: { id: 7 } }).map((r) => r.id), [7]);
+});
+
+test('runningRunsFrom: brak biegnących runów → pusta lista (bez rzucania)', () => {
+  assert.deepEqual(runningRunsFrom({ current_run: null }), []);
+  assert.deepEqual(runningRunsFrom({}), []);
+  assert.deepEqual(runningRunsFrom(null), []);
+});
+
+test('runningRunsFrom: pusta tablica current_runs wygrywa ze starym current_run', () => {
+  // Nowy serwer po zakończeniu runu oddaje current_runs:[] i current_run:null — ale gdyby
+  // stare pole zostało nieopróżnione, pasek nie może wskrzeszać martwego runu.
+  assert.deepEqual(runningRunsFrom({ current_runs: [], current_run: { id: 9 } }), []);
+});
+
+test('formatElapsed: poniżej minuty → sekundy', () => {
+  const start = '2026-07-30T10:00:00Z';
+  assert.equal(formatElapsed(start, Date.parse(start) + 12_000), '12s');
+});
+
+test('formatElapsed: powyżej minuty → minuty i sekundy', () => {
+  const start = '2026-07-30T10:00:00Z';
+  assert.equal(formatElapsed(start, Date.parse(start) + 187_000), '3m 7s');
+});
+
+test('formatElapsed: znacznik bez sufiksu Z traktowany jako UTC (jak reszta API)', () => {
+  const withZ = formatElapsed('2026-07-30T10:00:00Z', Date.parse('2026-07-30T10:00:30Z'));
+  const withoutZ = formatElapsed('2026-07-30T10:00:00', Date.parse('2026-07-30T10:00:30Z'));
+  assert.equal(withoutZ, withZ);
+});
+
+test('formatElapsed: brak/nieparsowalny znacznik → myślnik', () => {
+  assert.equal(formatElapsed(null, Date.now()), '—');
+  assert.equal(formatElapsed('', Date.now()), '—');
+  assert.equal(formatElapsed('nie-data', Date.now()), '—');
+});
+
+test('formatElapsed: zegar przeglądarki przed startem runu → 0s, nigdy czas ujemny', () => {
+  const start = '2026-07-30T10:00:00Z';
+  assert.equal(formatElapsed(start, Date.parse(start) - 5000), '0s');
+});
+
+test('activeRunRows: nazwa joba z mapy + czas trwania', () => {
+  const now = Date.parse('2026-07-30T10:01:00Z');
+  const rows = activeRunRows(
+    [{ id: 11, job_id: 3, started_at: '2026-07-30T10:00:30Z' }],
+    { 3: { id: 3, name: 'Raport dzienny' } },
+    now
+  );
+  assert.deepEqual(rows, [{ id: 11, name: 'Raport dzienny', elapsed: '30s' }]);
+});
+
+test('activeRunRows: dwa równoległe runy → dwa wiersze (R2)', () => {
+  const now = Date.parse('2026-07-30T10:01:00Z');
+  const rows = activeRunRows(
+    [
+      { id: 11, job_id: 3, started_at: '2026-07-30T10:00:30Z' },
+      { id: 12, job_id: 4, started_at: '2026-07-30T10:00:50Z' },
+    ],
+    { 3: { name: 'Raport' }, 4: { name: 'Inbox sync' } },
+    now
+  );
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((r) => r.id), [11, 12]);
+  assert.deepEqual(rows.map((r) => r.name), ['Raport', 'Inbox sync']);
+});
+
+test('activeRunRows: job nieznany (usunięty w trakcie runu) → fallback "Job #id"', () => {
+  const rows = activeRunRows([{ id: 5, job_id: 42, started_at: null }], {}, Date.now());
+  assert.equal(rows[0].name, 'Job #42');
+  assert.equal(rows[0].elapsed, '—');
+});
+
+test('activeRunRows: run bez liczbowego id pomijany (id trafia do onclick)', () => {
+  const rows = activeRunRows(
+    [{ id: '7); alert(1', job_id: 1 }, { id: 8, job_id: 1 }],
+    { 1: { name: 'Job' } },
+    Date.now()
+  );
+  assert.deepEqual(rows.map((r) => r.id), [8]);
+});
+
+test('activeRunRows: nullowe wejścia nie wywracają renderu', () => {
+  assert.deepEqual(activeRunRows(null, null, Date.now()), []);
+  assert.deepEqual(activeRunRows([null], {}, Date.now()), []);
+});
+
+test('activeRunsSignature: sam upływ czasu NIE zmienia podpisu (bez migotania paska)', () => {
+  const run = { id: 11, job_id: 3, started_at: '2026-07-30T10:00:00Z' };
+  const t0 = Date.parse('2026-07-30T10:00:10Z');
+  const a = activeRunsSignature(activeRunRows([run], { 3: { name: 'Raport' } }, t0));
+  const b = activeRunsSignature(activeRunRows([run], { 3: { name: 'Raport' } }, t0 + 3000));
+  assert.equal(a, b, 'tykający czas trwania nie może przebudowywać listy');
+});
+
+test('activeRunsSignature: start drugiego runu zmienia podpis (re-render listy)', () => {
+  const jobs = { 3: { name: 'Raport' }, 4: { name: 'Inbox sync' } };
+  const now = Date.parse('2026-07-30T10:01:00Z');
+  const one = activeRunsSignature(activeRunRows([{ id: 11, job_id: 3 }], jobs, now));
+  const two = activeRunsSignature(activeRunRows([{ id: 11, job_id: 3 }, { id: 12, job_id: 4 }], jobs, now));
+  assert.notEqual(one, two);
+});
+
+test('activeRunsSignature: zakończenie jednego z dwóch runów zmienia podpis (R6)', () => {
+  const jobs = { 3: { name: 'Raport' }, 4: { name: 'Inbox sync' } };
+  const now = Date.parse('2026-07-30T10:01:00Z');
+  const two = activeRunsSignature(activeRunRows([{ id: 11, job_id: 3 }, { id: 12, job_id: 4 }], jobs, now));
+  const left = activeRunsSignature(activeRunRows([{ id: 12, job_id: 4 }], jobs, now));
+  assert.notEqual(two, left);
+});
+
+test('activeRunsSignature: zmiana nazwy joba przebudowuje wiersz', () => {
+  const now = Date.parse('2026-07-30T10:01:00Z');
+  const before = activeRunsSignature(activeRunRows([{ id: 11, job_id: 3 }], { 3: { name: 'Stara' } }, now));
+  const after = activeRunsSignature(activeRunRows([{ id: 11, job_id: 3 }], { 3: { name: 'Nowa' } }, now));
+  assert.notEqual(before, after);
+});
+
+test('pollSignature: start drugiego równoległego runu zmienia podpis (R2)', () => {
+  const runs = [{ id: 1, status: 'running' }];
+  const base = { queue_length: 0, current_run: { id: 1 } };
+  const one = pollSignature(runs, { ...base, current_runs: [{ id: 1 }] });
+  const two = pollSignature(runs, { ...base, current_runs: [{ id: 1 }, { id: 2 }] });
+  assert.notEqual(one, two, 'drugi biegnący run MUSI wpływać na podpis historii');
 });

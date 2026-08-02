@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 16 -->
+<!-- rule-count: 17 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -51,3 +51,6 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **Instalator podmieniający katalog aplikacji MUSI najpierw ubić jej procesy (Windows), a testowany z gałęzi — adresować po SHA**: Windows nie pozwala przenieść pliku z otwartym uchwytem, więc `Move-Item` na `data\` pada, gdy daemon trzyma bazę (`Proces nie moze uzyskac dostepu do pliku`); na Unixie to samo przechodzi, bo przenoszenie otwartego pliku jest legalne — suita na macOS nie powie NIC o Windowsie. Ubijaj filtrem po ścieżce instalacji (`CommandLine.Contains($Dir)`), nigdy po nazwie binarki, i pokryj to testem z obcym procesem. Drugi krok: `raw.githubusercontent.com` cachuje URL-e z nazwą gałęzi kilka minut — po pushu zweryfikuj `curl … | grep -c NOWA_FUNKCJA` i podawaj komendy po SHA commita (ZIP topdir to wtedy `<repo>-<pełny-SHA>`), inaczej użytkownik pobiera starą wersję i „fix nie działa".
   Source: docs/solutions/deployment-issues/2026-07-28-windows-re-run-instalatora-zablokowane-pliki-i-cache-raw.md
+
+- **Próg wykrywający lukę między okresowymi śladami życia > okres, nigdy równy — a mock timers to ukryją**: Timery libuv gwarantują tylko „nie wcześniej niż", więc luka między tyknięciami `setInterval(period)` to ZAWSZE `period + kilka ms` — próg `gap > period` bierze KAŻDE normalne tyknięcie za wybudzenie/awarię (u nas: karencja 45 s co minutę, cała kolejka spowolniona, log zalany fałszywym alarmem). Przenosząc stałą progową między modułami sprawdź okres tickowania po nowej stronie (60 s przy ticku 5 s ≠ 60 s przy ticku 60 s) i licz próg jako `okres + definicja zdarzenia`; znacznik pisany co N s jest dodatkowo przestarzały o 0–N s, więc ta granulacja wchodzi do progu. `t.mock.timers.tick(period)` daje gap DOKŁADNIE równy progowi — wartość nieosiągalną w produkcji — więc test jest zielony przy złamanym zachowaniu; dokładaj jawny jitter (`setTime(now + 2)`). I wykrywaj zdarzenie globalne (pobudka maszyny) na ścieżce, która po nim faktycznie biegnie, nie tylko w jednym callbacku timera — po pobudce kolejność zaległych timerów nie jest twoja.
+  Source: docs/solutions/runtime-errors/2026-07-30-prog-detekcji-snu-rowny-okresowi-heartbeatu.md

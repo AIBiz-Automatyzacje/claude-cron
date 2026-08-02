@@ -26,8 +26,17 @@ NODE_VERSION="22.17.0"
 TARBALL_URL="${CLAUDE_CRON_TARBALL_URL:-https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/main.tar.gz}"
 TARBALL_TOPDIR="${CLAUDE_CRON_TARBALL_TOPDIR:-claude-cron-main}"
 
-# Docelowy katalog instalacji w trybie bootstrap (override przez env w testach).
-INSTALL_DIR="${INSTALL_DIR:-$HOME/claude-cron}"
+# Docelowy katalog instalacji w trybie bootstrap. Env-override (testy, automatyzacja,
+# druga instancja obok pierwszej) wygrywa i POMIJA pytanie — inaczej nieinteraktywny
+# przebieg z jawnie podanym katalogiem i tak pytałby o niego użytkownika.
+INSTALL_DIR_DEFAULT="$HOME/claude-cron"
+INSTALL_DIR_EXPLICIT=0
+# Forma if/then, NIE `[ ... ] && VAR=1`: pod `set -e` fałszywy test na końcu listy kończy
+# cały skrypt (przy pustym INSTALL_DIR instalator wychodził tu z kodem 1, bez komunikatu).
+if [ -n "${INSTALL_DIR:-}" ]; then
+  INSTALL_DIR_EXPLICIT=1
+fi
+INSTALL_DIR="${INSTALL_DIR:-$INSTALL_DIR_DEFAULT}"
 
 # Katalogi przenoszone ze starej instalacji do świeżej (allowlist, NIE blacklist).
 # data/  = baza SQLite + logi (NIGDY nie kasować przy re-run).
@@ -80,6 +89,201 @@ detect_arch() {
   esac
 }
 
+# ============ KATALOG INSTALACJI ============
+
+# resolve_install_dir <odpowiedz> <domyslny> [baza] — czysta zamiana odpowiedzi na ścieżkę.
+# Puste (sam Enter) → domyślny katalog. Drag & drop z Findera dokleja cudzysłowy i escape'y
+# spacji, a `~` w wartości z `read` NIE jest rozwijane przez powłokę (rozwijanie tyldy
+# działa tylko na tekście kodu) — obie rzeczy trzeba obsłużyć tu, inaczej powstałby
+# katalog o nazwie "~". Ścieżka względna → absolutna, bo cwd instalatora bywa przypadkowy.
+resolve_install_dir() {
+  local answer="$1" fallback="$2" base="${3:-$PWD}"
+  answer="${answer//\"/}"
+  answer="${answer//\'/}"
+  answer="${answer//\\/}"
+  answer="$(printf '%s' "$answer" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+
+  [ -n "$answer" ] || { printf '%s' "$fallback"; return 0; }
+
+  case "$answer" in
+    "~")   answer="$HOME" ;;
+    "~/"*) answer="$HOME/${answer#\~/}" ;;
+    /*)    ;;
+    *)     answer="$base/$answer" ;;
+  esac
+  printf '%s' "$answer"
+}
+
+# Źródło odpowiedzi interaktywnych. Override WYŁĄCZNIE dla testów (podstawiony plik
+# udaje terminal) — w realnym przebiegu zawsze /dev/tty.
+INSTALL_TTY="${INSTALL_TTY:-/dev/tty}"
+
+# is_puls_install <dir> — czy katalog wygląda na instalację Pulsa (kod + stan).
+# Rozpoznajemy po ARTEFAKTACH instalacji, nie po nazwie katalogu: nazwa jest wolną
+# odpowiedzią usera, a decyzja „wolno to skasować" musi wisieć na zawartości.
+is_puls_install() {
+  local dir="$1"
+  if [ -f "$dir/package.json" ] \
+    && grep -q '"name"[[:space:]]*:[[:space:]]*"claude-cron"' "$dir/package.json" 2>/dev/null; then
+    return 0
+  fi
+  # Instalacja bootstrapowa: kod serwera + katalog stanu (data/) albo portable Node (.node/).
+  if [ -f "$dir/server.js" ] && { [ -d "$dir/data" ] || [ -d "$dir/.node" ]; }; then
+    return 0
+  fi
+  return 1
+}
+
+# classify_install_target <dir> — czysta klasyfikacja celu instalacji:
+#   forbidden = $HOME albo korzeń (podmiana = katastrofa, nigdy nie ruszamy)
+#   file      = ścieżka istnieje, ale nie jest katalogiem
+#   empty     = nie istnieje albo jest pusty (wolno zająć)
+#   puls      = rozpoznana instalacja Pulsa (re-run — wolno podmienić)
+#   foreign   = niepusty katalog z CUDZĄ zawartością (wymaga potwierdzenia)
+# Sprowadza ścieżkę do postaci porównywalnej z $HOME. Dwa kroki, bo dotyczą dwóch
+# różnych klas zapisu tego samego katalogu:
+#   1) wszystkie końcowe ukośniki („~//" → „$HOME") — `${dir%/}` zdejmuje tylko jeden,
+#   2) segmenty „." i ".." („~/." , „~/kat/.." → „$HOME") — dla ścieżek ISTNIEJĄCYCH
+#      robi to jądro przez `cd` + `pwd -P` (rozwija przy okazji symlinki).
+# Ścieżki nieistniejącej nie ma czego kanonizować — i tak wyjdzie `empty`.
+canonicalize_dir_path() {
+  local p="$1" resolved
+  while [ "$p" != "${p%/}" ]; do p="${p%/}"; done
+  if [ -d "$p" ] && resolved="$(cd "$p" 2>/dev/null && pwd -P)" && [ -n "$resolved" ]; then
+    printf '%s' "$resolved"
+    return 0
+  fi
+  printf '%s' "$p"
+}
+
+classify_install_target() {
+  local dir="$1" normalized home_normalized
+  # Guard MUSI porównywać skanonizowane ścieżki: „~/." i „~/kat/.." wskazują katalog
+  # domowy, a bez redukcji wychodziły jako `foreign` — czyli pytanie [t/N] zamiast
+  # twardej odmowy. (Samo `mv` odmawia przeniesienia ścieżki kończącej się na „."/„..",
+  # więc dane ocalały, ale user dostawał kryptyczny błąd systemowy zamiast komunikatu.)
+  normalized="$(canonicalize_dir_path "$dir")"
+  home_normalized="$(canonicalize_dir_path "$HOME")"
+
+  if [ -z "$normalized" ] || [ "$normalized" = "$home_normalized" ]; then
+    printf 'forbidden'
+    return 0
+  fi
+  if [ -e "$dir" ] && [ ! -d "$dir" ]; then
+    printf 'file'
+    return 0
+  fi
+  if [ ! -d "$dir" ] || [ -z "$(ls -A "$dir" 2>/dev/null)" ]; then
+    printf 'empty'
+    return 0
+  fi
+  if is_puls_install "$dir"; then
+    printf 'puls'
+  else
+    printf 'foreign'
+  fi
+}
+
+# Guard PRZED destrukcyjnym `mv "$INSTALL_DIR" "$trash"`: kosz leży w katalogu tmp,
+# który `trap ... rm -rf` kasuje na wyjściu, więc pomyłka w odpowiedzi o katalog
+# („~", „~/Documents", literówka we wklejonej ścieżce z Findera) trwale kasowałaby
+# dane usera — `preserve_existing_dirs` ratuje wyłącznie data/ i .node/.
+# Fail-closed: obcą zawartość podmieniamy WYŁĄCZNIE po jawnym „t" z terminala;
+# brak terminala (curl|bash w CI) = odmowa, nie domyślna zgoda.
+assert_install_dir_replaceable() {
+  local dir="$1" kind answer=""
+  kind="$(classify_install_target "$dir")"
+
+  case "$kind" in
+    empty|puls) return 0 ;;
+    forbidden)
+      fail "Katalog instalacji '$dir' to katalog domowy albo korzeń — instalacja podmienia ten katalog w całości. Podaj podkatalog, np. $HOME/claude-cron."
+      ;;
+    file)
+      fail "Ścieżka instalacji '$dir' wskazuje plik, nie katalog. Podaj ścieżkę katalogu."
+      ;;
+  esac
+
+  warn "Katalog '$dir' nie jest pusty i NIE wygląda na instalację Pulsa."
+  warn "Instalacja podmienia go w całości — zachowane zostaną tylko data/ i .node/."
+  if ! has_tty; then
+    fail "Brak terminala, żeby potwierdzić skasowanie zawartości '$dir'. Podaj pusty katalog przez INSTALL_DIR albo uruchom instalator interaktywnie."
+  fi
+  printf "Skasować zawartość %s i zainstalować tam Pulsa? [t/N]: " "$dir"
+  IFS= read -r answer < "$INSTALL_TTY" || answer=""
+  case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+    t|tak|y|yes) ok "Potwierdzono podmianę katalogu $dir." ;;
+    *) fail "Przerwane na życzenie — zawartość '$dir' nietknięta. Uruchom instalator ponownie i podaj inny katalog." ;;
+  esac
+}
+
+# find_puls_pids <dir> <snapshot-ps> — czysta filtracja snapshotu `ps` po ŚCIEŻCE
+# instalacji. Nigdy po nazwie `node`: obce procesy Node (Claude Code, dev-serwery)
+# muszą przeżyć. Separator katalogu na końcu wzorca jest granicą — bez niego
+# „/x/puls" łapałoby „/x/puls-backup". Daemon ma ścieżkę instalacji w linii poleceń,
+# bo startuje portable Nodem z <dir>/.node/... (setup.mjs: spawnServer / hook).
+find_puls_pids() {
+  local dir="${1%/}" snapshot="$2"
+  [ -n "$dir" ] || return 0
+  printf '%s\n' "$snapshot" \
+    | awk -v needle="$dir/" 'index($0, needle) && index($0, "server.js") { print $1 }'
+}
+
+# Zatrzymuje daemona Pulsa działającego Z TEGO katalogu instalacji, PRZED podmianą
+# katalogu. Na Unixie przeniesienie otwartego katalogu jest legalne, więc bez tego
+# stary proces biegnie dalej ze STARYM kodem, a setup.mjs widzi żywy dashboard na
+# porcie i nie startuje nowego serwera — user po aktualizacji zostaje na starej wersji.
+# (Parytet ze Stop-PulsProcesses z install.ps1, gdzie powód jest inny: blokady plików.)
+stop_puls_processes() {
+  local dir="${1%/}" snapshot pids pid killed=0
+  [ -n "$dir" ] || return 0
+  command -v ps >/dev/null 2>&1 || return 0
+
+  # Snapshot PRZED odpaleniem filtra: inaczej awk (którego linia poleceń zawiera
+  # szukaną ścieżkę) trafiłby na własną listę.
+  snapshot="$(ps -axo pid=,command= 2>/dev/null || true)"
+  pids="$(find_puls_pids "$dir" "$snapshot")"
+
+  for pid in $pids; do
+    if [ "$pid" != "$$" ]; then
+      info "Zatrzymuję daemona Pulsa (PID $pid) — biegnie ze starego kodu w $dir."
+      kill "$pid" 2>/dev/null || true
+      killed=1
+    fi
+  done
+  [ "$killed" = 1 ] && sleep 1
+  return 0
+}
+
+# Czy da się CZYTAĆ z terminala. Test `-r /dev/tty` kłamie: na macOS węzeł urządzenia
+# istnieje i jest „czytelny" także dla procesu bez terminala kontrolującego, a dopiero
+# otwarcie zwraca „Device not configured" — pod `set -e` wywalało to instalator bez
+# komunikatu. Guard musi więc SPRAWDZIĆ stan faktyczny: otworzyć i zamknąć.
+has_tty() {
+  { : < "$INSTALL_TTY"; } 2>/dev/null
+}
+
+# Pytanie o katalog instalacji (tylko tryb bootstrap). W `curl|bash` stdin to potok z
+# treścią skryptu — `read` dostałby EOF i cicho wziął domyślną wartość — więc czytamy
+# z terminala. Prompt idzie na stdout (w curl|bash to nadal terminal usera; przekierowanie
+# na /dev/tty nic by nie dało, a zepsułoby testowalność). Brak terminala = środowisko
+# nieinteraktywne → domyślny katalog z komunikatem, nigdy zwis na prompcie.
+ask_install_dir() {
+  local answer=""
+  if [ "$INSTALL_DIR_EXPLICIT" = "1" ]; then
+    info "Katalog instalacji z env INSTALL_DIR: $INSTALL_DIR"
+    return 0
+  fi
+  if has_tty; then
+    printf "Katalog instalacji [%s]: " "$INSTALL_DIR_DEFAULT"
+    IFS= read -r answer < "$INSTALL_TTY" || answer=""
+  else
+    warn "Brak terminala — instaluję w domyślnym katalogu (środowisko nieinteraktywne)."
+  fi
+  INSTALL_DIR="$(resolve_install_dir "$answer" "$INSTALL_DIR_DEFAULT")"
+  ok "Katalog instalacji: $INSTALL_DIR"
+}
+
 # ============ BOOTSTRAP (curl|bash, bez git) ============
 
 # Przenosi allowlistowane katalogi (data/, .node/) ze starej instalacji
@@ -127,9 +331,14 @@ extract_repo_from_tarball() {
 install_fresh_repo() {
   local fresh_dir="$1" tmp_dir="$2"
 
+  # Guard PRZED jakąkolwiek zmianą na dysku — katalog to wolna odpowiedź usera.
+  assert_install_dir_replaceable "$INSTALL_DIR"
+
   mkdir -p "$(dirname "$INSTALL_DIR")"
 
   if [ -d "$INSTALL_DIR" ]; then
+    # PRZED przenoszeniem: stary daemon musi zniknąć, inaczej biegnie dalej ze starym kodem.
+    stop_puls_processes "$INSTALL_DIR"
     preserve_existing_dirs "$INSTALL_DIR" "$fresh_dir"
     # Stara instalacja idzie do kosza w tmp (sprzątane przez trap EXIT).
     local trash="$tmp_dir/old-install"
@@ -147,6 +356,10 @@ run_bootstrap() {
   echo ""
   echo -e "${CYAN}🕹️  CLAUDE-CRON — instalacja jedną komendą${NC}"
   echo "========================================"
+  echo ""
+
+  ask_install_dir
+
   echo ""
   echo -e "  ${DIM}Pobieram repo do ${INSTALL_DIR} (bez git) i konfiguruję.${NC}"
   echo ""
@@ -256,10 +469,13 @@ ensure_dependencies() {
 # dla kursanta nieodróżnialne od błędu. Ta sama flaga co w package.json.
 handoff_to_setup() {
   info "Przekazuję sterowanie do setup.mjs..."
-  if [ -r /dev/tty ]; then
-    exec "$NODE_BIN" --disable-warning=ExperimentalWarning "$REPO_DIR/setup.mjs" < /dev/tty
+  # has_tty zamiast `-r /dev/tty`: samo prawo odczytu nie znaczy, że urządzenie da się
+  # otworzyć (macOS bez terminala kontrolującego) — a nieudany `exec ... < /dev/tty`
+  # kończy instalację twardym błędem zamiast wejść w ścieżkę nieinteraktywną.
+  if has_tty; then
+    exec "$NODE_BIN" --disable-warning=ExperimentalWarning "$REPO_DIR/setup.mjs" < "$INSTALL_TTY"
   else
-    warn "Brak /dev/tty — setup uruchamiam bez interaktywnego stdin (środowisko nieinteraktywne)."
+    warn "Brak terminala — setup uruchamiam bez interaktywnego stdin (środowisko nieinteraktywne)."
     exec "$NODE_BIN" --disable-warning=ExperimentalWarning "$REPO_DIR/setup.mjs"
   fi
 }

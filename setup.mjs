@@ -20,6 +20,7 @@ import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline/promises';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,12 +40,123 @@ const REPO_DIR = path.dirname(fileURLToPath(import.meta.url));
 const HOOK_MARKER = 'claude-cron-autostart';
 const EXPERIMENTAL_WARNING_FLAG = '--disable-warning=ExperimentalWarning';
 
-// Dashboard claude-cron — port wolny z założenia (kolizji nie obsługujemy, poza scope).
-export const DASHBOARD_PORT = 7777;
-export const DASHBOARD_URL = `http://localhost:${DASHBOARD_PORT}`;
+// Dashboard claude-cron — domyślny port (lib/config.js: CLAUDE_CRON_PORT || 7777).
+// Realny port setupu ustala resolveDashboardPort: kolizja z cudzym procesem jest błędem,
+// kolizja z NASZĄ starą instancją to zwykły re-run instalatora.
+export const DEFAULT_DASHBOARD_PORT = 7777;
+// OTHER_PULS: na porcie działa Puls, ale z INNEGO katalogu instalacji (od Unitu 7 katalog
+// jest wyborem usera, więc druga instancja obok pierwszej to scenariusz realny). Traktujemy
+// go jak kolizję, nie jak re-run — inaczej setup adoptowałby cudzy proces, nowa instalacja
+// nigdy by nie wstała, a hook autostartu celowałby w ten sam port z innego katalogu.
+export const PORT_STATE = { FREE: 'free', OURS: 'ours', OTHER_PULS: 'other-puls', FOREIGN: 'foreign' };
+// Ile razy pytamy o zastępczy port, zanim uznamy, że instalacja nie ma gdzie wstać.
+export const PORT_RESOLVE_ATTEMPTS = 5;
+// Cap odpowiedzi z sondowanego portu. Nasz /api/status to ~400 B; 64 KB zostawia zapas
+// na rozrost kontraktu, a odcina proces, który streamuje bez końca (sondujemy CUDZY port).
+export const STATUS_PAYLOAD_MAX_BYTES = 64 * 1024;
 // Limit pollowania serwera po spawnie, zanim wypiszemy link / otworzymy przeglądarkę.
 const SERVER_POLL_ATTEMPTS = 20;
 const SERVER_POLL_INTERVAL_MS = 500;
+
+export function buildDashboardUrl(port) {
+  return `http://localhost:${port}`;
+}
+
+// === Pure helper: odpowiedź o port → numer albo null (nieakceptowalne) ===
+// Puste → fallback (Enter zostawia bieżącą wartość). Sama cyfra nie wystarcza: 0 i >65535
+// są nieadresowalne, a śmieć („7777x") cicho wylądowałby w CLAUDE_CRON_PORT, gdzie
+// parseInt zjadłby ogon i serwer wstałby na innym porcie niż wypisany link.
+export function parsePortAnswer(input, fallback = null) {
+  const value = String(input ?? '').trim();
+  if (!value) return fallback;
+  if (!/^\d+$/.test(value)) return null;
+  const port = Number(value);
+  return port >= 1 && port <= 65535 ? port : null;
+}
+
+// === Pure helper: czy odpowiedź z portu to NASZ dashboard ===
+// Kotwica po ZESTAWIE pól kontraktu GET /api/status (server.js), nie po luźnym substringu:
+// na zajętym porcie może siedzieć dowolne API zwracające JSON, a fałszywe „to nasze"
+// kazałoby instalatorowi zignorować realną kolizję i zameldować sukces z martwym serwerem.
+export function isPulsStatusPayload(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  return ['uptime', 'queue_length', 'total_jobs', 'enabled_jobs'].every(
+    (key) => typeof payload[key] === 'number',
+  );
+}
+
+// === Pure helper: czy Puls z portu to TA SAMA instalacja co konfigurowana ===
+// `repo_dir` z GET /api/status vs katalog tego setupu. Brak pola (instancja sprzed tej
+// wersji) = „nie wiem" → null, NIE „to nie my": wymuszanie zmiany portu na zwykłym
+// re-runie nad starym daemonem byłoby gorsze niż ostrzeżenie (pole zniknie po restarcie).
+export function isSameInstallation(statusPayload, repoDir) {
+  const reported = statusPayload?.repo_dir;
+  if (typeof reported !== 'string' || !reported || !repoDir) return null;
+  return path.resolve(reported) === path.resolve(repoDir);
+}
+
+// === Pure helper: stan portu z sygnałów (bind-test + odpowiedź /api/status + katalog) ===
+export function classifyPortState({ bindable, statusPayload, repoDir = null }) {
+  if (bindable) return PORT_STATE.FREE;
+  if (!isPulsStatusPayload(statusPayload)) return PORT_STATE.FOREIGN;
+  return isSameInstallation(statusPayload, repoDir) === false
+    ? PORT_STATE.OTHER_PULS
+    : PORT_STATE.OURS;
+}
+
+export function buildOtherPulsMessage(port) {
+  return [
+    `[warn] Port ${port} trzyma Puls z INNEGO katalogu instalacji — to nie jest re-run tej instalacji.`,
+    '       Dwie instancje na jednym porcie nie wstaną: podaj inny port albo zatrzymaj tamtą instancję.',
+    `       Kto trzyma port: lsof -nP -iTCP:${port} -sTCP:LISTEN`,
+  ].join('\n');
+}
+
+export function buildPortBusyMessage(port) {
+  return [
+    `[warn] Port ${port} zajmuje inny program (to nie jest Puls).`,
+    '       Zwolnij go albo podaj inny port — dashboard, autostart i serwer użyją tej samej wartości.',
+    `       Kto trzyma port: lsof -nP -iTCP:${port} -sTCP:LISTEN`,
+    `       (Windows: Get-NetTCPConnection -LocalPort ${port} | Select-Object OwningProcess)`,
+  ].join('\n');
+}
+
+export function buildPortReuseMessage(port) {
+  return `[ok] Na porcie ${port} działa już Puls — to re-run instalatora, nie kolizja.`;
+}
+
+// === Wybór portu dashboardu (DI: probePort/askPort/log — testowalne bez gniazd) ===
+// Zwraca { port, reused }. FOREIGN → komunikat z numerem portu + pytanie o zastępczy;
+// brak akceptowalnej odpowiedzi → rzuca. Fail-fast jest tu sednem R9: instalacja
+// kończąca się „sukcesem" na zajętym porcie zostawia usera z martwym dashboardem.
+export async function resolveDashboardPort({ initialPort, probePort, askPort, log = console.log }) {
+  let port = initialPort;
+  for (let attempt = 0; attempt < PORT_RESOLVE_ATTEMPTS; attempt += 1) {
+    const state = await probePort(port);
+    if (state === PORT_STATE.FREE) {
+      return { port, reused: false };
+    }
+    if (state === PORT_STATE.OURS) {
+      log(buildPortReuseMessage(port));
+      return { port, reused: true };
+    }
+    // OTHER_PULS i FOREIGN idą tą samą ścieżką (pytanie o zastępczy port), różnią się
+    // wyłącznie komunikatem — „inny Puls" wymaga innej porady niż „obcy program".
+    log(state === PORT_STATE.OTHER_PULS ? buildOtherPulsMessage(port) : buildPortBusyMessage(port));
+    const answer = parsePortAnswer(await askPort(port), null);
+    if (answer === null) {
+      throw new Error(
+        `Port ${port} zajmuje inny program, a nie podano poprawnego portu zastępczego (1-65535). `
+        + 'Zwolnij port albo uruchom instalator ponownie.',
+      );
+    }
+    port = answer;
+  }
+  throw new Error(
+    `Nie znalazłem wolnego portu dla dashboardu po ${PORT_RESOLVE_ATTEMPTS} próbach `
+    + '— zwolnij port i uruchom instalator ponownie.',
+  );
+}
 
 // === Pure helper: ścieżka binarki portable Node (layout install.sh / install.ps1) ===
 // darwin/linux: <base>/node-v<ver>-<platform>-<arch>/bin/node
@@ -132,7 +244,11 @@ export function removeHookFromSettings(existing) {
 }
 
 // === Pure helper: źródło hooka autostartu z absolutną ścieżką node + flagą ===
-export function buildHookSource(repoDir, nodeBinPath) {
+// Port wypalany razem z resztą: hook żyje w sesji Claude Code, której env pochodzi
+// sprzed instalacji (zmiana env nie propaguje się do żyjących procesów — docs/solutions
+// 2026-07-07), więc CLAUDE_CRON_PORT wstrzykujemy jawnie do spawnu. Inaczej health-check
+// pytałby o jeden port, a wskrzeszony serwer wstawałby na innym.
+export function buildHookSource(repoDir, nodeBinPath, port = DEFAULT_DASHBOARD_PORT) {
   return `const http = require('http');
 const { spawn } = require('child_process');
 
@@ -141,14 +257,17 @@ const { spawn } = require('child_process');
 // portable Node (brak fnm/nvm), więc detached serwer dostaje pełną ścieżkę.
 const NODE_BIN = ${JSON.stringify(nodeBinPath)};
 const CRON_DIR = ${JSON.stringify(repoDir)};
+const PORT = ${JSON.stringify(String(port))};
+const STATUS_URL = ${JSON.stringify(`${buildDashboardUrl(port)}/api/status`)};
 
-const req = http.get('http://localhost:7777/api/status', { timeout: 1000 }, () => {
+const req = http.get(STATUS_URL, { timeout: 1000 }, () => {
   process.exit(0);
 });
 
 req.on('error', () => {
   const child = spawn(NODE_BIN, ['${EXPERIMENTAL_WARNING_FLAG}', 'server.js'], {
     cwd: CRON_DIR,
+    env: { ...process.env, CLAUDE_CRON_PORT: PORT },
     detached: true,
     stdio: 'ignore',
   });
@@ -162,7 +281,7 @@ req.on('error', () => {
     }).unref();
   }
 
-  console.log('🕹️ Claude-Cron started in background (localhost:7777)');
+  console.log('🕹️ Claude-Cron started in background (localhost:' + PORT + ')');
   process.exit(0);
 });
 
@@ -381,31 +500,156 @@ function pickFolderGui(promptText, spawn = spawnSync) {
   return parseFolderPickerResult(result);
 }
 
-// === I/O shell: ping dashboardu (HTTP GET /api/status) — true gdy serwer odpowiada ===
-function pingDashboard() {
+// === I/O shell: GET /api/status z podanego portu → sparsowany JSON albo null ===
+// Zwracamy CIAŁO, nie sam fakt odpowiedzi: „ktoś odpowiada na tym porcie" nie znaczy
+// „to Puls" (learned pattern: potwierdzaj stan faktyczny, nie kod wyjścia).
+function fetchStatusPayload(port) {
   return new Promise((resolve) => {
-    const req = http.get(
-      `${DASHBOARD_URL}/api/status`,
-      { timeout: 1000 },
-      (res) => {
-        res.resume();
-        resolve(true);
-      },
-    );
-    req.on('error', () => resolve(false));
+    const req = http.get(`${buildDashboardUrl(port)}/api/status`, { timeout: 1000 }, (res) => {
+      // Zbieramy BUFORY, nie string: bez `setEncoding` każdy chunk ma `length` w bajtach,
+      // więc cap mierzy to, co deklaruje jego nazwa. Po `setEncoding('utf-8')` liczylibyśmy
+      // jednostki UTF-16 — przy wielobajtowym UTF-8 realny limit byłby nawet 3× wyższy.
+      const chunks = [];
+      let bytes = 0;
+      res.on('data', (chunk) => {
+        // Twardy cap: na sondowanym porcie siedzi NIEZNANY proces, a `timeout` pilnuje
+        // tylko BEZCZYNNOŚCI socketu — równy strumień danych nigdy go nie wyzwoli.
+        // Bez tego sondowanie portu rosłoby w pamięci i nie kończyło się nigdy.
+        bytes += chunk.length;
+        if (bytes > STATUS_PAYLOAD_MAX_BYTES) {
+          req.destroy();
+          resolve(null); // nadmiarowa odpowiedź = na pewno nie nasz /api/status
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8')));
+        } catch {
+          resolve(null); // cudze API na tym porcie — nie nasze, ale też nie awaria setupu
+        }
+      });
+    });
+    req.on('error', () => resolve(null));
     req.on('timeout', () => {
       req.destroy();
-      resolve(false);
+      resolve(null);
     });
+  });
+}
+
+// === I/O shell: ping dashboardu — true tylko gdy odpowiada NASZ serwer ===
+async function pingDashboard(port) {
+  return isPulsStatusPayload(await fetchStatusPayload(port));
+}
+
+// Bind-test idzie po WILDCARDZIE i po LOOPBACKU. Na macOS/BSD bind na 0.0.0.0 UDAJE SIĘ,
+// gdy obcy proces trzyma 127.0.0.1:<port> (bardziej szczegółowy bind wygrywa ruch), więc
+// sam wildcard klasyfikował typowy dev-serwer na loopbacku jako „port wolny" i instalacja
+// kończyła się sukcesem z dashboardem pod cudzą aplikacją.
+const PROBE_BIND_HOSTS = ['0.0.0.0', '127.0.0.1'];
+
+function bindOnce(port, host) {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once('error', () => resolve(false));
+    probe.once('listening', () => probe.close(() => resolve(true)));
+    probe.listen(port, host);
+  });
+}
+
+// === I/O shell: czy port da się zbindować (wildcard ORAZ loopback) ===
+async function isPortBindable(port) {
+  for (const host of PROBE_BIND_HOSTS) {
+    if (!(await bindOnce(port, host))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// === I/O shell: stan portu = bind-test + (gdy zajęty) odpowiedź /api/status ===
+// Rozpoznanie po kontrakcie API, nie po nazwie procesu z lsof/Get-NetTCPConnection —
+// tamte narzędzia różnią się per OS i wersja, a i tak nie powiedzą, czyj to serwer.
+export async function probeDashboardPort(port, repoDir = REPO_DIR) {
+  const bindable = await isPortBindable(port);
+  const statusPayload = bindable ? null : await fetchStatusPayload(port);
+  return classifyPortState({ bindable, statusPayload, repoDir });
+}
+
+// === Pure helper: port startowy z dwóch źródeł (env sesji + wartość utrwalona) ===
+// Env żyjącego terminala bywa NIEŚWIEŻE (learned pattern 2026-07-07): poprzedni setup
+// mógł zapisać 8080 do RC/rejestru, a stary terminal nadal nie ma zmiennej. Bez sięgnięcia
+// po wartość utrwaloną pytalibyśmy o port 7777, uznali go za wolny i postawili DRUGIEGO
+// demona na tej samej bazie (dwa schedulery = podwójne odpalanie jobów).
+export function pickInitialPort({ envValue, persistedValue, log = () => {} }) {
+  const rawEnv = String(envValue ?? '').trim();
+  if (rawEnv) {
+    const fromEnv = parsePortAnswer(rawEnv, null);
+    if (fromEnv !== null) return fromEnv;
+    log(
+      `[warn] CLAUDE_CRON_PORT="${rawEnv}" to nie jest poprawny port `
+      + `(1-65535) — używam ${DEFAULT_DASHBOARD_PORT}.`,
+    );
+    return DEFAULT_DASHBOARD_PORT;
+  }
+  const fromPersisted = parsePortAnswer(persistedValue, null);
+  if (fromPersisted !== null) {
+    log(`[info] Port ${fromPersisted} z poprzedniej instalacji (env tej sesji jest puste).`);
+    return fromPersisted;
+  }
+  return DEFAULT_DASHBOARD_PORT;
+}
+
+// Pure: komenda odczytu User-scoped env var z rejestru Windows (HKCU\Environment).
+export function buildGetUserEnvCommand(varName) {
+  const script = `[Environment]::GetEnvironmentVariable(${psSingleQuote(varName)}, 'User')`;
+  return { cmd: 'powershell', args: ['-NoProfile', '-Command', script] };
+}
+
+// === Pure helper: wartość `export VAR="..."` z treści RC (lustro upsertEnvLine) ===
+export function readEnvLineValue(rcContent, varName) {
+  const match = String(rcContent ?? '').match(new RegExp(`^export ${varName}=(.*)$`, 'm'));
+  if (!match) return null;
+  const raw = match[1].trim();
+  try {
+    return String(JSON.parse(raw));
+  } catch {
+    return raw.replace(/^["']|["']$/g, '');
+  }
+}
+
+// === I/O shell: wartość utrwalona przez POPRZEDNI setup (RC powłoki / rejestr HKCU) ===
+function readPersistedEnvVar(varName) {
+  if (process.platform === 'win32') {
+    const { cmd, args } = buildGetUserEnvCommand(varName);
+    const result = spawnSync(cmd, args, { encoding: 'utf-8' });
+    return result.status === 0 ? String(result.stdout ?? '').trim() : null;
+  }
+  const rcFile = resolveShellRc();
+  if (!fs.existsSync(rcFile)) return null;
+  return readEnvLineValue(fs.readFileSync(rcFile, 'utf-8'), varName);
+}
+
+// === I/O shell: port startowy = env sesji, a gdy puste — wartość utrwalona ===
+function resolveInitialPort() {
+  return pickInitialPort({
+    envValue: process.env.CLAUDE_CRON_PORT,
+    persistedValue: readPersistedEnvVar('CLAUDE_CRON_PORT'),
+    log: console.log,
   });
 }
 
 // === I/O shell: spawn detached serwera portable Nodem (reuse wzorca z buildHookSource) ===
 // cwd=REPO_DIR, --disable-warning, detached+unref (proces przeżyje setup). Na darwin
-// caffeinate trzyma Maca wybudzonego, póki serwer żyje (guard platformy).
-function spawnServer(nodeBin, repoDir) {
+// caffeinate trzyma Maca wybudzonego, póki serwer żyje (guard platformy). CLAUDE_CRON_PORT
+// jawnie w env — setup ma w process.env świeżą wartość, ale zapis do RC/rejestru nie
+// dotyczy TEGO procesu na wszystkich ścieżkach; jawny przekaz nie zostawia miejsca na drift.
+function spawnServer(nodeBin, repoDir, port) {
   const child = spawn(nodeBin, [EXPERIMENTAL_WARNING_FLAG, 'server.js'], {
     cwd: repoDir,
+    env: { ...process.env, CLAUDE_CRON_PORT: String(port) },
     detached: true,
     stdio: 'ignore',
   });
@@ -419,9 +663,9 @@ function spawnServer(nodeBin, repoDir) {
 }
 
 // === I/O shell: poll dashboardu aż odpowie albo wyczerpie limit prób (nie crashuje) ===
-async function waitForDashboard() {
+async function waitForDashboard(port) {
   for (let attempt = 0; attempt < SERVER_POLL_ATTEMPTS; attempt += 1) {
-    if (await pingDashboard()) {
+    if (await pingDashboard(port)) {
       return true;
     }
     await new Promise((resolve) => setTimeout(resolve, SERVER_POLL_INTERVAL_MS));
@@ -432,8 +676,8 @@ async function waitForDashboard() {
 // === I/O shell: auto-open dashboardu w przeglądarce (best-effort, Mac/Win) ===
 // Null command (linux/headless) → nic nie robimy, link już wypisany. spawnSync nie
 // rzuca przy braku binarki (zwraca { error }) — auto-open padło, link i tak jest.
-function openDashboard() {
-  const command = buildOpenBrowserCommand(process.platform, DASHBOARD_URL);
+function openDashboard(port) {
+  const command = buildOpenBrowserCommand(process.platform, buildDashboardUrl(port));
   if (!command) {
     return;
   }
@@ -443,26 +687,57 @@ function openDashboard() {
 // === I/O shell: zapewnij że serwer działa, ZAWSZE wypisz link, otwórz przeglądarkę ===
 // Ping → jeśli down, spawn detached + poll. Link wypisywany BEZWARUNKOWO (nawet gdy
 // serwer nie wstał). Auto-open dopiero po potwierdzeniu odpowiedzi (Mac/Win, best-effort).
-async function startServerAndOpen(nodeBin, repoDir) {
-  let running = await pingDashboard();
+// Brak odpowiedzi na WYBRANYM porcie to jedyny sygnał, że instalacja nie wstała —
+// dlatego komunikat mówi wprost, że dashboard nie odpowiedział (zamiast cichego „Gotowe").
+async function startServerAndOpen(nodeBin, repoDir, port) {
+  let running = await pingDashboard(port);
   if (!running) {
-    spawnServer(nodeBin, repoDir);
-    running = await waitForDashboard();
+    spawnServer(nodeBin, repoDir, port);
+    running = await waitForDashboard(port);
   }
 
-  console.log(`\n🫀  Dashboard: ${DASHBOARD_URL}`);
+  console.log(`\n🫀  Dashboard: ${buildDashboardUrl(port)}`);
   if (!running) {
-    console.log('[info] Serwer nie odpowiedział w czasie — otwórz link ręcznie po chwili.');
+    console.log(
+      `[warn] Serwer nie odpowiedział na porcie ${port} — otwórz link ręcznie po chwili; `
+      + 'jeśli dalej cisza, sprawdź, czy portu nie przejął inny program.',
+    );
     return;
   }
-  openDashboard();
+  openDashboard(port);
 }
 
-function writeHook(workspace, repoDir, nodeBin) {
+// === Pure helper: ostrzeżenie o hooku autostartu z INNYM portem niż wybrany ===
+// Hook ma port wypalony w źródle. Gdy user zmienił port, ale odmówił reinstalacji hooka,
+// autostart wskrzeszałby serwer na starym porcie, a link z setupu wskazywał nowy —
+// cicha rozbieżność „dashboard vs autostart", której R9 ma nie dopuścić. null = spójny.
+export function buildStaleHookPortWarning(hookSource, port) {
+  if (typeof hookSource !== 'string' || hookSource.includes(`${buildDashboardUrl(port)}/api/status`)) {
+    return null;
+  }
+  return (
+    `[warn] Zainstalowany hook autostartu pilnuje innego portu niż ${port} — uruchom setup `
+    + 'ponownie i odpowiedz „T" na pytanie o autostart, żeby go odświeżyć.'
+  );
+}
+
+// === I/O shell: odczyt zainstalowanego hooka i ostrzeżenie o rozjeździe portu ===
+function warnIfHookPortStale(workspace, port) {
+  const hookFile = path.join(workspace, '.claude', 'hooks', 'claude-cron-autostart.js');
+  if (!fs.existsSync(hookFile)) {
+    return;
+  }
+  const warning = buildStaleHookPortWarning(fs.readFileSync(hookFile, 'utf-8'), port);
+  if (warning) {
+    console.log(warning);
+  }
+}
+
+function writeHook(workspace, repoDir, nodeBin, port) {
   const hooksDir = path.join(workspace, '.claude', 'hooks');
   const hookFile = path.join(hooksDir, 'claude-cron-autostart.js');
   fs.mkdirSync(hooksDir, { recursive: true });
-  fs.writeFileSync(hookFile, buildHookSource(repoDir, nodeBin), 'utf-8');
+  fs.writeFileSync(hookFile, buildHookSource(repoDir, nodeBin, port), 'utf-8');
   return hookFile;
 }
 
@@ -726,8 +1001,8 @@ export function matchJobIdsByName(jobs, names) {
 // Timeout wywołań lokalnego API Pulsa — localhost odpowiada natychmiast albo wcale.
 const LOCAL_API_TIMEOUT_MS = 5_000;
 
-async function fetchLocalApi(pathname, options = {}) {
-  const res = await fetch(`${DASHBOARD_URL}${pathname}`, {
+async function fetchLocalApi(port, pathname, options = {}) {
+  const res = await fetch(`${buildDashboardUrl(port)}${pathname}`, {
     ...options,
     signal: AbortSignal.timeout(LOCAL_API_TIMEOUT_MS),
   });
@@ -744,15 +1019,15 @@ async function fetchLocalApi(pathname, options = {}) {
 // na danych (db.updateJob bez pól zwraca joba bez zmian), po którym serwer woła
 // scheduler.scheduleJob — gotowy prymityw "reschedule" bez nowego endpointu.
 // Pad NIGDY nie przerywa setupu (warn + instrukcja restartu, wzorzec installPulsSkill).
-async function syncSeededSchedulesOnRunningServer(addedNames) {
-  if (!(await pingDashboard())) {
+async function syncSeededSchedulesOnRunningServer(addedNames, port) {
+  if (!(await pingDashboard(port))) {
     return; // serwer nie działa — świeży boot zrobi scheduleAll i zobaczy seedowane joby
   }
   try {
-    const jobs = await fetchLocalApi('/api/jobs');
+    const jobs = await fetchLocalApi(port, '/api/jobs');
     const ids = matchJobIdsByName(jobs, addedNames);
     for (const id of ids) {
-      await fetchLocalApi(`/api/jobs/${id}`, {
+      await fetchLocalApi(port, `/api/jobs/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
@@ -868,6 +1143,7 @@ async function main() {
 
   // Hoisting poza try: odpowiedzi o powiadomieniach trzymamy w zmiennych, a zapis do
   // state i push na VPS robimy dopiero PO smoke-teście DB (za blokiem try/finally).
+  let dashboardPort = DEFAULT_DASHBOARD_PORT;
   let vpsUrl = null;
   let notifyPayload = null;
   let wantStarterJobs = false;
@@ -896,6 +1172,27 @@ async function main() {
     const workspaceLoc = persistEnvVar('CLAUDE_CRON_WORKSPACE', workspace, 'Claude-Cron workspace');
     console.log(`[ok] Zapisano CLAUDE_CRON_WORKSPACE w ${workspaceLoc}`);
 
+    // Port PRZED hookiem i startem serwera — hook wypala port w źródle, więc kolizję
+    // trzeba rozstrzygnąć wcześniej. Zapis do env (RC / rejestr Windows) daje serwerowi,
+    // dashboardowi i autostartowi JEDNO źródło prawdy; bez tego dashboard pokazywałby
+    // link na port, którego serwer nie słucha.
+    const portChoice = await resolveDashboardPort({
+      initialPort: resolveInitialPort(),
+      probePort: probeDashboardPort,
+      askPort: (busyPort) => ask(rl, `Port dashboardu (${busyPort} zajęty) — podaj inny: `),
+    });
+    dashboardPort = portChoice.port;
+    if (portChoice.reused) {
+      // Reużyty proces to TA instalacja (klasyfikacja porównuje repo_dir), ale biegnie
+      // ze STARYM kodem — startServerAndOpen zobaczy żywy ping i nic nie zrestartuje.
+      console.log(
+        '[info] Na tym porcie działa już Twój Puls — po tej aktualizacji zrestartuj go '
+        + '(zamknij proces serwera albo zrestartuj komputer), żeby wziął nowy kod.',
+      );
+    }
+    const portLoc = persistEnvVar('CLAUDE_CRON_PORT', String(dashboardPort), 'Claude-Cron dashboard port');
+    console.log(`[ok] Port dashboardu: ${dashboardPort} (zapisano w ${portLoc})`);
+
     const vpsHost = await ask(rl, 'Tailscale IP VPS-a (puste = tryb tylko lokalny): ');
     const vpsPort = vpsHost ? await ask(rl, 'Port VPS [7777]: ', '7777') : '7777';
     vpsUrl = buildVpsUrl(vpsHost, vpsPort);
@@ -916,11 +1213,12 @@ async function main() {
 
     const installHook = (await ask(rl, 'Zainstalować autostart? [T/n]: ', 'T')).toLowerCase();
     if (installHook === 't') {
-      const hookFile = writeHook(workspace, REPO_DIR, nodeBin);
+      const hookFile = writeHook(workspace, REPO_DIR, nodeBin, dashboardPort);
       const added = registerHook(workspace, hookFile, nodeBin);
       console.log(added ? `[ok] Hook zarejestrowany: ${hookFile}` : '[ok] Hook już zarejestrowany.');
     } else {
       console.log('[info] Pominięto autostart.');
+      warnIfHookPortStale(workspace, dashboardPort);
     }
 
     // Pytanie zbiorcze o podstawowe taski — sam seed dopiero PO smoke-teście DB
@@ -962,7 +1260,7 @@ async function main() {
     const addedNames = seedStarterJobsWithReport();
     if (addedNames.length > 0) {
       // Re-run przy działającym serwerze: bez tego croner nie zna nowych harmonogramów.
-      await syncSeededSchedulesOnRunningServer(addedNames);
+      await syncSeededSchedulesOnRunningServer(addedNames, dashboardPort);
     }
   }
 
@@ -970,7 +1268,7 @@ async function main() {
   installPulsSkill();
 
   // Auto-start serwera + auto-open przeglądarki (Mac/Win). Link wypisany ZAWSZE.
-  await startServerAndOpen(nodeBin, REPO_DIR);
+  await startServerAndOpen(nodeBin, REPO_DIR, dashboardPort);
 
   console.log('\n🕹️  Gotowe!\n');
 }

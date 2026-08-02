@@ -142,12 +142,171 @@ try {
         $script:InstallDir = Join-Path $Sandbox "claude-cron" # przywróć
     }
 
+    # --- Test 6: pusta odpowiedź na pytanie o katalog → wartość domyślna ---
+    function Test-ResolveInstallDirEmptyAnswer {
+        $fallback = Join-Path $HOME "claude-cron"
+        $result = Resolve-InstallDir -Answer "" -Fallback $fallback
+        $blank  = Resolve-InstallDir -Answer "   " -Fallback $fallback
+        if ($result -eq $fallback -and $blank -eq $fallback) {
+            Test-Pass "Resolve-InstallDir: sam Enter → domyślny katalog"
+        } else {
+            Test-Problem "Resolve-InstallDir: pusta odpowiedź dała '$result' / '$blank'"
+        }
+    }
+
+    # --- Test 7: cudzysłowy z Explorera, ~ i ścieżka względna → absolutna ścieżka ---
+    function Test-ResolveInstallDirSanitizes {
+        $fallback = Join-Path $HOME "claude-cron"
+        $quoted   = Resolve-InstallDir -Answer '  "C:\moje pulsy\instancja"  ' -Fallback $fallback
+        $tilde    = Resolve-InstallDir -Answer "~\puls" -Fallback $fallback
+        $relative = Resolve-InstallDir -Answer "puls" -Fallback $fallback -Base "C:\base"
+
+        $okQuoted   = $quoted -eq "C:\moje pulsy\instancja"
+        $okTilde    = $tilde -eq (Join-Path $HOME "puls")
+        $okRelative = $relative -eq (Join-Path "C:\base" "puls")
+        if ($okQuoted -and $okTilde -and $okRelative) {
+            Test-Pass "Resolve-InstallDir: czyści cudzysłowy, rozwija ~ i ścieżkę względną"
+        } else {
+            Test-Problem "Resolve-InstallDir: quoted='$quoted' tilde='$tilde' relative='$relative'"
+        }
+    }
+
+    # --- Test 8: instalacja w NIESTANDARDOWYM katalogu (odpowiedź usera → realny install) ---
+    function Test-CustomInstallDirReceivesRepo {
+        $answer = Join-Path $Sandbox "moje pulsy\instancja"
+        $script:InstallDir = Resolve-InstallDir -Answer $answer -Fallback (Join-Path $HOME "claude-cron")
+        $fresh = Join-Path $Sandbox "t8-fresh"
+        $tmp   = Join-Path $Sandbox "t8-tmp"
+        New-Item -ItemType Directory -Path $fresh -Force | Out-Null
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        Set-Content -Path (Join-Path $fresh "server.js") -Value "code"
+        Set-Content -Path (Join-Path $fresh "setup.mjs") -Value "x"
+
+        Install-FreshRepo -FreshDir $fresh -TmpDir $tmp
+
+        # Invoke-Setup odpala dokładnie "$RepoDir\setup.mjs" (RepoDir = InstallDir) —
+        # obecność tego pliku to warunek startu instalacji w wybranym katalogu.
+        if ((Test-Path -LiteralPath (Join-Path $answer "setup.mjs")) -and (Test-Path -LiteralPath (Join-Path $answer "server.js"))) {
+            Test-Pass "niestandardowy katalog: repo (z setup.mjs do handoffu) wylądowało w wybranej ścieżce"
+        } else {
+            Test-Problem "niestandardowy katalog: brak repo w '$answer'"
+        }
+        $script:InstallDir = Join-Path $Sandbox "claude-cron" # przywróć
+    }
+
+    # --- Test 9: GUARD - obcy katalog NIE zostaje skasowany ---
+    # Katalog instalacji jest wolną odpowiedzią usera, a stara zawartość leci do kosza
+    # w tmp kasowanego w finally. Literówka we wklejonej ścieżce nie może kosztować danych.
+    function Test-RejectsForeignInstallDir {
+        $target = Join-Path $Sandbox "obcy-katalog"
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        Set-Content -Path (Join-Path $target "moje-dane.txt") -Value "prywatne"
+        $script:InstallDir = $target
+        $fresh = Join-Path $Sandbox "t9-fresh"
+        $tmp   = Join-Path $Sandbox "t9-tmp"
+        New-Item -ItemType Directory -Path $fresh -Force | Out-Null
+        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+        Set-Content -Path (Join-Path $fresh "server.js") -Value "code"
+        Set-Content -Path (Join-Path $fresh "setup.mjs") -Value "x"
+
+        $threw = $false
+        try {
+            # Bez interaktywnego potwierdzenia guard MUSI odmówić (fail-closed).
+            Confirm-InstallDirReplaceable -Dir $target
+        } catch {
+            $threw = $true
+        }
+
+        $dataAlive = (Test-Path -LiteralPath (Join-Path $target "moje-dane.txt")) -and
+                     ((Get-Content -Raw (Join-Path $target "moje-dane.txt")).Trim() -eq "prywatne")
+        $notInstalled = -not (Test-Path -LiteralPath (Join-Path $target "setup.mjs"))
+        if ($threw -and $dataAlive -and $notInstalled) {
+            Test-Pass "guard: obcy katalog odrzucony - dane usera nietkniete"
+        } else {
+            Test-Problem "guard: obcy katalog NIE zostal ochroniony (threw=$threw dane=$dataAlive)"
+        }
+        $script:InstallDir = Join-Path $Sandbox "claude-cron" # przywroc
+    }
+
+    # --- Test 10: klasyfikacja celu instalacji (parytet z classify_install_target) ---
+    function Test-InstallTargetKinds {
+        $empty = Join-Path $Sandbox "t10-pusty"
+        $puls  = Join-Path $Sandbox "t10-puls"
+        $file  = Join-Path $Sandbox "t10-plik.txt"
+        New-Item -ItemType Directory -Path $empty -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $puls "data") -Force | Out-Null
+        Set-Content -Path (Join-Path $puls "server.js") -Value "code"
+        Set-Content -Path $file -Value "to plik"
+
+        $okHome    = (Get-InstallTargetKind -Dir $HOME) -eq "forbidden"
+        $okRoot    = (Get-InstallTargetKind -Dir ([System.IO.Path]::GetPathRoot($Sandbox))) -eq "forbidden"
+        $okEmpty   = (Get-InstallTargetKind -Dir $empty) -eq "empty"
+        $okMissing = (Get-InstallTargetKind -Dir (Join-Path $Sandbox "nie-ma-mnie")) -eq "empty"
+        $okPuls    = (Get-InstallTargetKind -Dir $puls) -eq "puls"
+        $okFile    = (Get-InstallTargetKind -Dir $file) -eq "file"
+
+        if ($okHome -and $okRoot -and $okEmpty -and $okMissing -and $okPuls -and $okFile) {
+            Test-Pass "Get-InstallTargetKind: HOME/korzen=forbidden, pusty=empty, instalacja=puls, plik=file"
+        } else {
+            Test-Problem "Get-InstallTargetKind: home=$okHome root=$okRoot empty=$okEmpty missing=$okMissing puls=$okPuls file=$okFile"
+        }
+    }
+
+    # --- Test 11: filtr procesow ma GRANICE sciezki (C:\puls nie lapie C:\puls-backup) ---
+    # Test wola Test-PulsProcessPath zamiast powtarzac wyrazenie z Where-Object: kopia
+    # wyrazenia w tescie przechodzila nawet wtedy, gdy filtr w kodzie byl zepsuty.
+    function Test-StopPulsPathBoundary {
+        $prefix  = Get-PulsProcessPathPrefix -Dir "C:\puls"
+        $own     = "C:\puls\.node\node-v22.17.0-win-x64\node.exe server.js"
+        $sibling = "C:\puls-backup\.node\node-v22.17.0-win-x64\node.exe server.js"
+
+        $okPrefix  = $prefix -eq "C:\puls\"
+        $okOwn     = Test-PulsProcessPath -CommandLine $own -Prefix $prefix
+        $okSibling = -not (Test-PulsProcessPath -CommandLine $sibling -Prefix $prefix)
+        $okEmpty   = -not (Test-PulsProcessPath -CommandLine "" -Prefix $prefix)
+
+        if ($okPrefix -and $okOwn -and $okSibling -and $okEmpty) {
+            Test-Pass "Stop-PulsProcesses: filtr z granica sciezki nie lapie katalogu-rodzenstwa"
+        } else {
+            Test-Problem "Stop-PulsProcesses: prefix=$okPrefix own=$okOwn rodzenstwo=$okSibling pusty=$okEmpty"
+        }
+    }
+
+    # --- Test 11b: filtr procesow jest NIECZULY na wielkosc liter ---
+    # Sciezki Windows nie rozrozniaja wielkosci liter, a String.Contains porownuje
+    # ordinalnie: daemon zapisany jako "C:\Puls\..." przezywal filtr z "C:\puls\",
+    # trzymal pliki i Move-Item padal przy podmianie katalogu.
+    function Test-StopPulsCaseInsensitive {
+        $prefix = Get-PulsProcessPathPrefix -Dir "C:\puls"
+        $upper  = "C:\PULS\.node\node-v22.17.0-win-x64\node.exe server.js"
+        $mixed  = "c:\Puls\.node\node-v22.17.0-win-x64\node.exe server.js"
+        # Granica sciezki musi dzialac RAZEM z ignorowaniem wielkosci liter.
+        $sibling = "C:\PULS-backup\.node\node-v22.17.0-win-x64\node.exe server.js"
+
+        $okUpper   = Test-PulsProcessPath -CommandLine $upper -Prefix $prefix
+        $okMixed   = Test-PulsProcessPath -CommandLine $mixed -Prefix $prefix
+        $okSibling = -not (Test-PulsProcessPath -CommandLine $sibling -Prefix $prefix)
+
+        if ($okUpper -and $okMixed -and $okSibling) {
+            Test-Pass "Stop-PulsProcesses: filtr lapie sciezke o innej wielkosci liter, nie lapie rodzenstwa"
+        } else {
+            Test-Problem "Stop-PulsProcesses case: upper=$okUpper mixed=$okMixed rodzenstwo=$okSibling"
+        }
+    }
+
     Write-Host "== install.ps1 - testy bootstrap/preserve =="
     Test-PreserveMovesDataAndNode
     Test-PreserveNoopWhenNoOld
     Test-RerunPreservesSentinel
     Test-FreshInstallWhenNoExisting
     Test-StopPulsIgnoresForeignNode
+    Test-ResolveInstallDirEmptyAnswer
+    Test-ResolveInstallDirSanitizes
+    Test-CustomInstallDirReceivesRepo
+    Test-RejectsForeignInstallDir
+    Test-InstallTargetKinds
+    Test-StopPulsPathBoundary
+    Test-StopPulsCaseInsensitive
 
     Write-Host ""
     Write-Host "Wynik: $Pass PASS / $($Pass + $Fail) total"

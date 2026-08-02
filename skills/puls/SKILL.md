@@ -20,7 +20,7 @@ Domyślnie działaj na instancji lokalnej — VPS tylko gdy user o to prosi.
 
 | Metoda | Ścieżka | Opis |
 |--------|---------|------|
-| GET | `/api/status` | Status: uptime, `current_run`, `queue_length`, liczba jobów, statystyki dzisiaj, `next` (najbliższy run) |
+| GET | `/api/status` | Status: uptime, `current_runs` (**tablica** — runy biegną równolegle), `current_run` (= `current_runs[0]` albo `null`, zgodność wstecz), `queue_length`, liczba jobów, statystyki dzisiaj, `next` (najbliższy run) |
 | GET | `/api/jobs` | Lista jobów (każdy z polem `next_run`) |
 | GET | `/api/jobs/:id` | Jeden job + `next_run` |
 | POST | `/api/jobs` | Utwórz job (body JSON, patrz „Pola joba") → 201 z jobem |
@@ -32,8 +32,11 @@ Domyślnie działaj na instancji lokalnej — VPS tylko gdy user o to prosi.
 | DELETE | `/api/jobs/:id/webhook` | Usuń token webhooka |
 | POST | `/webhook/:token` | Publiczny trigger joba — body JSON trafia do promptu jako `webhook_payload` |
 | GET | `/api/runs?job_id=&limit=&offset=` | Historia runów (pełne wiersze ze `stdout`/`stderr`); `hide_routine=1` chowa udane runy jobów rutynowych |
-| GET | `/api/runs/current` | Bieżący run (`status: running`) albo `null` |
-| POST | `/api/runs/current/kill` | Zabij bieżący run → `{ "killed": true/false }` |
+| GET | `/api/runs/current` | Pierwszy z biegnących runów (`status: running`) albo `null` — pełną listę daje `current_runs` z `/api/status` |
+| POST | `/api/runs/current/kill` | Zabij bieżący run → `{ "killed": true/false }`. **409** gdy biegnie kilka runów (patrz niżej) |
+| POST | `/api/runs/:id/kill` | Zabij KONKRETNY run → `{ "killed": true/false }` (`false` = run już nie biegnie); 404 gdy run nie istnieje |
+| GET | `/api/settings/concurrency` | `{ "max_concurrent": N }` — limit równoległych runów tej maszyny |
+| PUT | `/api/settings/concurrency` | Zmiana limitu: `{ "max_concurrent": N }`, N całkowite 1–10 (śmieć → 400 z komunikatem) |
 | GET | `/api/runs/recent?per_job=N` | N ostatnich runów per job (tylko metadane, bez stdout) |
 | GET | `/api/skills` | Skille widziane przez Pulsa (project > user > plugin) |
 | GET | `/api/env` | `vps_configured`, `webhook_base_url`, `maintenance_window` |
@@ -61,6 +64,7 @@ Serwer przyjmuje TYLKO te pola (reszta jest ignorowana):
 | `discord_notify` | `0` | 0/1 — powiadomienie Discord po runie |
 | `telegram_notify` | `0` | 0/1 — powiadomienie Telegram po runie |
 | `routine` | `0` | 0/1 — job rutynowy: udane runy chowane w UI i kasowane po 24 h |
+| `lock_group` | `null` | **Grupa wyłączności** — dwa joby z tą samą niepustą wartością nigdy nie biegną równolegle (patrz „Równoległość"). Pusty string/`null` = job do żadnej grupy nie należy |
 
 Reguły walidacji (serwer odrzuca z `{ "error": ... }`):
 
@@ -68,6 +72,36 @@ Reguły walidacji (serwer odrzuca z `{ "error": ... }`):
 - `job_type: "script"` → wymagane `command`.
 - `job_type: "claude"` (lub brak) → wymagane `skill_name` LUB `arguments`.
 - Timeouty podawaj w **ms** (dashboard pokazuje minuty, ale API mówi w ms).
+
+## Równoległość (runy biegną obok siebie)
+
+Puls wykonuje do `max_concurrent` runów naraz (domyślnie 3, per maszyna). Nie zakładaj,
+że „biegnie jeden run" — `GET /api/status` zwraca **tablicę** `current_runs`.
+
+**Klasyfikacja krótki/długi — nie wymyślaj własnej.** Puls liczy ją sam, z pomiaru:
+mediana czasów **ostatnich 10 udanych runów joba < 60 s = zadanie krótkie**, inaczej długie;
+job bez historii udanych runów jest traktowany jak długi. To **nie zależy od `job_type`** —
+`script` bywa najdłuższym jobem w systemie, a `claude` kilkunastosekundowym. Zadania długie
+nie zajmują ostatniego wolnego slotu (jest rezerwą dla krótkich), więc job o kadencji minutowej
+nie czeka za kwadransowym. Nie ma pola, którym da się to nadpisać — jeśli user chce, żeby coś
+ruszało natychmiast, prawdziwą dźwignią jest podniesienie `max_concurrent`
+(`PUT /api/settings/concurrency`) albo rozstrzelenie harmonogramów.
+
+**Wyłączność.** Nigdy nie biegną równolegle: dwa runy tego samego joba, dwa joby o tym samym
+`skill_name`, dwa joby o tym samym `command`, oraz dwa joby z tą samą niepustą `lock_group`.
+Konflikt nie jest błędem — run czeka w kolejce i rusza, gdy blokada zniknie (FIFO).
+
+**Kiedy nadać `lock_group`:** gdy dwa joby **piszą po tym samym pliku/artefakcie**, a każdy
+przepisuje go w całości — równoległy zapis cicho gubi jedną z wersji. Nazwą grupy jest
+współdzielony artefakt, np. `dashboard` dla jobów przepisujących `Zadania/Dashboard.md`
+(job „Team OS — inbox sync" ma tę grupę z seedu; job `/daily` piszący ten sam banner powinien
+dostać `{"lock_group":"dashboard"}`). **Nie** nadawaj grup typu `vault` czy `wszystko` —
+to przywraca dawny globalny slot i kasuje sens równoległości.
+
+**Kill przy kilku runach.** `POST /api/runs/current/kill` zwraca **409** z treścią
+`{ "error": ..., "current_runs": [...] }`, gdy aktywnych runów jest więcej niż jeden — serwer
+świadomie nie zgaduje, który ubić. Wtedy wybierz run z `current_runs` (pole `id`) i wołaj
+`POST /api/runs/<id>/kill`. Przy zerze aktywnych runów wraca `{ "killed": false }` (200).
 
 ## Czytanie logów i diagnoza failu
 
@@ -112,6 +146,20 @@ curl -s -X DELETE http://localhost:7777/api/jobs/3
 # Ostatnie runy joba (diagnoza) i bieżący run
 curl -s 'http://localhost:7777/api/runs?job_id=3&limit=5'
 curl -s http://localhost:7777/api/runs/current
+
+# Co biegnie TERAZ (tablica) i ubicie konkretnego runu; 409 z current_runs = wybierz id
+curl -s http://localhost:7777/api/status
+curl -s -X POST http://localhost:7777/api/runs/current/kill
+curl -s -X POST http://localhost:7777/api/runs/128/kill
+
+# Limit równoległych runów tej maszyny (1–10)
+curl -s http://localhost:7777/api/settings/concurrency
+curl -s -X PUT http://localhost:7777/api/settings/concurrency \
+  -H 'Content-Type: application/json' -d '{"max_concurrent":4}'
+
+# Wyłączność na współdzielonym pliku: /daily pisze ten sam banner co inbox sync
+curl -s -X PUT http://localhost:7777/api/jobs/7 \
+  -H 'Content-Type: application/json' -d '{"lock_group":"dashboard"}'
 
 # Wynik agenta z ostatniego runu (linia type:"result" ze stream-json)
 curl -s 'http://localhost:7777/api/runs?job_id=3&limit=1' \

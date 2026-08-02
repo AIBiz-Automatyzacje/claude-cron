@@ -219,6 +219,19 @@ function proxyToVps(req, res, targetPath) {
 async function handleApi(req, res) {
   const { method, path: urlPath, segments, params } = matchRoute(req.method, req.url);
 
+  // CSRF: KAŻDA metoda mutująca w /api/* odrzucana, gdy żądanie jest cross-origin.
+  // Guard XFF (Tailscale-only) tego nie łapie — fetch z evil.com do http://localhost:7777
+  // idzie BEZ X-Forwarded-For, a globalne ACAO:* pozwala tej stronie odczytać odpowiedź
+  // (learned pattern docs/solutions/auth-issues/2026-07-24). Skutki są realne dla całego
+  // API, nie tylko dla endpointów z sekretem: POST /api/jobs = job `claude` z dowolnym
+  // promptem i --dangerously-skip-permissions (RCE), PUT /api/settings/concurrency =
+  // podmiana limitu maszyny, POST /api/runs/:id/kill = ubicie cudzego runu.
+  // Bezpieczne dla proxy /api/vps/*: proxyToVps wysyła wyłącznie Content-Type, więc
+  // żądanie dociera do VPS bez Origin i tam guard je przepuszcza.
+  if (method !== 'GET' && method !== 'HEAD' && isCrossOriginRequest(req)) {
+    return error(res, 'Cross-origin request rejected', 403);
+  }
+
   // GET /api/env — environment info
   // is_inbox_hub: czy administracja członkami zespołu ma na tej instancji sens. Samo
   // `webhook_base_url` nie wystarcza — członek z własnym Funnelem (dla webhooków) też je ma,
@@ -287,9 +300,40 @@ async function handleApi(req, res) {
     }
   }
 
+  // GET/PUT /api/settings/concurrency — limit równoległych runów (state.max_concurrent).
+  // PRYWATNY (za guardem XFF jak cały dashboard): wartość steruje zużyciem wspólnego okna
+  // planu Claude na TEJ maszynie, więc nie ma powodu, by dało się ją zmienić z internetu.
+  // CSRF: PUT przechodzi przez wspólny guard cross-origin metod mutujących (góra handleApi).
+  if (urlPath === '/api/settings/concurrency') {
+    // GET — wartość rozwiązywana w momencie odczytu (state > default), nie przy require
+    if (method === 'GET') {
+      return json(res, { max_concurrent: scheduler.readMaxConcurrent() });
+    }
+
+    // PUT — walidacja fail-fast PRZED zapisem; wartość trzymamy jako string, bo cała
+    // tabela `state` jest key-value tekstowym (odczyt i tak idzie przez resolveMaxConcurrent).
+    if (method === 'PUT') {
+      const body = await parseBody(req);
+      const check = scheduler.sanitizeMaxConcurrent(body.max_concurrent);
+      if (!check.ok) return error(res, check.error);
+      db.setState(scheduler.MAX_CONCURRENT_STATE_KEY, String(check.value));
+      // Dzwonek do pętli drain (wzorzec z enqueueJob): pętla czeka na Promise.race
+      // aktywnych runów i nie ma okresowego re-picku, więc BEZ tego podniesienie limitu
+      // nie ruszyłoby niczego z kolejki aż do zakończenia któregoś runu (przy timeoucie
+      // 10 min — kilkanaście minut ciszy po kliknięciu „Zapisz").
+      scheduler.processQueue().catch((err) => console.error('[scheduler] processQueue:', err.message));
+      return json(res, { max_concurrent: scheduler.readMaxConcurrent() });
+    }
+  }
+
   // GET /api/status
   if (method === 'GET' && urlPath === '/api/status') {
-    const currentRun = db.getCurrentRun();
+    // Równoległość (R2): pełna lista biegnących runów. `current_run` zostaje jako pierwszy
+    // element — dashboard i skill /puls czytają je osobno i aktualizują się w innym tempie
+    // (parytet surface API). Jedno źródło (getRunningRuns) zamiast getCurrentRun, żeby oba
+    // pola nie mogły pokazać dwóch różnych stanów z dwóch odczytów.
+    const currentRuns = db.getRunningRuns();
+    const currentRun = currentRuns[0] || null;
     const queued = db.getQueuedRuns();
     const allJobs = db.getAllJobs();
     const autostart = platform.getStatus();
@@ -299,7 +343,12 @@ async function handleApi(req, res) {
 
     return json(res, {
       uptime: process.uptime(),
+      // Katalog instalacji tego procesu: od momentu, gdy user wybiera katalog, na jednej
+      // maszynie potrafią stać DWIE instalacje. Bez tego pola setup.mjs nie odróżnia
+      // własnego re-runu od cudzej instancji na tym samym porcie i adoptuje obcy proces.
+      repo_dir: __dirname,
       current_run: currentRun,
+      current_runs: currentRuns,
       queue_length: queued.length,
       total_jobs: allJobs.length,
       enabled_jobs: allJobs.filter(j => j.enabled).length,
@@ -411,13 +460,44 @@ async function handleApi(req, res) {
   }
 
   // GET /api/runs/current
+  // To samo źródło co `current_run` w /api/status: `getCurrentRun()` ma `LIMIT 1` BEZ
+  // `ORDER BY`, więc przy dwóch biegnących runach SQLite mógł zwrócić tu inny wiersz niż
+  // status — dashboard i skill /puls pokazywały wtedy dwa różne „bieżące" zadania.
   if (method === 'GET' && urlPath === '/api/runs/current') {
-    return json(res, db.getCurrentRun());
+    return json(res, db.getRunningRuns()[0] || null);
   }
 
-  // POST /api/runs/current/kill
+  // POST /api/runs/current/kill — shim sprzed równoległości (dashboard, skill /puls).
+  // 0 aktywnych → dzisiejsza odpowiedź { killed: false }; 1 → kill; >1 → 409 z listą
+  // aktywnych runów. Świadomie ZERO zgadywania, który ubić — losowy strzał zabiłby
+  // cudzy run, a klient nie miałby jak tego zauważyć. 409 = „doprecyzuj przez
+  // POST /api/runs/:id/kill".
   if (method === 'POST' && urlPath === '/api/runs/current/kill') {
     const killed = executor.killCurrent();
+    if (killed === null) {
+      return json(res, {
+        error: 'Kilka runów biegnie równolegle — wskaż konkretny run (POST /api/runs/:id/kill)',
+        current_runs: db.getRunningRuns(),
+      }, 409);
+    }
+    return json(res, { killed });
+  }
+
+  // POST /api/runs/:id/kill — kill KONKRETNEGO runu (R6). MUSI stać PO matcherze
+  // /api/runs/current/kill: 'current' nie jest liczbą, więc trafiłby tu na 400.
+  if (method === 'POST' && segments[0] === 'api' && segments[1] === 'runs' && segments[3] === 'kill') {
+    const runId = parseInt(segments[2], 10);
+    if (isNaN(runId)) return error(res, 'Invalid run ID');
+
+    // Świeży odczyt z DB wyłącznie po to, żeby odróżnić „run nie istnieje" (404) od
+    // „istnieje, ale już nie biegnie" (200 killed:false) — getRunWithPayload to jedyny
+    // getter pojedynczego runu, payload jest tu produktem ubocznym i nie wychodzi na zewnątrz.
+    if (!db.getRunWithPayload(runId)) return error(res, 'Run not found', 404);
+
+    // killed:false = run nie jest aktywny (skończył się sekundę wcześniej albo stoi
+    // w kolejce). To NIE jest błąd klienta — stan zmienił się między odczytem a kliknięciem,
+    // więc oddajemy 200 z prawdą o wyniku zamiast udawać, że żądanie było niepoprawne.
+    const killed = executor.killRun(runId);
     return json(res, { killed });
   }
 
