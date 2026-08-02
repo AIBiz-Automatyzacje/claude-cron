@@ -363,6 +363,29 @@ test_classify_install_target_kinds() {
   fi
 }
 
+# --- Test 17b: GUARD katalogu domowego jest odporny na WIELOKROTNE ukośniki ---
+# Regresja z review CodeRabbita (PR #2): `${dir%/}` zdejmuje tylko JEDEN końcowy
+# ukośnik, więc „~//" → „$HOME/" ≠ „$HOME" i katalog domowy klasyfikował się jako
+# `foreign` — user dostawał pytanie [t/N] zamiast odmowy, a „t" kasowało mu $HOME.
+test_classify_install_target_home_with_trailing_slashes() {
+  local fake_home="$SANDBOX/fake-home-slash" one two three root_kind
+  mkdir -p "$fake_home"
+  echo "moje dane" > "$fake_home/waz.txt"
+
+  one="$(HOME="$fake_home" classify_install_target "$fake_home/")"
+  two="$(HOME="$fake_home" classify_install_target "$fake_home//")"
+  three="$(HOME="$fake_home" classify_install_target "$fake_home///")"
+  # $HOME z ukośnikiem na końcu (bywa w env) też musi się zredukować do tej samej wartości.
+  root_kind="$(HOME="$fake_home/" classify_install_target "$fake_home")"
+
+  if [ "$one" = "forbidden" ] && [ "$two" = "forbidden" ] \
+    && [ "$three" = "forbidden" ] && [ "$root_kind" = "forbidden" ]; then
+    pass "classify_install_target: \$HOME z 1/2/3 ukośnikami i \$HOME z ukośnikiem w env = forbidden"
+  else
+    problem "classify_install_target ukośniki: '/'='$one' '//'='$two' '///'='$three' env='$root_kind'"
+  fi
+}
+
 # --- Test 18: find_puls_pids filtruje po ŚCIEŻCE z granicą katalogu ---
 # Regresja klasy „C:\puls łapie C:\puls-backup" (parytet z install.ps1) — obce procesy
 # node MUSZĄ przeżyć, filtr nigdy nie idzie po nazwie binarki.
@@ -447,6 +470,7 @@ test_install_dir_rejects_foreign_content
 test_install_dir_declined_confirmation_keeps_data
 test_install_dir_confirmed_replaces_content
 test_classify_install_target_kinds
+test_classify_install_target_home_with_trailing_slashes
 test_find_puls_pids_matches_only_install_dir
 test_stop_puls_ignores_foreign_process
 test_stop_puls_kills_daemon_from_install_dir

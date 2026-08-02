@@ -240,6 +240,20 @@ function Get-PulsProcessPathPrefix {
     return ([System.IO.Path]::GetFullPath($Dir).TrimEnd('\') + '\')
 }
 
+# Czyste dopasowanie linii polecen do prefiksu sciezki instalacji - wydzielone, zeby
+# test sprawdzal ZACHOWANIE filtra, a nie powtarzal wyrazenia z Where-Object.
+# Porownanie MUSI byc case-insensitive: sciezki Windows nie rozrozniaja wielkosci liter,
+# wiec daemon zapisany jako "C:\Puls\..." przezywal filtr zbudowany z "C:\puls\" i
+# blokowal pliki -> Move-Item padal na "Proces nie moze uzyskac dostepu do pliku".
+function Test-PulsProcessPath {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][AllowNull()][string] $CommandLine,
+        [Parameter(Mandatory = $true)][string] $Prefix
+    )
+    if ([string]::IsNullOrEmpty($CommandLine)) { return $false }
+    return $CommandLine.IndexOf($Prefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+
 function Stop-PulsProcesses {
     param([Parameter(Mandatory = $true)][string] $Dir)
 
@@ -250,7 +264,7 @@ function Stop-PulsProcesses {
     $prefix = Get-PulsProcessPathPrefix -Dir $Dir
 
     $procs = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine.Contains($prefix) })
+        Where-Object { Test-PulsProcessPath -CommandLine $_.CommandLine -Prefix $prefix })
     if ($procs.Count -eq 0) { return }
 
     foreach ($p in $procs) {

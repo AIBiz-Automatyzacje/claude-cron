@@ -37,6 +37,7 @@ import {
   buildPortReuseMessage,
   resolveDashboardPort,
   probeDashboardPort,
+  PORT_RESOLVE_ATTEMPTS,
   buildStaleHookPortWarning,
   isSameInstallation,
   buildOtherPulsMessage,
@@ -998,7 +999,10 @@ test('resolveDashboardPort: same zajęte porty → rzuca po wyczerpaniu prób', 
       }),
     /port/i,
   );
-  assert.ok(asks > 0 && asks < 50, 'pętla nie może być nieskończona');
+  // Dokładna wartość, nie „mniej niż 50": liczba pytań jest deterministyczna
+  // (PORT_RESOLVE_ATTEMPTS), a luźny warunek przepuszczał zmianę limitu albo warunku
+  // pętli — czyli dokładnie tę regresję, przed którą ten test ma bronić.
+  assert.equal(asks, PORT_RESOLVE_ATTEMPTS, 'pytamy dokładnie tyle razy, ile wynosi limit prób');
 });
 
 // === buildHookSource — port wypalony w hooku (dashboard i autostart = ta sama wartość) ===
@@ -1045,6 +1049,28 @@ test('probeDashboardPort: nasz dashboard na porcie → ours (re-run instalatora)
   });
 
   assert.equal(await probeDashboardPort(port), PORT_STATE.OURS);
+});
+
+// timeout jawny: bez capu ten test WISI, a wiszący test cicho zabiera ze sobą resztę
+// pliku (99 ze 113 przypadków „przechodzi", bo nigdy się nie uruchamia). Limit zamienia
+// zawieszenie w czerwony, który widać w raporcie.
+test('probeDashboardPort: serwer streamujący bez końca → foreign, sondowanie się kończy (cap)', { timeout: 10_000 }, async (t) => {
+  // Z review CodeRabbita (PR #2): body sklejane bez limitu, a `timeout` w http.get pilnuje
+  // wyłącznie BEZCZYNNOŚCI socketu — równy strumień danych nigdy go nie wyzwala. Sondujemy
+  // CUDZY port, więc po drugiej stronie może siedzieć cokolwiek: bez capu setup rósłby
+  // w pamięci i nie kończył sondowania (instalacja wisi bez komunikatu).
+  let stop = null;
+  const port = await startServerOnFreePort(t, (req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    // Strumień bez końca: start wygląda jak JSON, więc nie odpada na parsowaniu.
+    res.write('{"uptime":1,"filler":"');
+    stop = setInterval(() => res.write('x'.repeat(8 * 1024)), 1);
+    t.after(() => clearInterval(stop));
+  });
+
+  // Assert — kończy się w ogóle (bez capu: wisi aż do OOM) i nie uznaje tego za Puls.
+  assert.equal(await probeDashboardPort(port), PORT_STATE.FOREIGN);
+  clearInterval(stop);
 });
 
 test('probeDashboardPort: cudzy serwer na porcie → foreign (kolizja, nie re-run)', async (t) => {

@@ -50,7 +50,10 @@ export const DEFAULT_DASHBOARD_PORT = 7777;
 // nigdy by nie wstała, a hook autostartu celowałby w ten sam port z innego katalogu.
 export const PORT_STATE = { FREE: 'free', OURS: 'ours', OTHER_PULS: 'other-puls', FOREIGN: 'foreign' };
 // Ile razy pytamy o zastępczy port, zanim uznamy, że instalacja nie ma gdzie wstać.
-const PORT_RESOLVE_ATTEMPTS = 5;
+export const PORT_RESOLVE_ATTEMPTS = 5;
+// Cap odpowiedzi z sondowanego portu. Nasz /api/status to ~400 B; 64 KB zostawia zapas
+// na rozrost kontraktu, a odcina proces, który streamuje bez końca (sondujemy CUDZY port).
+export const STATUS_PAYLOAD_MAX_BYTES = 64 * 1024;
 // Limit pollowania serwera po spawnie, zanim wypiszemy link / otworzymy przeglądarkę.
 const SERVER_POLL_ATTEMPTS = 20;
 const SERVER_POLL_INTERVAL_MS = 500;
@@ -505,7 +508,16 @@ function fetchStatusPayload(port) {
     const req = http.get(`${buildDashboardUrl(port)}/api/status`, { timeout: 1000 }, (res) => {
       let body = '';
       res.setEncoding('utf-8');
-      res.on('data', (chunk) => { body += chunk; });
+      res.on('data', (chunk) => {
+        body += chunk;
+        // Twardy cap: na sondowanym porcie siedzi NIEZNANY proces, a `timeout` pilnuje
+        // tylko BEZCZYNNOŚCI socketu — równy strumień danych nigdy go nie wyzwoli.
+        // Bez tego sondowanie portu rosłoby w pamięci i nie kończyło się nigdy.
+        if (body.length > STATUS_PAYLOAD_MAX_BYTES) {
+          req.destroy();
+          resolve(null); // nadmiarowa odpowiedź = na pewno nie nasz /api/status
+        }
+      });
       res.on('end', () => {
         try {
           resolve(JSON.parse(body));

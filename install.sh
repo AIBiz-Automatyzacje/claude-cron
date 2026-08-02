@@ -141,10 +141,17 @@ is_puls_install() {
 #   puls      = rozpoznana instalacja Pulsa (re-run — wolno podmienić)
 #   foreign   = niepusty katalog z CUDZĄ zawartością (wymaga potwierdzenia)
 classify_install_target() {
-  local dir="$1" normalized
-  normalized="${dir%/}"
+  local dir="$1" normalized home_normalized
+  # Obcinamy WSZYSTKIE końcowe ukośniki, nie jeden: `${dir%/}` zdejmuje tylko ostatni,
+  # więc odpowiedź „~//" dawała „$HOME/" ≠ „$HOME" i katalog domowy wychodził jako
+  # `foreign` — czyli pytanie [t/N] zamiast twardej odmowy, a po „t" `mv "$HOME//"`
+  # do kosza kasowanego trapem. Sam „/" nadal redukuje się do pustego = forbidden.
+  normalized="$dir"
+  while [ "$normalized" != "${normalized%/}" ]; do normalized="${normalized%/}"; done
+  home_normalized="$HOME"
+  while [ "$home_normalized" != "${home_normalized%/}" ]; do home_normalized="${home_normalized%/}"; done
 
-  if [ -z "$normalized" ] || [ "$normalized" = "${HOME%/}" ]; then
+  if [ -z "$normalized" ] || [ "$normalized" = "$home_normalized" ]; then
     printf 'forbidden'
     return 0
   fi

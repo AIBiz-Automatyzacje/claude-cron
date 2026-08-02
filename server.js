@@ -460,8 +460,11 @@ async function handleApi(req, res) {
   }
 
   // GET /api/runs/current
+  // To samo źródło co `current_run` w /api/status: `getCurrentRun()` ma `LIMIT 1` BEZ
+  // `ORDER BY`, więc przy dwóch biegnących runach SQLite mógł zwrócić tu inny wiersz niż
+  // status — dashboard i skill /puls pokazywały wtedy dwa różne „bieżące" zadania.
   if (method === 'GET' && urlPath === '/api/runs/current') {
-    return json(res, db.getCurrentRun());
+    return json(res, db.getRunningRuns()[0] || null);
   }
 
   // POST /api/runs/current/kill — shim sprzed równoległości (dashboard, skill /puls).

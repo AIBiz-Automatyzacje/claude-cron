@@ -346,3 +346,38 @@ test('Podniesienie limitu z dashboardu BUDZI kolejkę — run rusza bez dodatkow
   );
   assert.equal(running, true);
 });
+
+// === /api/runs/current vs /api/status — JEDNO źródło bieżącego runu ===
+// Z review CodeRabbita (PR #2): endpoint czytał `db.getCurrentRun()` (`LIMIT 1` BEZ
+// `ORDER BY`), a `/api/status` — `getRunningRuns()[0]` (`ORDER BY id ASC`).
+//
+// UWAGA co do wartości tego testu: jest to test KONTRAKTU, nie regresji. Przy dzisiejszym
+// planie zapytania SQLite skanuje po rowid i `LIMIT 1` przypadkiem zwraca ten sam,
+// najstarszy wiersz — więc test przechodzi RÓWNIEŻ na starym kodzie (sprawdzone).
+// Zabezpiecza przed przyszłym rozjazdem: brak `ORDER BY` to niezdefiniowana kolejność,
+// którą zmieni pierwszy indeks na `status` albo zmiana wersji SQLite. Bez tego oba
+// endpointy mogłyby pokazać różne „bieżące" zadania w dashboardzie i w skillu /puls.
+test('GET /api/runs/current zwraca ten sam run co current_run w /api/status (dwa aktywne)', async (t) => {
+  t.after(killAllRunning);
+
+  // Arrange — dwa równoległe runy, więc „ten pierwszy" przestaje być oczywisty
+  const { runA, runB } = await startTwoRuns();
+  const oldest = Math.min(runA, runB);
+
+  // Act
+  const current = await api('/api/runs/current');
+  const status = await getStatus();
+
+  // Assert — oba źródła wskazują TEN SAM, najstarszy run (deterministyczne ORDER BY id)
+  assert.equal(current.status, 200);
+  assert.equal(current.body.id, oldest, '/api/runs/current bierze najstarszy biegnący run');
+  assert.equal(status.current_run.id, oldest, 'current_run w /api/status bierze ten sam run');
+  assert.equal(current.body.id, status.current_run.id, 'oba endpointy nie mogą się rozjechać');
+});
+
+test('GET /api/runs/current bez aktywnych runów → null (kontrakt sprzed równoległości)', async () => {
+  await killAllRunning();
+  const current = await api('/api/runs/current');
+  assert.equal(current.status, 200);
+  assert.equal(current.body, null, 'brak runów to null, nie pusta tablica');
+});

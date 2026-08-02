@@ -253,15 +253,44 @@ try {
     }
 
     # --- Test 11: filtr procesow ma GRANICE sciezki (C:\puls nie lapie C:\puls-backup) ---
+    # Test wola Test-PulsProcessPath zamiast powtarzac wyrazenie z Where-Object: kopia
+    # wyrazenia w tescie przechodzila nawet wtedy, gdy filtr w kodzie byl zepsuty.
     function Test-StopPulsPathBoundary {
-        $prefix = Get-PulsProcessPathPrefix -Dir "C:\puls"
+        $prefix  = Get-PulsProcessPathPrefix -Dir "C:\puls"
         $own     = "C:\puls\.node\node-v22.17.0-win-x64\node.exe server.js"
         $sibling = "C:\puls-backup\.node\node-v22.17.0-win-x64\node.exe server.js"
 
-        if ($prefix -eq "C:\puls\" -and $own.Contains($prefix) -and -not $sibling.Contains($prefix)) {
+        $okPrefix  = $prefix -eq "C:\puls\"
+        $okOwn     = Test-PulsProcessPath -CommandLine $own -Prefix $prefix
+        $okSibling = -not (Test-PulsProcessPath -CommandLine $sibling -Prefix $prefix)
+        $okEmpty   = -not (Test-PulsProcessPath -CommandLine "" -Prefix $prefix)
+
+        if ($okPrefix -and $okOwn -and $okSibling -and $okEmpty) {
             Test-Pass "Stop-PulsProcesses: filtr z granica sciezki nie lapie katalogu-rodzenstwa"
         } else {
-            Test-Problem "Stop-PulsProcesses: prefix='$prefix' rodzenstwo dopasowane=$($sibling.Contains($prefix))"
+            Test-Problem "Stop-PulsProcesses: prefix=$okPrefix own=$okOwn rodzenstwo=$okSibling pusty=$okEmpty"
+        }
+    }
+
+    # --- Test 11b: filtr procesow jest NIECZULY na wielkosc liter ---
+    # Sciezki Windows nie rozrozniaja wielkosci liter, a String.Contains porownuje
+    # ordinalnie: daemon zapisany jako "C:\Puls\..." przezywal filtr z "C:\puls\",
+    # trzymal pliki i Move-Item padal przy podmianie katalogu.
+    function Test-StopPulsCaseInsensitive {
+        $prefix = Get-PulsProcessPathPrefix -Dir "C:\puls"
+        $upper  = "C:\PULS\.node\node-v22.17.0-win-x64\node.exe server.js"
+        $mixed  = "c:\Puls\.node\node-v22.17.0-win-x64\node.exe server.js"
+        # Granica sciezki musi dzialac RAZEM z ignorowaniem wielkosci liter.
+        $sibling = "C:\PULS-backup\.node\node-v22.17.0-win-x64\node.exe server.js"
+
+        $okUpper   = Test-PulsProcessPath -CommandLine $upper -Prefix $prefix
+        $okMixed   = Test-PulsProcessPath -CommandLine $mixed -Prefix $prefix
+        $okSibling = -not (Test-PulsProcessPath -CommandLine $sibling -Prefix $prefix)
+
+        if ($okUpper -and $okMixed -and $okSibling) {
+            Test-Pass "Stop-PulsProcesses: filtr lapie sciezke o innej wielkosci liter, nie lapie rodzenstwa"
+        } else {
+            Test-Problem "Stop-PulsProcesses case: upper=$okUpper mixed=$okMixed rodzenstwo=$okSibling"
         }
     }
 
@@ -277,6 +306,7 @@ try {
     Test-RejectsForeignInstallDir
     Test-InstallTargetKinds
     Test-StopPulsPathBoundary
+    Test-StopPulsCaseInsensitive
 
     Write-Host ""
     Write-Host "Wynik: $Pass PASS / $($Pass + $Fail) total"
