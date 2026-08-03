@@ -152,8 +152,16 @@ function Get-InstallTargetKind {
 # wklejonej sciezce) trwale kasowalaby dane usera - Move-PreservedDirs ratuje wylacznie
 # data\ i .node\. Fail-closed: obca zawartosc podmieniamy WYLACZNIE po jawnym "t";
 # brak interaktywnego wejscia = odmowa, nie domyslna zgoda.
+#
+# -Answer to szew testowy (podzial jak Read-InstallDir/Resolve-InstallDir: odczyt osobno,
+# decyzja osobno). Bez niego sciezka produkcyjna czyta klawiature jak dotad; z nim suita
+# sprawdza WSZYSTKIE trzy warianty odpowiedzi bez czlowieka przy terminalu. Rozroznienie
+# "podano" od "podano pusty" idzie przez PSBoundParameters, bo [string] nie ma $null.
 function Confirm-InstallDirReplaceable {
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string] $Dir)
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Dir,
+        [AllowEmptyString()][string] $Answer
+    )
 
     $kind = Get-InstallTargetKind -Dir $Dir
     if ($kind -eq "empty" -or $kind -eq "puls") { return }
@@ -167,14 +175,29 @@ function Confirm-InstallDirReplaceable {
 
     Write-Host "[warn] Katalog '$Dir' nie jest pusty i NIE wyglada na instalacje Pulsa." -ForegroundColor Yellow
     Write-Host "[warn] Instalacja podmienia go w calosci - zachowane zostana tylko data\ i .node\." -ForegroundColor Yellow
-    $answer = ""
-    try {
-        $answer = Read-Host "Skasowac zawartosc $Dir i zainstalowac tam Pulsa? [t/N]"
+
+    $reply = ""
+    $canAsk = $true
+    if ($PSBoundParameters.ContainsKey("Answer")) {
+        $reply = $Answer
     }
-    catch {
-        throw "Brak interaktywnego wejscia, zeby potwierdzic skasowanie zawartosci '$Dir'. Podaj pusty katalog przez INSTALL_DIR."
+    else {
+        try {
+            $reply = Read-Host "Skasowac zawartosc $Dir i zainstalowac tam Pulsa? [t/N]"
+        }
+        catch {
+            $canAsk = $false  # host bez konsoli / przekierowany stdin - nie ma kogo zapytac
+        }
     }
-    if ($answer.Trim().ToLower() -notin @("t", "tak", "y", "yes")) {
+
+    # "Nie ma jak zapytac" i "user wcisnal Enter" to DWA rozne stany (parytet z install.sh:
+    # has_tty -> osobny fail, pusty Enter -> "Przerwane na zyczenie"). Sklejenie ich radzi
+    # userowi siedzacemu przy terminalu "uruchom instalator interaktywnie", czyli zrobic to,
+    # co wlasnie robi - a przy braku konsoli gubi jedyna dzialajaca droge wyjscia.
+    if (-not $canAsk) {
+        throw "Brak interaktywnego wejscia, zeby potwierdzic skasowanie zawartosci '$Dir'. Podaj pusty katalog przez INSTALL_DIR albo uruchom instalator interaktywnie."
+    }
+    if ($reply.Trim().ToLower() -notin @("t", "tak", "y", "yes")) {
         throw "Przerwane na zyczenie - zawartosc '$Dir' nietknieta. Uruchom instalator ponownie i podaj inny katalog."
     }
     Write-Host "[ok] Potwierdzono podmiane katalogu $Dir." -ForegroundColor Green

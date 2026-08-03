@@ -194,38 +194,68 @@ try {
         $script:InstallDir = Join-Path $Sandbox "claude-cron" # przywróć
     }
 
-    # --- Test 9: GUARD - obcy katalog NIE zostaje skasowany ---
-    # Katalog instalacji jest wolną odpowiedzią usera, a stara zawartość leci do kosza
-    # w tmp kasowanego w finally. Literówka we wklejonej ścieżce nie może kosztować danych.
-    function Test-RejectsForeignInstallDir {
-        $target = Join-Path $Sandbox "obcy-katalog"
+    # --- Test 9: GUARD - obcy katalog NIE zostaje skasowany (trzy warianty odpowiedzi) ---
+    # Katalog instalacji jest wolna odpowiedzia usera, a stara zawartosc leci do kosza
+    # w tmp kasowanego w finally. Literowka we wklejonej sciezce nie moze kosztowac danych.
+    # Parytet z install.test.sh (testy 14/15/16): brak odpowiedzi / "n" / "t".
+    #
+    # Odpowiedz podajemy PARAMETREM. Wczesniej test liczyl na to, ze Read-Host rzuci przy
+    # braku konsoli - odpalony z terminala grzecznie czekal na Enter i suita wisiala.
+    function New-ForeignDir {
+        param([Parameter(Mandatory = $true)][string] $Name)
+        $target = Join-Path $Sandbox $Name
         New-Item -ItemType Directory -Path $target -Force | Out-Null
         Set-Content -Path (Join-Path $target "moje-dane.txt") -Value "prywatne"
-        $script:InstallDir = $target
-        $fresh = Join-Path $Sandbox "t9-fresh"
-        $tmp   = Join-Path $Sandbox "t9-tmp"
-        New-Item -ItemType Directory -Path $fresh -Force | Out-Null
-        New-Item -ItemType Directory -Path $tmp -Force | Out-Null
-        Set-Content -Path (Join-Path $fresh "server.js") -Value "code"
-        Set-Content -Path (Join-Path $fresh "setup.mjs") -Value "x"
+        return $target
+    }
 
+    function Test-ForeignDirIntact {
+        param([Parameter(Mandatory = $true)][string] $Dir)
+        $data = Join-Path $Dir "moje-dane.txt"
+        return (Test-Path -LiteralPath $data) -and
+               ((Get-Content -Raw $data).Trim() -eq "prywatne") -and
+               (-not (Test-Path -LiteralPath (Join-Path $Dir "setup.mjs")))
+    }
+
+    function Test-RejectsForeignInstallDirOnEmptyAnswer {
+        # Pusty Enter = domyslne N (parytet z install.test.sh test 15). Sciezka "nie ma jak
+        # zapytac" (Read-Host rzuca przy braku konsoli) jest w tej suicie NIEPOKRYTA -
+        # wymaga przeslonienia Read-Host, wiec weryfikuje ja Operator checklist na Windowsie.
+        $target = New-ForeignDir -Name "obcy-katalog"
         $threw = $false
-        try {
-            # Bez interaktywnego potwierdzenia guard MUSI odmówić (fail-closed).
-            Confirm-InstallDirReplaceable -Dir $target
-        } catch {
-            $threw = $true
-        }
+        try { Confirm-InstallDirReplaceable -Dir $target -Answer "" } catch { $threw = $true }
 
-        $dataAlive = (Test-Path -LiteralPath (Join-Path $target "moje-dane.txt")) -and
-                     ((Get-Content -Raw (Join-Path $target "moje-dane.txt")).Trim() -eq "prywatne")
-        $notInstalled = -not (Test-Path -LiteralPath (Join-Path $target "setup.mjs"))
-        if ($threw -and $dataAlive -and $notInstalled) {
-            Test-Pass "guard: obcy katalog odrzucony - dane usera nietkniete"
+        if ($threw -and (Test-ForeignDirIntact -Dir $target)) {
+            Test-Pass "guard: pusty Enter odrzuca obcy katalog - dane usera nietkniete"
         } else {
-            Test-Problem "guard: obcy katalog NIE zostal ochroniony (threw=$threw dane=$dataAlive)"
+            Test-Problem "guard: pusty Enter NIE ochronil katalogu (threw=$threw)"
         }
-        $script:InstallDir = Join-Path $Sandbox "claude-cron" # przywroc
+    }
+
+    function Test-RejectsForeignInstallDirOnDecline {
+        $target = New-ForeignDir -Name "obcy-katalog-n"
+        $threw = $false
+        try { Confirm-InstallDirReplaceable -Dir $target -Answer "n" } catch { $threw = $true }
+
+        if ($threw -and (Test-ForeignDirIntact -Dir $target)) {
+            Test-Pass "guard: odmowa 'n' zostawia zawartosc obcego katalogu"
+        } else {
+            Test-Problem "guard: po odmowie katalog zostal naruszony (threw=$threw)"
+        }
+    }
+
+    function Test-AcceptsForeignInstallDirOnConfirm {
+        # Jawne "t" to jedyna droga do podmiany - guard ma przepuscic, nie rzucic.
+        $target = New-ForeignDir -Name "obcy-katalog-t"
+        $threw = $false
+        try { Confirm-InstallDirReplaceable -Dir $target -Answer "t" } catch { $threw = $true }
+
+        # Sam guard niczego nie instaluje ani nie kasuje - to robi Install-FreshRepo pozniej.
+        if ((-not $threw) -and (Test-ForeignDirIntact -Dir $target)) {
+            Test-Pass "guard: jawne 't' przepuszcza podmiane katalogu"
+        } else {
+            Test-Problem "guard: potwierdzenie 't' nie przeszlo przez guard (threw=$threw)"
+        }
     }
 
     # --- Test 10: klasyfikacja celu instalacji (parytet z classify_install_target) ---
@@ -303,7 +333,9 @@ try {
     Test-ResolveInstallDirEmptyAnswer
     Test-ResolveInstallDirSanitizes
     Test-CustomInstallDirReceivesRepo
-    Test-RejectsForeignInstallDir
+    Test-RejectsForeignInstallDirOnEmptyAnswer
+    Test-RejectsForeignInstallDirOnDecline
+    Test-AcceptsForeignInstallDirOnConfirm
     Test-InstallTargetKinds
     Test-StopPulsPathBoundary
     Test-StopPulsCaseInsensitive
