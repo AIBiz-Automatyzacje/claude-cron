@@ -160,12 +160,6 @@ function formatUptime(seconds) {
   return `${m}m`;
 }
 
-function formatTime(iso) {
-  if (!iso) return '-';
-  const d = new Date(iso + (iso.endsWith('Z') ? '' : 'Z'));
-  return d.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
 function formatDateTime(iso) {
   if (!iso) return '-';
   const d = new Date(iso + (iso.endsWith('Z') ? '' : 'Z'));
@@ -475,15 +469,6 @@ function sparklineHtml(jobId) {
   ).join('')}</div>`;
 }
 
-// Ostatni run: kropka (kolor wg sukces/błąd) + czas. Najnowszy = recentByJob[id][0].
-function lastRunHtml(jobId) {
-  const runs = recentByJob[jobId];
-  if (!runs || runs.length === 0) return '<span class="cell-mute">—</span>';
-  const last = runs[0];
-  const ok = last.status === 'success';
-  return `<span class="last-run"><span class="dot ${ok ? 'dot-green' : 'dot-red'}"></span>${formatTime(last.started_at)}</span>`;
-}
-
 function renderJobs() {
   // Podpis = joby (enabled/next/cron/webhook) + recent runs (sparkline/ostatni run).
   // Bez recent w podpisie zakończony run nie odświeżyłby sparkline/kropki.
@@ -507,9 +492,6 @@ function renderJobs() {
   body.innerHTML = allJobs.map(j => {
     const ico = j.job_type === 'script' ? '›_' : '◷';
     const sched = j.cron_expr ? esc(cronToHuman(j.cron_expr)) : '<span class="cell-mute">tylko webhook</span>';
-    const next = (j.enabled && j.next_run)
-      ? `<div class="next-cell"><span class="cell-strong">${formatDateTime(j.next_run)}</span><span class="next-rel">${formatCountdown(j.next_run)}</span></div>`
-      : '<span class="cell-mute">—</span>';
     return `
     <div class="trow grid-zadania ${j.enabled ? '' : 'disabled'}">
       <div class="task-cell">
@@ -517,9 +499,7 @@ function renderJobs() {
         <span><span class="task-name">${esc(j.name)}</span>${jobTypePill(j)}</span>
       </div>
       <div class="cell-dim">${sched}</div>
-      <div>${lastRunHtml(j.id)}</div>
       <div>${sparklineHtml(j.id)}</div>
-      <div>${next}</div>
       <div>
         <label class="switch">
           <input type="checkbox" ${j.enabled ? 'checked' : ''} onchange="toggleJob(${j.id})" aria-label="Przełącz ${esc(j.name)}" />
@@ -660,11 +640,12 @@ function renderRuns(runs) {
     const name = job ? esc(job.name) : `Job #${r.job_id}`;
     const dur = formatDuration(r.started_at, r.finished_at);
     return `
-      <div class="hrow grid-historia err" onclick="toggleRunDetail(${r.id})">
-        <div class="id-cell">#${r.id}</div>
-        <div class="h-name"><span>${name}</span>${isRoutine ? '<span class="task-tag tag-type">Rutynowe</span>' : ''}</div>
+      <div class="hrow grid-historia err${isExpanded ? ' open' : ''}" onclick="toggleRunDetail(${r.id})">
+        <div class="h-name">
+          <span class="h-caret" aria-hidden="true">›</span>
+          <span class="h-body"><span class="h-title">${name}</span>${isRoutine ? '<span class="task-tag tag-type">Rutynowe</span>' : ''}</span>
+        </div>
         <div><span class="badge ${st.cls}">${st.label}</span></div>
-        <div class="trigger">${tr.ico} ${tr.label}</div>
         <div class="cell-dim">${formatDateTime(r.started_at)}</div>
         <div class="cell-dim">${dur}</div>
       </div>
@@ -672,7 +653,7 @@ function renderRuns(runs) {
         <div class="run-detail-cell">
           <div class="logbox${isExpanded ? '' : ' hidden'}">
             <div class="log-head">
-              <span class="log-title">${name} · <span class="${r.status === 'success' ? '' : 'exit-bad'}">${esc(st.label)}</span> · <span class="log-dur">${dur}</span></span>
+              <span class="log-title"><span class="log-id">#${r.id}</span> · ${name} · <span class="${r.status === 'success' ? '' : 'exit-bad'}">${esc(st.label)}</span> · <span class="log-dur">${dur}</span> · <span class="log-trigger">${tr.ico} ${tr.label}</span></span>
               <span class="log-actions">
                 <button class="log-act" data-act="copy" onclick="logAction(event, ${r.id}, 'copy')">Kopiuj</button>
                 <button class="log-act" data-act="wrap" onclick="logAction(event, ${r.id}, 'wrap')">Zawijaj</button>
@@ -831,6 +812,9 @@ function toggleRunDetail(id) {
   const box = el.querySelector('.logbox');
   const isShown = el.classList.contains('show');
   if (box) box.classList.toggle('hidden', !isShown);
+  // Strzałka rozwijania siedzi w wierszu (poprzednim rodzeństwie), nie w szczególe
+  const row = el.previousElementSibling;
+  if (row && row.classList.contains('hrow')) row.classList.toggle('open', isShown);
   if (isShown) {
     expandedRuns.add(id);
     loadRunLog(id);

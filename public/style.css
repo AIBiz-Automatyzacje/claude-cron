@@ -69,8 +69,15 @@ body {
 .brand-name { font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 24px; letter-spacing: -0.6px; line-height: 1; }
 .brand-tag { color: var(--dim); font-size: 12.5px; line-height: 1; }
 
+/* Wszystkie kontrolki nagłówka trzymają JEDNĄ wysokość HDR_CONTROL_H = 34 px.
+   Wcześniej wychodziła z paddingów i była różna: .env-opt dawał 34 px, a .btn-ghost
+   38 px (padding 9px + emoji rozpychające line-box) — przy wąskim oknie przyciski
+   wystawały ponad przełącznik. Wysokość jest tu podana jawnie, nie wyliczana. */
+.hdr-controls { display: flex; align-items: center; gap: 8px; }
 .env-toggle {
   display: flex;
+  align-items: center;
+  height: 34px;
   background: var(--card);
   border: 1px solid var(--hairline-2);
   border-radius: var(--r-sm);
@@ -82,10 +89,18 @@ body {
   color: var(--dim);
   font-family: 'Outfit', sans-serif; font-weight: 700; font-size: 12px;
   letter-spacing: 0.5px;
-  padding: 6px 16px;
+  display: inline-flex; align-items: center;
+  height: 26px; /* 26 + 2×3 padding + 2×1 border = 34 */
+  padding: 0 16px;
   border-radius: 6px;
 }
 .env-opt.active { background: var(--accent); color: #0A0A0A; }
+
+.btn-hdr {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 34px; padding: 0 13px; font-size: 13px; line-height: 1;
+}
+.btn-hdr .btn-ico { font-size: 14px; line-height: 1; }
 
 /* ===== Taby ===== */
 .tabs {
@@ -253,7 +268,11 @@ body {
 .trow.next { background: linear-gradient(90deg, var(--accent-soft), transparent 60%); }
 .trow.disabled .task-name, .trow.disabled .task-tag { opacity: .5; }
 
-.grid-zadania { grid-template-columns: 2.7fr 1.3fr 0.95fr 0.8fr 1.05fr 0.65fr 0.9fr; column-gap: 14px; }
+/* ZADANIE · HARMONOGRAM · 7 RUN · STATUS · AKCJE.
+   Trzy ostatnie kolumny mają ROZMIAR WŁASNY (7 słupków sparkline, switch 38 px,
+   4 przyciski 31 px + 3 przerwy 7 px = 145 px) — jako fr ściskałyby się na wąskim
+   oknie i ucinały czwartą akcję. Elastyczne zostają tylko dwie tekstowe kolumny. */
+.grid-zadania { grid-template-columns: minmax(0, 2.4fr) minmax(0, 1.2fr) 70px 56px 145px; column-gap: 14px; }
 .grid-zespol { grid-template-columns: 2fr 1.4fr 1.2fr 0.7fr; column-gap: 14px; }
 .thead > div, .trow > div { min-width: 0; }
 
@@ -287,15 +306,10 @@ body {
 .cell-dim { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cell-strong { color: var(--text); font-weight: 600; }
 .cell-mute { color: var(--mute); }
-.last-run { display: flex; align-items: center; gap: 7px; color: var(--dim); }
 
 /* Sparkline 7 RUN */
 .spark { display: flex; gap: 3px; align-items: flex-end; height: 18px; }
 .spark i { width: 7px; border-radius: 2px; background: var(--green); }
-
-.next-cell { display: flex; flex-direction: column; gap: 2px; }
-.next-cell .next-rel { color: var(--accent); font-weight: 600; font-size: 12px; }
-.next-cell .next-rel.dim { color: var(--mute); }
 
 /* Switch */
 .switch { position: relative; display: inline-block; width: 38px; height: 22px; cursor: pointer; }
@@ -400,18 +414,26 @@ body {
 #accordion-body .check { padding: 6px 0; }
 #accordion-body .check.mt { margin-top: 4px; }
 
-.grid-historia { grid-template-columns: 0.7fr 2fr 1fr 1.1fr 1.3fr 0.9fr; column-gap: 16px; }
-.hrow-wrap { border-bottom: 1px solid var(--hairline); }
-.hrow-wrap:last-child { border-bottom: none; }
+/* ZADANIE · STATUS · START · CZAS. STATUS na sztywno — badge ma stałą szerokość
+   i jako fr rozjeżdżałby się między wierszami. */
+.grid-historia { grid-template-columns: minmax(0, 2.6fr) 110px minmax(0, 1.25fr) minmax(0, 0.95fr); column-gap: 16px; }
+/* Separator między wierszami. Wcześniej wisiał na .hrow-wrap, którego render nigdy
+   nie produkował (wiersz i szczegół są rodzeństwem, nie mają wspólnego opakowania) —
+   historia szła bez linii. Border-top na wierszach poza pierwszym daje kreskę
+   MIĘDZY wierszami, bez zbędnej nad pierwszym i pod ostatnim. */
+#runs-body > .hrow:not(:first-child) { border-top: 1px solid var(--hairline); }
 .hrow { display: grid; align-items: center; padding: 16px 22px; cursor: default; }
 .hrow.err { cursor: pointer; }
-.hrow .id-cell { color: var(--dim); font-weight: 500; white-space: nowrap; }
-.hrow.err .id-cell::before { content: "›"; color: var(--accent); margin-right: 6px; display: inline-block; transition: transform .15s; }
-.hrow-wrap.open .hrow.err .id-cell::before { transform: rotate(90deg); }
+/* Strzałka rozwijania siedziała na ::before kolumny ID — po jej usunięciu jest
+   osobnym elementem przy nazwie, a obrót steruje klasą .open NA WIERSZU (dawna
+   reguła celowała w .hrow-wrap, którego render nigdy nie produkował — martwa). */
+.hrow .h-caret { color: var(--accent); flex-shrink: 0; transition: transform .15s; }
+.hrow.open .h-caret { transform: rotate(90deg); }
 /* Nazwa + badge "Rutynowe" w pionie (spójnie z listą Zadań) — koniec nierównego zawijania */
-.hrow .h-name { font-weight: 600; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.hrow .h-name { font-weight: 600; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.hrow .h-body { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.hrow .h-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .hrow .h-name .task-tag { margin-left: 0; }
-.trigger { display: flex; align-items: center; gap: 8px; color: var(--dim); white-space: nowrap; }
 
 .badge {
   display: inline-flex; align-items: center; gap: 6px;
@@ -440,6 +462,8 @@ body {
 .log-title { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
 .log-title .exit-bad { color: var(--red); }
 .log-title .log-dur { color: var(--mute); }
+/* ID runu i wyzwalacz wypadły z kolumn tabeli — nagłówek logu jest ich nowym miejscem */
+.log-title .log-id, .log-title .log-trigger { color: var(--mute); }
 .log-actions { display: flex; gap: 8px; }
 .log-act { background: var(--input); border: 1px solid var(--hairline-2); color: var(--dim); cursor: pointer; font-size: 12px; padding: 5px 11px; border-radius: 6px; }
 .log-act:hover { color: var(--text); }
@@ -682,6 +706,14 @@ select:focus-visible,
 .input::placeholder, .textarea::placeholder { color: var(--mute); opacity: 1; }
 
 /* ===== Responsywność ===== */
+/* Nagłówek: poniżej 1100 px marka + przełącznik + dwa przyciski z etykietami
+   zaczynają się dusić — zostają same ikony. Próg jest WYŻSZY niż 880 px reszty
+   responsywności, bo tu chodzi o ciasnotę w jednym rzędzie, nie o układ strony. */
+@media (max-width: 1100px) {
+  .btn-hdr { width: 34px; padding: 0; }
+  .btn-hdr .btn-label { display: none; }
+}
+
 /* Wąskie okno (panel Obsidiana, podzielony ekran) — tabele zostają kompaktowymi
    wierszami (jedno zadanie = jedna linia) i przewijają się w poziomie, zamiast
    miażdżyć kolumny aż tekst nachodzi na sąsiednie. Łatwiej to skanować niż karty. */
@@ -698,8 +730,10 @@ select:focus-visible,
   /* Tabela przewija się w poziomie; min-width trzyma kolumny przy ich naturalnej
      szerokości (sparkline, 4 przyciski akcji) zamiast je ściskać. */
   .table { overflow-x: auto; }
-  .thead.grid-zadania, .trow.grid-zadania { min-width: 1080px; }
-  .thead.grid-historia, .hrow.grid-historia { min-width: 760px; }
+  /* Progi po redukcji kolumn: zadania = 200 (nazwa) + 110 (harmonogram) + 70 + 56
+     + 145 kolumn własnych + 56 przerw + 44 padding ≈ 680; historia analogicznie. */
+  .thead.grid-zadania, .trow.grid-zadania { min-width: 700px; }
+  .thead.grid-historia, .hrow.grid-historia { min-width: 560px; }
   .thead.grid-zespol, .trow.grid-zespol { min-width: 560px; }
 
   /* Skille: lżejsze siatki na wąskim ekranie */

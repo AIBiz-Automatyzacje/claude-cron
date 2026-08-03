@@ -21,13 +21,15 @@
           <span class="brand-tag">Zadania dla Twojego Asystenta AI</span>
         </span>
       </div>
-      <div style="display:flex;align-items:center;gap:10px">
+      <!-- Etykieta w osobnym spanie, bo poniżej 1100 px chowa ją CSS i zostaje sama
+           ikona — opis niesie wtedy title/aria-label, nie tekst w przycisku. -->
+      <div class="hdr-controls">
         <div class="env-toggle" id="env-toggle" style="display:none">
           <button class="env-opt env-btn active" data-env="local" onclick="switchEnv('local')">LOKALNY</button>
           <button class="env-opt env-btn" data-env="vps" onclick="switchEnv('vps')">VPS</button>
         </div>
-        <button class="btn btn-ghost" onclick="openConcurrencyModal()" aria-haspopup="dialog">⚡ Ile naraz</button>
-        <button class="btn btn-ghost" onclick="openNotifyModal()" aria-haspopup="dialog">🔔 Powiadomienia</button>
+        <button class="btn btn-ghost btn-hdr" onclick="openConcurrencyModal()" aria-haspopup="dialog" title="Ile naraz" aria-label="Ile naraz"><span class="btn-ico" aria-hidden="true">⚡</span><span class="btn-label">Ile naraz</span></button>
+        <button class="btn btn-ghost btn-hdr" onclick="openNotifyModal()" aria-haspopup="dialog" title="Powiadomienia" aria-label="Powiadomienia"><span class="btn-ico" aria-hidden="true">🔔</span><span class="btn-label">Powiadomienia</span></button>
       </div>
     </header>
 
@@ -69,9 +71,7 @@
             <div class="thead grid-zadania">
               <div>ZADANIE</div>
               <div>HARMONOGRAM</div>
-              <div>OSTATNI RUN</div>
               <div>7 RUN</div>
-              <div>NASTĘPNY</div>
               <div>STATUS</div>
               <div>AKCJE</div>
             </div>
@@ -98,10 +98,8 @@
         </div>
         <div class="table">
           <div class="thead grid-historia">
-            <div>ID</div>
             <div>ZADANIE</div>
             <div>STATUS</div>
-            <div>WYZWALACZ</div>
             <div>START</div>
             <div>CZAS</div>
           </div>
