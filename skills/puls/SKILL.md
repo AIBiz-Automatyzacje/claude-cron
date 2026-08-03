@@ -20,7 +20,7 @@ Domyślnie działaj na instancji lokalnej — VPS tylko gdy user o to prosi.
 
 | Metoda | Ścieżka | Opis |
 |--------|---------|------|
-| GET | `/api/status` | Status: uptime, `current_runs` (**tablica** — runy biegną równolegle), `current_run` (= `current_runs[0]` albo `null`, zgodność wstecz), `queue_length`, liczba jobów, statystyki dzisiaj, `next` (najbliższy run) |
+| GET | `/api/status` | Status: uptime, `current_runs` (**tablica** — runy biegną równolegle; same metadane, bez `stdout`/`stderr`/`webhook_payload`), `current_run` (= `current_runs[0]` albo `null`, zgodność wstecz), `queue_length`, liczba jobów, statystyki dzisiaj, `next` (najbliższy run) |
 | GET | `/api/jobs` | Lista jobów (każdy z polem `next_run`) |
 | GET | `/api/jobs/:id` | Jeden job + `next_run` |
 | POST | `/api/jobs` | Utwórz job (body JSON, patrz „Pola joba") → 201 z jobem |
@@ -32,7 +32,8 @@ Domyślnie działaj na instancji lokalnej — VPS tylko gdy user o to prosi.
 | DELETE | `/api/jobs/:id/webhook` | Usuń token webhooka |
 | POST | `/webhook/:token` | Publiczny trigger joba — body JSON trafia do promptu jako `webhook_payload` |
 | GET | `/api/runs?job_id=&limit=&offset=` | Historia runów (pełne wiersze ze `stdout`/`stderr`); `hide_routine=1` chowa udane runy jobów rutynowych |
-| GET | `/api/runs/current` | Pierwszy z biegnących runów (`status: running`) albo `null` — pełną listę daje `current_runs` z `/api/status` |
+| GET | `/api/runs/current` | Pierwszy z biegnących runów (`status: running`) albo `null` — same metadane, bez `stdout`/`stderr`/`webhook_payload`; pełną listę daje `current_runs` z `/api/status`, a pełny wiersz z logami `GET /api/runs/:id` |
+| GET | `/api/runs/:id` | Pełny wiersz JEDNEGO runu (ze `stdout`/`stderr` **oraz** `webhook_payload`) — tędy dociągasz log konkretnego runu |
 | POST | `/api/runs/current/kill` | Zabij bieżący run → `{ "killed": true/false }`. **409** gdy biegnie kilka runów (patrz niżej) |
 | POST | `/api/runs/:id/kill` | Zabij KONKRETNY run → `{ "killed": true/false }` (`false` = run już nie biegnie); 404 gdy run nie istnieje |
 | GET | `/api/settings/concurrency` | `{ "max_concurrent": N }` — limit równoległych runów tej maszyny |
@@ -109,6 +110,10 @@ Run ma pola: `status`, `trigger_type` (`scheduled`/`manual`/`webhook`/`wake`/`re
 `started_at`, `finished_at`, `exit_code`, `stdout`, `stderr`, `error_msg`.
 
 Statusy: `queued` → `running` → `success` | `failed` | `timeout` | `killed`.
+
+Biegnące runy (`current_runs`, `/api/runs/current`) niosą **same metadane** — logu i tak
+jeszcze nie ma w bazie, bo executor zapisuje `stdout`/`stderr` dopiero przy finalizacji.
+Log czytasz z `GET /api/runs?job_id=<ID>` albo `GET /api/runs/<ID_RUNU>` po zakończeniu runu.
 
 - `stdout` (typ `claude`) to **stream-json**: jedna linia = jeden obiekt JSON.
   Końcowa odpowiedź agenta jest w linii z `"type":"result"` (pole `result`).
