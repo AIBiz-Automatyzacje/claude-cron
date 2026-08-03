@@ -10,3 +10,6 @@ data/
 
 # backupy sync-template (ścieżka odwrotu przy aktualizacji .claude z szablonu)
 .claude/.backups/
+
+# Kontekst firmowy AIBIZ — wewnetrzny, nie do publicznego repo (dystrybucja: hook pluginu aibiz, tylko vaulty)
+.claude/rules/aibiz-company-context.md
