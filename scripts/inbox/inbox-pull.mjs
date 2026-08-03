@@ -129,7 +129,9 @@ export function renderDelegatedCallout(rows) {
       `${avatarSpan(row.to_user, { small: true })}<span class="os-who">@${row.to_user}</span> — ` +
       `**${row.title}** <span class="os-since">wysłane ${fmtTime(row.created_at)}</span> %% thread:${threadId} %%`;
   }).join('\n');
-  return `> [!delegated]- w toku\n${items}`;
+  // Bez folda (`-`): CSS ukrywa tytuł calloutu, więc zwinięty callout nie ma
+  // czym się rozwinąć — wiersze muszą być widoczne od razu.
+  return `> [!delegated] w toku\n${items}`;
 }
 
 // Link do archiwum bieżącego miesiąca — jedyne „drzwi" do zamkniętych wątków w pustym stanie

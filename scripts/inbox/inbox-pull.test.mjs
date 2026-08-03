@@ -85,7 +85,8 @@ test('delegowane: jeden callout, pill czasu, stale ⚠️, marker thread per wie
   const fresh = msg({ created_at: new Date(Date.now() - 2 * 3600000).toISOString() });
   const stale = msg({ id: ID_B, thread_id: null, to_user: 'filip', created_at: new Date(Date.now() - 72 * 3600000).toISOString() });
   const out = renderDelegatedCallout([fresh, stale]);
-  assert.match(out, /^> \[!delegated\]- /);
+  // bez folda `-` — CSS chowa tytuł, zwinięty callout nie miałby czym się rozwinąć
+  assert.match(out, /^> \[!delegated\] /);
   assert.ok(out.includes('⏳ czeka 2h'));
   assert.ok(out.includes('os-wait stale'));
   assert.ok(out.includes('⚠️ czeka 3d'));
