@@ -7,6 +7,8 @@ let calendarRuns = []; // runy do kropek kalendarza — NIGDY filtrowane przez h
 let jobsMap = {}; // id -> job
 let recentByJob = {}; // job_id -> [recent runs] z /api/runs/recent (sparkline + ostatni run)
 let expandedRuns = new Set(); // track expanded run details
+// Logi runów dociągane leniwie z /api/runs/:id (lista wozi same metadane). id -> pełny run.
+let runLogCache = new Map();
 let currentEnv = 'local'; // 'local' or 'vps'
 let vpsConfigured = false;
 let webhookBaseUrl = ''; // public URL for webhook links (from VPS env)
@@ -82,6 +84,7 @@ async function switchEnv(env) {
   applyTabVisibility(); // Zespół istnieje tylko po stronie huba — przed pobraniem danych
   document.body.classList.add('env-loading'); // dim + spinner; stare dane zostają do nadejścia nowych
   expandedRuns.clear();
+  runLogCache.clear(); // te same id runów po drugiej stronie = inne logi
   lastJobsSig = null; // wymuś re-render po zmianie env (te same ID, inne dane)
   lastRunsSig = null;
   lastMembersSig = null;
@@ -421,11 +424,15 @@ async function loadRecentRuns() {
 async function loadRuns() {
   try {
     const hideRoutine = document.getElementById('runs-hide-routine')?.checked ? '&hide_routine=1' : '';
-    allRuns = await API.get(`/api/runs?limit=100${hideRoutine}`);
+    const runs = await API.get(`/api/runs?limit=100${hideRoutine}&fields=meta`);
+    // Odpowiedź błędu ({error:…} z proxy/serwera) nie jest tablicą — pokaż JEJ treść.
+    // Gołe „Błąd ładowania historii" po TypeError z .map() kosztowało godzinę diagnozy.
+    if (!Array.isArray(runs)) throw new Error(runs?.error || 'nieoczekiwana odpowiedź API');
+    allRuns = runs;
     lastRunsSig = pollSignature(allRuns, lastStatus); // sync guard po jawnym odświeżeniu
     renderRuns(allRuns);
   } catch (e) {
-    toast('Błąd ładowania historii', true);
+    toast(`Błąd ładowania historii: ${e.message}`, true);
   }
 }
 
@@ -434,7 +441,9 @@ async function loadRuns() {
 // (w tym rutynowych), niezależnie od filtra historii. Degraduje cicho do pustej listy.
 async function loadCalendarRuns() {
   try {
-    calendarRuns = await API.get('/api/runs?limit=100');
+    // fields=meta: kropki potrzebują tylko statusów i dat.
+    const runs = await API.get('/api/runs?limit=100&fields=meta');
+    calendarRuns = Array.isArray(runs) ? runs : [];
   } catch {
     calendarRuns = [];
   }
@@ -624,6 +633,13 @@ function logBodyHtml(r) {
   return blocks.join('');
 }
 
+// Stan logboxa zanim log dojedzie z /api/runs/:id — z rozmiarem z metadanych listy.
+function logPlaceholderHtml(r) {
+  const bytes = (r.stdout_bytes || 0) + (r.stderr_bytes || 0);
+  const size = bytes > 0 ? ` (${(bytes / 1024).toFixed(1)} KB)` : '';
+  return `<div class="log-line"><span class="log-ts"></span><span class="log-msg cell-mute">Ładowanie logu…${size}</span></div>`;
+}
+
 function renderRuns(runs) {
   const body = document.getElementById('runs-body');
   const empty = document.getElementById('runs-empty');
@@ -663,12 +679,16 @@ function renderRuns(runs) {
                 <button class="log-act" data-act="full" onclick="logAction(event, ${r.id}, 'full')">Pełny ekran</button>
               </span>
             </div>
-            <div class="log-body" id="log-body-${r.id}">${logBodyHtml(r)}</div>
+            <div class="log-body" id="log-body-${r.id}">${runLogCache.has(r.id) ? logBodyHtml(runLogCache.get(r.id)) : logPlaceholderHtml(r)}</div>
           </div>
         </div>
       </div>
     `;
   }).join('');
+
+  // Re-render (poll co 3 s) odtwarza logbox z cache — dociągnij log dla otwartych wierszy:
+  // dla zakończonych to no-op z cache, dla biegnących odświeża rosnący output.
+  runs.filter(r => expandedRuns.has(r.id)).forEach(r => loadRunLog(r.id));
 }
 
 // Akcje log viewera (Kopiuj / Zawijaj / Pełny ekran). Nie propaguje na toggle wiersza.
@@ -813,8 +833,28 @@ function toggleRunDetail(id) {
   if (box) box.classList.toggle('hidden', !isShown);
   if (isShown) {
     expandedRuns.add(id);
+    loadRunLog(id);
   } else {
     expandedRuns.delete(id);
+  }
+}
+
+// Log konkretnego runu — jedyne miejsce, które ciągnie ciężki payload.
+// Cache w pamięci: ponowne rozwinięcie zakończonego runu nie strzela drugim requestem.
+// Run w toku omija cache (log rośnie), a jego wynik i tak nadpisuje wpis.
+async function loadRunLog(id) {
+  const meta = allRuns.find(r => r.id === id);
+  const isLive = !meta || meta.status === 'running' || meta.status === 'queued';
+  if (runLogCache.has(id) && !isLive) return;
+  try {
+    const run = await API.get(`/api/runs/${id}`);
+    if (!run || run.error) throw new Error(run?.error || 'brak danych');
+    runLogCache.set(id, run);
+    const body = document.getElementById(`log-body-${id}`);
+    if (body) body.innerHTML = logBodyHtml(run);
+  } catch (e) {
+    const body = document.getElementById(`log-body-${id}`);
+    if (body) body.innerHTML = `<div class="log-line error"><span class="log-ts"></span><span class="log-msg">Błąd pobierania logu: ${esc(e.message)}</span></div>`;
   }
 }
 
@@ -1561,7 +1601,8 @@ async function poll() {
 async function pollRuns() {
   try {
     const hideRoutine = document.getElementById('runs-hide-routine')?.checked ? '&hide_routine=1' : '';
-    const runs = await API.get(`/api/runs?limit=100${hideRoutine}`);
+    const runs = await API.get(`/api/runs?limit=100${hideRoutine}&fields=meta`);
+    if (!Array.isArray(runs)) return; // błąd API — poll degraduje cicho, zostają stare dane
     const sig = pollSignature(runs, lastStatus);
     if (sig === lastRunsSig) return;
     lastRunsSig = sig;

@@ -381,3 +381,64 @@ test('GET /api/runs/current bez aktywnych runów → null (kontrakt sprzed równ
   assert.equal(current.status, 200);
   assert.equal(current.body, null, 'brak runów to null, nie pusta tablica');
 });
+
+// === Lekka historia: fields=meta + GET /api/runs/:id (lazy-load logów) ===
+
+test('GET /api/runs?fields=meta: bez stdout/stderr, z rozmiarami; bez parametru — pełne wiersze', async (t) => {
+  t.after(killAllRunning);
+
+  // Arrange — jeden zakończony run (kill domyka wiersz)
+  const started = await api(`/api/jobs/${jobA.id}/trigger`, { method: 'POST' });
+  await waitFor(async () => (await runningRunIds()).length === 1, 'run wystartował');
+  await api(`/api/runs/${started.body.id}/kill`, { method: 'POST' });
+  await waitFor(async () => (await runningRunIds()).length === 0, 'run zakończony');
+
+  // Act
+  const meta = await api('/api/runs?limit=100&fields=meta');
+  const full = await api('/api/runs?limit=100');
+
+  // Assert — tryb lekki
+  assert.equal(meta.status, 200);
+  const metaRow = meta.body.find((r) => r.id === started.body.id);
+  assert.ok(metaRow, 'run musi być na liście meta');
+  assert.equal(metaRow.stdout, undefined);
+  assert.equal(metaRow.stderr, undefined);
+  assert.equal(metaRow.webhook_payload, undefined);
+  assert.equal(typeof metaRow.stdout_bytes, 'number');
+
+  // Assert — tryb pełny bez zmian (kontrakt skilla /puls)
+  const fullRow = full.body.find((r) => r.id === started.body.id);
+  assert.equal(typeof fullRow.stdout, 'string', 'bez fields=meta stdout zostaje w liście');
+  assert.equal(fullRow.stdout_bytes, undefined);
+});
+
+test('GET /api/runs/:id zwraca pełny run; 404 dla nieznanego, 400 dla śmieci; literały niezasłonięte', async (t) => {
+  t.after(killAllRunning);
+
+  // Arrange
+  const started = await api(`/api/jobs/${jobB.id}/trigger`, { method: 'POST' });
+  await waitFor(async () => (await runningRunIds()).length === 1, 'run wystartował');
+
+  // Act/Assert — pojedynczy run z logami
+  const one = await api(`/api/runs/${started.body.id}`);
+  assert.equal(one.status, 200);
+  assert.equal(one.body.id, started.body.id);
+  assert.equal(typeof one.body.stdout, 'string', 'pojedynczy run wozi log — po to jest ten endpoint');
+
+  // Act/Assert — literały MUSZĄ mieć pierwszeństwo przed :id (inaczej parseInt → 400/404)
+  const current = await api('/api/runs/current');
+  assert.equal(current.status, 200);
+  assert.equal(current.body.id, started.body.id);
+  const recent = await api('/api/runs/recent?per_job=3');
+  assert.equal(recent.status, 200);
+  assert.ok(Array.isArray(recent.body), '/api/runs/recent dalej zwraca tablicę');
+
+  // Act/Assert — błędy
+  assert.equal((await api('/api/runs/999999')).status, 404);
+  assert.equal((await api('/api/runs/abc')).status, 400);
+});
+
+test('GET /api/runs/:id jest prywatny: X-Forwarded-For → 403', async () => {
+  const res = await api('/api/runs/1', { headers: { 'X-Forwarded-For': '1.2.3.4' } });
+  assert.equal(res.status, 403);
+});

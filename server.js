@@ -181,7 +181,7 @@ function proxyToVps(req, res, targetPath) {
     path: url.pathname + url.search,
     method: req.method,
     headers: { 'Content-Type': 'application/json' },
-    timeout: 10000,
+    timeout: 30000,
   };
 
   const proxy = http.request(options, (proxyRes) => {
@@ -450,13 +450,14 @@ async function handleApi(req, res) {
     }
   }
 
-  // GET /api/runs
+  // GET /api/runs — `fields=meta` (opt-in) zwraca wiersze bez stdout/stderr/webhook_payload.
   if (method === 'GET' && urlPath === '/api/runs') {
     const limit = parseInt(params.get('limit') || '50', 10);
     const offset = parseInt(params.get('offset') || '0', 10);
     const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
     const hideRoutine = params.get('hide_routine') === '1';
-    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine }));
+    const fields = params.get('fields') || undefined;
+    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine, fields }));
   }
 
   // GET /api/runs/current
@@ -508,13 +509,26 @@ async function handleApi(req, res) {
     return json(res, db.getRecentRunsPerJob(perJob));
   }
 
+  // GET /api/runs/:id — pełny wiersz JEDNEGO runu (z logami), do lazy-loadu w historii.
+  // MUSI stać PO literałach /api/runs/current i /api/runs/recent (nie są liczbami, więc
+  // parseInt dałby tu NaN → 400 zamiast ich odpowiedzi) i PRZED ogólnym matcherem niżej,
+  // który łapie każdy GET /api/runs/* i zwracał na to listę.
+  if (method === 'GET' && segments[0] === 'api' && segments[1] === 'runs' && segments[2] && !segments[3]) {
+    const runId = parseInt(segments[2], 10);
+    if (isNaN(runId)) return error(res, 'Invalid run ID');
+    const run = db.getRunWithPayload(runId);
+    if (!run) return error(res, 'Run not found', 404);
+    return json(res, run);
+  }
+
   // /api/runs with query params
   if (method === 'GET' && segments[0] === 'api' && segments[1] === 'runs') {
     const limit = parseInt(params.get('limit') || '50', 10);
     const offset = parseInt(params.get('offset') || '0', 10);
     const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
     const hideRoutine = params.get('hide_routine') === '1';
-    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine }));
+    const fields = params.get('fields') || undefined;
+    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine, fields }));
   }
 
   // === Inbox (Team OS Hub) — administracja członkami ===
