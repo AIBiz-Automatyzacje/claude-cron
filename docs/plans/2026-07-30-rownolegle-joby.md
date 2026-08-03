@@ -163,12 +163,26 @@ gdy port 7777 jest zajęty. Do zrobienia: konfigurowalny katalog instalacji + wy
 zajętego portu z czytelnym komunikatem (albo automatyczny wybór wolnego portu z zapisem
 do konfiguracji). To pierwszy kontakt zespołu z produktem — musi przejść gładko.
 
+### 4. Hook autostartu gubi workspace (fałszywe alarmy sync-heartbeat)
+
+Wykryte 01.08: hook `claude-cron-autostart.js` generowany przez `setup.mjs` spawnuje
+serwer z `cwd: CRON_DIR` i bez `CLAUDE_CRON_WORKSPACE`. Config (`lib/config.js:21`)
+bierze wtedy `process.cwd()` = repo claude-cron jako workspace, więc każdy script-job
+piszący relatywnymi ścieżkami (np. `sync-heartbeat.mjs` → `Zasoby/_sync/`) trafia do
+repo zamiast do vaulta → heartbeat nie znajduje `vps.md` i alarmuje co 15 min mimo
+działającego synca. Plist launchd (`com.claude-cron.daemon`) MA poprawny env — psuje
+się tylko instancja wstawana hookiem po śmierci serwera (np. po śnie Maca).
+Fix: `setup.mjs` przy generowaniu hooka ma wypalać też `CLAUDE_CRON_WORKSPACE`
+w `env` spawnu (wartość = workspace z konfiguracji setupu). Hook u Kacpra załatany
+ręcznie 01.08 — kolejny przebieg setupu nie może tego cofnąć.
+
 ### Rekomendowana kolejność całości
 
 1. Równoległe joby (główny zakres tego planu)
 2. Instalator (pkt 3) — przed onboardingiem pierwszej osoby z zespołu
 3. Fix autostartu na Macu (pkt 1)
-4. Opóźnienie po wybudzeniu (pkt 2)
+4. Hook autostartu — workspace w env (pkt 4, drobny, można dokleić do pkt 1)
+5. Opóźnienie po wybudzeniu (pkt 2)
 
 > Rebrand na „Puls" **wypadł z zakresu 30.07** — praca jest już w `main`
 > (gałąź `feature/migracja-puls-rebrand` jest przodkiem maina, ostatni commit 27.06,
