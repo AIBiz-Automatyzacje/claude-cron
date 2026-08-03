@@ -4,13 +4,24 @@
 // Uruchamiany jako claude-cron script-job (node <ten plik>). Wymaga żywej sesji Skool w dev-browser.
 
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const HOME = homedir();
 const REPO = join(HOME, 'Documents/Kodowanie/aibiz-classroom');
 const CLASSROOM_DIR = join(REPO, 'Classroom');
-const ORCHESTRATOR = join(HOME, '.claude/skills/akademia-classroom-sync/scripts/orchestrator.py');
+// Skill żyje w .claude/skills/ workspace'u; katalog globalny to fallback
+const ORCHESTRATOR_CANDIDATES = [
+  join(HOME, 'Documents/kacper_trzepiecinski_workspace/.claude/skills/akademia-classroom-sync/scripts/orchestrator.py'),
+  join(HOME, '.claude/skills/akademia-classroom-sync/scripts/orchestrator.py'),
+];
+const ORCHESTRATOR = ORCHESTRATOR_CANDIDATES.find(existsSync);
+if (!ORCHESTRATOR) {
+  console.error('[classroom-sync] nie znalazłem orchestrator.py skilla akademia-classroom-sync. Sprawdzone ścieżki:');
+  ORCHESTRATOR_CANDIDATES.forEach((p) => console.error(`  - ${p}`));
+  process.exit(1);
+}
 const today = new Date().toISOString().slice(0, 10);
 
 function run(cmd, args, opts = {}) {
