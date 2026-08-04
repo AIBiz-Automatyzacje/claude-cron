@@ -106,6 +106,12 @@ export function renderThreadCallout(thread, anchor, me) {
     '>',
     messages,
     '>',
+    // Komentarz HTML twardo zamyka listę wiadomości — sama pusta linia `>` NIE kończy
+    // listy w markdownie, więc checkbox lądował w TYM SAMYM <ul> co wiadomości i CSS
+    // (selektory ul:has/:not(:has)) stylował całość jako stopkę: awatar na tekście,
+    // zero wcięcia, checkbox przyklejony. Separator = dwie osobne listy, zawsze.
+    '> <!--os-thread-sep-->',
+    '>',
     `> - [ ] ${checkboxLabel} ${hint}`,
     `> %% id:${anchor.id} thread:${threadId} %%`,
   ].join('\n');
