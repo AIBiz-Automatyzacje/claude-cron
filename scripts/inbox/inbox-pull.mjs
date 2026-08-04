@@ -126,9 +126,9 @@ export function renderDelegatedCallout(rows) {
     const icon = delegateIcon(row.created_at);
     const stale = icon === '⚠️';
     const threadId = row.thread_id || row.id;
-    const head = `> [!delegated]- ${TYPE_EMOJI[row.type] || '📝'} ${row.title} · @${row.to_user}`;
-    const meta = `> <span class="os-wait${stale ? ' stale' : ''}">${icon} czeka ${ago(row.created_at)}</span> ` +
-      `<span class="os-meta">wysłane ${fmtTime(row.created_at)}</span>`;
+    const head = `> [!delegated]- ${TYPE_EMOJI[row.type] || '📝'} ${row.title} · @${row.to_user} ` +
+      `<span class="os-since">wysłane ${fmtTime(row.created_at)}</span>`;
+    const meta = `> <span class="os-wait${stale ? ' stale' : ''}">${icon} czeka ${ago(row.created_at)}</span>`;
     const content = (row.content || '').trim();
     const body = content ? ['>', ...content.split('\n').map(l => `> ${l}`)] : [];
     return [head, meta, ...body, `> %% thread:${threadId} %%`].join('\n');

@@ -90,6 +90,7 @@ test('delegowane: karta per delegacja (fold + tytuł + adresat), pill czasu, sta
   assert.equal(heads.length, 2);
   assert.ok(heads[0].includes('Baner na live sierpniowy · @'));
   assert.ok(heads[1].includes('· @filip'));
+  assert.ok(heads[0].includes('class="os-since">wysłane ')); // data jako badge w linii tytułu
   assert.ok(out.includes('⏳ czeka 2h'));
   assert.ok(out.includes('os-wait stale'));
   assert.ok(out.includes('⚠️ czeka 3d'));
