@@ -81,16 +81,19 @@ test('szablon self-heal: markery obu sekcji, liczniki pod regexy, cssclasses', (
   assert.ok(SKRZYNKA_TEMPLATE.includes('cssclasses: [skrzynka]'));
 });
 
-test('delegowane: jeden callout, pill czasu, stale ⚠️, marker thread per wiersz', () => {
+test('delegowane: karta per delegacja (fold + tytuł + adresat), pill czasu, stale ⚠️, treść, marker thread', () => {
   const fresh = msg({ created_at: new Date(Date.now() - 2 * 3600000).toISOString() });
   const stale = msg({ id: ID_B, thread_id: null, to_user: 'filip', created_at: new Date(Date.now() - 72 * 3600000).toISOString() });
   const out = renderDelegatedCallout([fresh, stale]);
-  // bez folda `-` — CSS chowa tytuł, zwinięty callout nie miałby czym się rozwinąć
-  assert.match(out, /^> \[!delegated\] /);
+  // fold `-` + tytuł z adresatem — tytuł jest widoczny (klikalne rozwijanie), treść w środku
+  const heads = out.split('\n').filter(l => l.startsWith('> [!delegated]- '));
+  assert.equal(heads.length, 2);
+  assert.ok(heads[0].includes('Baner na live sierpniowy · @'));
+  assert.ok(heads[1].includes('· @filip'));
   assert.ok(out.includes('⏳ czeka 2h'));
   assert.ok(out.includes('os-wait stale'));
   assert.ok(out.includes('⚠️ czeka 3d'));
+  assert.ok(out.includes('> Potrzebuję baner 1920x1080.')); // treść wysłanej wiadomości w karcie
   assert.ok(out.includes(`%% thread:${THREAD} %%`));
   assert.ok(out.includes(`%% thread:${ID_B} %%`)); // fallback na id gdy brak thread_id
-  assert.ok(out.includes('<span class="os-av s u-filip">F</span>'));
 });

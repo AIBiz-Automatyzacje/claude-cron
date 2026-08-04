@@ -118,20 +118,21 @@ function renderDashboardLine(row) {
 function renderDelegatedLine(row) {
   return `- ${delegateIcon(row.created_at)} @${row.to_user} · czeka ${ago(row.created_at)} — **${row.title}**`;
 }
-// Wszystkie delegacje w JEDNYM callout — wiersze jak w mockupie (pill czasu, awatar, tytuł),
-// marker %% thread %% per wiersz (ukryty w preview, do skopiowania dla /deleguj reply).
+// Każda delegacja = OSOBNY zwijany callout (spójnie z kartami Otrzymanych): tytuł widoczny
+// i klikalny (fold), w środku pill czasu + data + pełna treść wysłanej wiadomości.
+// Marker %% thread %% per karta (ukryty w preview, do skopiowania dla /deleguj reply).
 export function renderDelegatedCallout(rows) {
-  const items = rows.map(row => {
+  return rows.map(row => {
     const icon = delegateIcon(row.created_at);
     const stale = icon === '⚠️';
     const threadId = row.thread_id || row.id;
-    return `> - <span class="os-wait${stale ? ' stale' : ''}">${icon} czeka ${ago(row.created_at)}</span> ` +
-      `${avatarSpan(row.to_user, { small: true })}<span class="os-who">@${row.to_user}</span> — ` +
-      `**${row.title}** <span class="os-since">wysłane ${fmtTime(row.created_at)}</span> %% thread:${threadId} %%`;
-  }).join('\n');
-  // Bez folda (`-`): CSS ukrywa tytuł calloutu, więc zwinięty callout nie ma
-  // czym się rozwinąć — wiersze muszą być widoczne od razu.
-  return `> [!delegated] w toku\n${items}`;
+    const head = `> [!delegated]- ${TYPE_EMOJI[row.type] || '📝'} ${row.title} · @${row.to_user}`;
+    const meta = `> <span class="os-wait${stale ? ' stale' : ''}">${icon} czeka ${ago(row.created_at)}</span> ` +
+      `<span class="os-meta">wysłane ${fmtTime(row.created_at)}</span>`;
+    const content = (row.content || '').trim();
+    const body = content ? ['>', ...content.split('\n').map(l => `> ${l}`)] : [];
+    return [head, meta, ...body, `> %% thread:${threadId} %%`].join('\n');
+  }).join('\n\n');
 }
 
 // Link do archiwum bieżącego miesiąca — jedyne „drzwi" do zamkniętych wątków w pustym stanie
