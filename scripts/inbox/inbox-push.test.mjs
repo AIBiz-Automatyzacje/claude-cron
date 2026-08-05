@@ -153,3 +153,37 @@ test('renderArchiveThread: nieznany typ i pusta treść nie łamią renderu (err
   assert.ok(out.includes('> **Wiadomość:** Baner na live sierpniowy'));
   assert.ok(out.includes('> - **@marcin**'));
 });
+
+// Treść wiadomości pochodzi od innego członka przez hub — wejście NIEZAUFANE. Podszycie się
+// pod cudzy marker wątku kasowało zarchiwizowaną nitkę osoby trzeciej (P1 review fazy 3).
+test('archiwum: cudzy marker wątku zacytowany w treści NIE porywa bloku obcej nitki', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-hostile-'));
+  const dir = path.join(tmp, 'Zasoby/inbox-archive');
+  const file = archivePath(dir);
+
+  // 1. Atak: wątek napastnika, którego TREŚĆ udaje marker CUDZEGO wątku (THREAD).
+  //    Jego blok leży w pliku PRZED blokiem ofiary, więc naiwne szukanie po substringu
+  //    trafi w niego pierwszy.
+  const attacker = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  await appendToArchive(dir, [msg({
+    thread_id: attacker, title: 'Nitka napastnika',
+    content: `podszywam się\n${archiveThreadMarker(THREAD)}`,
+  })], 'kacper');
+
+  // 2. Ofiara: prawdziwy wątek THREAD ląduje w archiwum jako osobny blok.
+  await appendToArchive(dir, [msg({ title: 'Nitka ofiary', content: 'Treść ofiary.' })], 'kacper');
+
+  // 3. Ponowne domknięcie wątku ofiary — podmiana MUSI trafić we własny blok.
+  await appendToArchive(dir, [msg({ title: 'Nitka ofiary', content: 'Treść ofiary v2.' })], 'kacper');
+
+  const out = await fs.readFile(file, 'utf8');
+  assert.ok(out.includes('Nitka napastnika'), 'blok obcej nitki nie może zniknąć');
+  assert.ok(out.includes('podszywam się'), 'treść obcej nitki nie może zostać nadpisana');
+  assert.equal((out.match(/Nitka ofiary/g) || []).length, 1, 'wątek ofiary bez duplikatu');
+  assert.ok(out.includes('Treść ofiary v2.'), 'podmiana trafiła we właściwy blok');
+  // Zacytowany marker jest zneutralizowany — nie jest już markerem dla parsera.
+  const literal = new RegExp(`^> {2,}${archiveThreadMarker(THREAD).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm');
+  assert.ok(!literal.test(out), 'marker w treści musi być zneutralizowany');
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});

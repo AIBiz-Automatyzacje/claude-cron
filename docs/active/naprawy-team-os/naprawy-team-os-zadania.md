@@ -209,8 +209,8 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 - [x] Test: plik z `cssclasses` o innej wartości → wartość **nie jest** nadpisana
 - [x] Test: plik bez frontmattera → dostaje pełny blok z szablonu
 - [x] Test: roundtrip push↔pull dalej przechodzi (regresja kontraktu markerów)
-- [ ] Weryfikacja: `node --test scripts/inbox/inbox-pull.test.mjs` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości
+- [x] Weryfikacja: `node --test scripts/inbox/inbox-pull.test.mjs` przechodzi — 13/13 pass
+- [x] Weryfikacja: `npm test` przechodzi w całości — 895/895 pass
 
 ---
 
@@ -224,8 +224,8 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 - [x] Test: drugi wątek → dwa niezależne bloki, kolejność zachowana
 - [x] Test: plik z blokiem bez markera (sprzed zmiany) → nowy zapis dokłada blok, stary nietknięty
 - [x] Test: plik miesiąca nie istnieje → tworzony z nagłówkiem, jak dziś
-- [ ] Weryfikacja: `node --test scripts/inbox/inbox-push.test.mjs` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości
+- [x] Weryfikacja: `node --test scripts/inbox/inbox-push.test.mjs` przechodzi — 11/11 pass
+- [x] Weryfikacja: `npm test` przechodzi w całości — 895/895 pass
 
 **Operator checklist:**
 - [ ] Jednorazowe usunięcie istniejących duplikatów z `Zasoby/inbox-archive/2026-08.md`
@@ -245,13 +245,47 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 - [x] Test: zmieniony tytuł istniejącego zadania → rozpoznane po znaczniku, brak duplikatu
 - [x] Test: rozjazd naprawiony → kolejny przebieg nie tworzy nic nowego
 - [x] Test: brak szablonu w pluginie (Puls bez pluginu) → job kończy się cicho, bez błędu
-- [ ] Weryfikacja: `node --test scripts/consistency-check.test.mjs` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości
+- [x] Weryfikacja: `node --test scripts/consistency-check.test.mjs` przechodzi — 17/17 pass
+- [x] Weryfikacja: `npm test` przechodzi w całości — 895/895 pass
 
 **Operator checklist:**
 - [ ] **Test T14** wg szablonu (rozjazd → jedno zadanie → drugi przebieg bez duplikatu)
 - [ ] **Test T13** wg szablonu (frontmatter, wspólnie z U6)
 - [ ] Dopisanie „Obsidian zaktualizowany do najnowszej wersji" jako kroku onboardingu (R15)
+
+---
+
+## Do poprawy po review fazy 3
+
+- [x] 🔴 [P1] **scripts/inbox/inbox-push.mjs:120** — marker wątku matchowany SUBSTRINGIEM (`line.startsWith('>') && line.includes(marker)`) na treści renderowanej DOSŁOWNIE z niezaufanej wiadomości innego członka (`renderArchiveThread:92-93`). Wiadomość z linią `%% thread:<cudzy-uuid> %%` trafia do archiwum, a przy domknięciu tamtego wątku `replaceArchiveThreadBlock` podmienia CAŁY obcy blok — zarchiwizowana nitka osoby trzeciej znika bezpowrotnie. Fix: escapować `%%` w renderowanej treści ORAZ matchować marker przez równość całej linii (`line.trim() === '> ' + marker`) + test z cudzym markerem w treści.
+- [x] 🟠 [P2] **scripts/consistency-check.mjs:31** — job seedowany z `enabled: 1` (`templates/starter-jobs.json:43`) codziennie wystawia zadanie z komendą `/onboard --refresh-theme`, która NIE ISTNIEJE (tryb przeniesiony do U12/Faza 5; grep po zainstalowanym pluginie: zero trafień). User dostaje „naprawa to jedna komenda", komenda nie działa → zadanie zamykane bez naprawy. Fix: `"enabled": 0` w szablonie do czasu U12 albo `THEME_FIX_COMMAND` z krokami ręcznymi.
+- [x] 🟠 [P2] **scripts/consistency-check.mjs:314** — entry-point guard używa `realpathSync(new URL(import.meta.url).pathname)` zamiast `fileURLToPath` (learned-pattern + wzorzec 4 pozostałych entry-pointów repo). `URL.pathname` jest percent-encoded (katalog instalacji = wolne wejście usera) i daje `/C:/...` na Windowsie → `realpathSync` rzuca, `main()` nie startuje, job kończy się kodem 0 i Puls raportuje sukces przy niewykonanej kontroli. Fix: `fileURLToPath` po obu stronach.
+- [ ] 🟡 [P3] **scripts/consistency-check.mjs:607** — brak szablonu motywu ⇒ early return `no_template` PRZED `detectDrifts`, więc kontrola wersji nigdy nie biegnie bez pluginu (VPS, świeża instalacja); test `consistency-check.test.mjs:876` betonuje regresję. Fix: drift wersji liczony zawsze.
+- [ ] 🟡 [P3] **lib/starter-jobs.test.js:80** — osłabienie asercji (anty-pattern #2): z pętli usunięto `assert.equal(job.telegram_notify, 0)` i `assert.equal(job.job_type, 'claude')`, żeby przeszedł nowy script-job. Fix: asercje warunkowo dla jobów ≠ „Puls — kontrola spójności".
+- [ ] 🟡 [P3] **scripts/inbox/inbox-push.mjs:124** — granice bloku po ciągłości `>` bez zatrzymania na `> [!`: usunięcie pustej linii między wpisami ⇒ podmiana wchłania sąsiedni callout.
+- [ ] 🟡 [P3] **scripts/inbox/inbox-push.mjs:107** — `threadIdOf(thread) === null` daje literalny `> %% thread:null %%`, którego `replaceArchiveThreadBlock` nigdy nie trafi → bloki mnożą się przy każdym domknięciu.
+- [ ] 🟡 [P3] **scripts/inbox/inbox-push.mjs:159** — read-modify-write całego pliku miesiąca (dawniej atomowy `appendFile`) przy drugim pisarzu (`close.mjs`) i Obsidian Sync = lost update. Fix: porównanie ze snapshotem tuż przed zapisem (lub tmp+rename) + test sąsiadujących bloków.
+- [ ] 🟡 [P3] **scripts/consistency-check.mjs:89** — `formatDate` liczy `termin` w UTC (`toISOString`), vault liczy dobę lokalnie → run po lokalnej północy wpada do „Zaległych". Fix: `toLocaleDateString('sv-SE')` + test.
+- [ ] 🟡 [P3] **scripts/consistency-check.mjs:394** — `DASHBOARD_RELATIVE` na sztywno zamiast rezolucji przez `INBOX_TODO_PATH` (env-loader) → na vaultcie sprzed zmiany nazwy wpis do Dashboardu cicho nie powstaje.
+- [ ] 🟡 [P3] **scripts/consistency-check.mjs:169** — parametr `override` z `process.env.PULS_THEME_TEMPLATE`: konfiguracja bez konsumenta (zero użyć w repo, testy ją wyłączają) wymuszająca odczyt pliku jako sondę istnienia. Usuń.
+- [ ] 🟡 [P3] **scripts/consistency-check.mjs:171** — szablon czytany dwa razy na przebieg + pełne odczyty jako sondy istnienia (187, 197, `freeTaskPath:232` do 100 plików). Fix: `fs.access`, `resolveThemeTemplate` zwraca `{path, content}`.
+- [ ] 🟡 [P3] **scripts/consistency-check.mjs:64** — `{ id, opis, komenda }` łamie konwencję §7 (angielskie identyfikatory, polskie komentarze). Fix: `description`/`command`.
+- [ ] 🟡 [P3] **scripts/consistency-check.mjs:484** — `dashboardEntryLine` i `VERSION_FIX_COMMAND` eksportowane bez konsumentów. Zdejmij `export`.
+- [ ] 🟡 [P3] **scripts/inbox/inbox-pull.mjs:938** — `splitTopLevelEntries` obsługuje kontynuacje pod scenariusz, którego nie ma; uprość do dwóch przebiegów po liniach (−~10 LOC).
+- [ ] 🟡 [P3] **lib/starter-jobs.js:44** — `command` rozwijany do ścieżki ABSOLUTNEJ w momencie seedu i zamrażany w DB (seed nigdy nie robi UPDATE); po przeniesieniu instalacji job pada codziennie. Fix: względny w DB, rozwijanie w `lib/executor.js:433` + test.
+- [ ] 🟡 [P3] **lib/starter-jobs.js:44** — parametr `repoRoot` w `loadStarterJobDefs` bez żadnego wywołującego. Usuń.
+- [ ] 🟡 [P3] **setup.mjs:1366** — pytanie instalatora nie wymienia „kontroli spójności", a „T" seeduje job piszący do vaulta (`Zadania/w_trakcie/`, `Dashboard.md`). Dopisz do treści pytania.
+- [ ] 🟡 [P3] **scripts/inbox/inbox-push.test.mjs:82** — brak testu na wrogi input (`content` z `%% thread:<inny-id> %%`) — bezpośrednie pokrycie P1.
+- [ ] 🟡 [P3] **scripts/inbox/inbox-pull.test.mjs:130** — bez pokrycia guard niedomkniętego frontmattera (`inbox-pull.mjs:254`) i gałąź kontynuacji `splitTopLevelEntries` (`:236`), mimo deklaracji w nocie fazy. Dołóż 2 asercje.
+- [ ] 🟡 [P3] **scripts/consistency-check.test.mjs:774** — brak testu `runConsistencyCheck` dla `version-unknown` przy zgodnym snippecie (jedyny drift realny na świeżej maszynie) → `task_created` + treść z `VERSION_FIX_COMMAND`.
+- [ ] 🟡 [P3] **scripts/consistency-check.test.mjs:809** — brak testu I/O „brak pliku Dashboard.md" (`consistency-check.mjs:287`); `makeWorkspace` zawsze tworzy plik. Dodaj opcję `dashboard: null`.
+- [ ] 🟡 [P3] **scripts/consistency-check.test.mjs:894** — brak testu na uszkodzony `installed_plugins.json` (gałąź `console.error` + `return null`, `consistency-check.mjs:182`).
+- [ ] 🟡 [P3] **scripts/consistency-check.test.mjs:818** — brak testu na oba rozjazdy naraz (theme-drift + version-unknown → jedno zadanie z obiema komendami).
+
+## Operator checklist faza 3
+
+- [ ] Operator: job „Puls — kontrola spójności" powstaje wyłącznie przez seed w `setup.mjs` (idempotencja po `name`), więc na maszynach już zainstalowanych nie pojawi się sam; na VPS starter-jobs nie są seedowane w ogóle. Dodatkowo `data/version.json` nie istnieje w tej instalacji (repo dev), więc kontrola raportuje `version-unknown` — Operator action: odpal `node setup.mjs` w katalogu instalacji i odpowiedz „T" na pytanie o taski startowe, potem sprawdź job na dashboardzie i wykonaj **Test T14** (rozjazd → jedno zadanie → drugi przebieg bez duplikatu); weryfikacja przebiegu o 09:00 niewykonalna headless.
+- [ ] Operator: snippet `<vault>/.obsidian/snippets/skrzynka.css` jest NOWSZY niż szablon w zainstalowanym pluginie (`~/.claude/plugins/cache/aibiz/aibiz/32a789438618/skills/onboard/templates/skrzynka.css`) — vault ma poprawki, których szablon nie ma (ukryty `inline-title`, `border-top: none` dla AnuPpuccin, centrowanie ptaszka, `font-size: 11px`); detekcja jest bezkierunkowa, więc pierwszy przebieg wystawi zadanie „napraw motyw", a przyszła naprawa nadpisze vault starszym CSS-em — Operator action: przenieś aktualny CSS z vaulta do `skills/onboard/templates/skrzynka.css` w repo pluginu zespołowego, zacommituj i zaktualizuj plugin PRZED włączeniem joba kontroli spójności.
 
 ---
 

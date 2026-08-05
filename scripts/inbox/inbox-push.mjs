@@ -76,6 +76,17 @@ export function archiveThreadMarker(threadId) {
   return `%% thread:${threadId} %%`;
 }
 
+// Treść wiadomości pochodzi od INNEGO członka przez hub — to wejście niezaufane, a renderujemy
+// je dosłownie do tego samego pliku, w którym `%% thread:<id> %%` decyduje o granicach bloku.
+// Rozbijamy więc `%%` zerowej szerokości spacją: dla człowieka wygląda tak samo, dla parsera
+// archiwum przestaje być markerem (podszycie się pod cudzy wątek = skasowanie cudzej nitki).
+function neutralizeMarkers(text) {
+  // U+200B budowany z kodu, nie wklejony do źródła: niewidzialny znak w pliku źródłowym
+  // jest pułapką dla każdego, kto go później czyta lub edytuje.
+  const zeroWidth = String.fromCharCode(0x200b);
+  return text.replaceAll('%%', `%${zeroWidth}%`);
+}
+
 function threadIdOf(thread) {
   const root = thread[0] || {};
   return root.thread_id || root.id || null;
@@ -88,7 +99,7 @@ export function renderArchiveThread(thread, closedBy) {
   const emoji = TYPE_EMOJI[root.type] || '📨';
   const label = TYPE_LABEL[root.type] || 'Wiadomość';
   const messages = thread.map(m => {
-    const body = (m.content || '').split('\n');
+    const body = neutralizeMarkers(m.content || '').split('\n');
     const head = `> - **@${m.from_user}** · ${fmtTime(m.created_at)} — ${body[0] || ''}`;
     const cont = body.slice(1).map(l => `>   ${l}`);
     return [head, ...cont].join('\n');
@@ -115,9 +126,13 @@ export function renderArchiveThread(thread, closedBy) {
 // render nie zna swojej pozycji w pliku, więc szukamy jej dopiero przy zapisie.
 export function replaceArchiveThreadBlock(content, threadId, block) {
   if (!threadId) return null;
-  const marker = archiveThreadMarker(threadId);
+  const marker = `> ${archiveThreadMarker(threadId)}`;
   const lines = content.split('\n');
-  const hit = lines.findIndex((line) => line.startsWith('>') && line.includes(marker));
+  // RÓWNOŚĆ całej linii, nie `includes`: marker rozpoznajemy tylko w linii, którą sami
+  // wyrenderowaliśmy. Substring trafiałby też w marker zacytowany WEWNĄTRZ treści
+  // wiadomości (wejście od innego członka) — podmiana rozjechałaby się na obcy blok
+  // i skasowała cudzą, zarchiwizowaną nitkę. Druga warstwa: `neutralizeMarkers`.
+  const hit = lines.findIndex((line) => line.trim() === marker);
   if (hit === -1) return null;
 
   let start = hit;

@@ -19,16 +19,19 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 
 // Znacznik tożsamości zadania — jedyne kryterium „czy takie zadanie już wisi".
 export const TASK_MARKER = '%% puls:consistency-check %%';
 
-// Komenda naprawcza motywu. Skill `onboard` żyje w pluginie zespołowym (poza tym repo),
-// więc stała jest tu przepisana świadomie — zmiana nazwy trybu w SKILL.md wymaga zmiany tutaj.
-export const THEME_FIX_COMMAND = '/onboard --refresh-theme';
+// Kroki naprawcze motywu — świadomie OPIS RĘCZNY, nie komenda. Tryb `/onboard --refresh-theme`
+// jeszcze nie istnieje (U12); zadanie odsyłające do nieistniejącej komendy uczy człowieka, że
+// sygnał kłamie, i zostaje zamknięte bez naprawy. Po dowiezieniu U12 wracamy tu po jedną linię.
+export const THEME_FIX_COMMAND =
+  'skopiuj skrzynka.css z pluginu zespołowego (skills/onboard/templates/) do <vault>/.obsidian/snippets/, ' +
+  'potem Obsidian → Ustawienia → Wygląd → Fragmenty CSS → przeładuj i włącz snippet';
 
 // Komenda naprawcza wersji: ponowna instalacja zapisuje `data/version.json` (U1).
 export const VERSION_FIX_COMMAND = 'ponownie uruchom instalator Pulsa (install.sh / install.ps1)';
@@ -110,8 +113,8 @@ export function renderTaskFile({ drifts, now = new Date() }) {
     '',
     '## Cel',
     '',
-    'Puls wykrył rozjazd między tą maszyną a stanem wzorcowym. Naprawa to jedna komenda —',
-    'zadanie znika po ponownym przebiegu kontroli.',
+    'Puls wykrył rozjazd między tą maszyną a stanem wzorcowym. Przy każdym punkcie są kroki',
+    'naprawcze — zadanie znika po ponownym przebiegu kontroli.',
     '',
     '## Do zrobienia',
     '',
@@ -307,13 +310,18 @@ async function main() {
 }
 
 // Entry-point guard przez realpath po OBU stronach — macOS symlinkuje /var i /tmp do /private/*.
+// Ścieżkę modułu wyprowadzamy `fileURLToPath`, NIGDY `new URL(...).pathname`: pathname jest
+// percent-encoded (katalog instalacji to wolne wejście usera — spacje, diakrytyki) i na Windowsie
+// daje `/C:/...`. Wtedy realpathSync rzuca, guard cicho nie odpala main(), a job kończy się
+// kodem 0 — Puls raportuje sukces przy NIEWYKONANEJ kontroli.
 if (process.argv[1]) {
   const { realpathSync } = require('node:fs');
+  const modulePath = fileURLToPath(import.meta.url);
   let isEntry = false;
   try {
-    isEntry = realpathSync(process.argv[1]) === realpathSync(new URL(import.meta.url).pathname);
+    isEntry = realpathSync(process.argv[1]) === realpathSync(modulePath);
   } catch {
-    isEntry = import.meta.url === pathToFileURL(process.argv[1]).href;
+    isEntry = path.resolve(process.argv[1]) === modulePath;
   }
   if (isEntry) {
     main().catch((e) => {
