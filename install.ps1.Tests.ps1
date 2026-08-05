@@ -390,6 +390,61 @@ try {
         }
     }
 
+    # --- Test 15: tryb NIEINTERAKTYWNY (sciezka updatera z panelu POST /api/update) ---
+    # Te galezie decyduja, czy aktualizacja bez czlowieka przy klawiaturze skasuje obcy
+    # katalog i czy w ogole trafi we wlasciwa instalacje. Kazda z nich jest fail-closed:
+    # brak jawnego INSTALL_DIR = odmowa (zgadniety katalog to druga kopia obok, nie
+    # aktualizacja), obca zawartosc = odmowa BEZ pytania (nie ma kogo zapytac).
+    function Test-NonInteractiveRequiresInstallDir {
+        $saved = $env:INSTALL_DIR
+        $script:NonInteractive = $true
+        Remove-Item Env:\INSTALL_DIR -ErrorAction SilentlyContinue
+        $threw = $false
+        try { Read-InstallDir | Out-Null } catch { $threw = $true }
+        $script:NonInteractive = $false
+        $env:INSTALL_DIR = $saved
+
+        if ($threw) {
+            Test-Pass "nieinteraktywny: brak INSTALL_DIR => Read-InstallDir rzuca, nie zgaduje katalogu"
+        } else {
+            Test-Problem "nieinteraktywny: Read-InstallDir bez INSTALL_DIR NIE rzucil - instalator zgadlby katalog"
+        }
+    }
+
+    function Test-NonInteractiveRejectsForeignDir {
+        # Bez -Answer: gdyby kod spadl do Read-Host, test by wisial albo zaliczyl pusty
+        # Enter - dlatego sprawdzamy tez, ze katalog usera zostal nietkniety.
+        $target = New-ForeignDir -Name "obcy-noninteractive"
+        $script:NonInteractive = $true
+        $threw = $false
+        $message = ""
+        try { Confirm-InstallDirReplaceable -Dir $target } catch { $threw = $true; $message = $_.Exception.Message }
+        $script:NonInteractive = $false
+
+        if ($threw -and (Test-ForeignDirIntact -Dir $target) -and ($message -match "interaktywnego")) {
+            Test-Pass "nieinteraktywny: obcy katalog odrzucony fail-closed, dane usera nietkniete"
+        } else {
+            Test-Problem "nieinteraktywny: obcy katalog NIE zostal ochroniony (threw=$threw, msg='$message')"
+        }
+    }
+
+    function Test-NonInteractiveAcceptsPulsDir {
+        # Aktualizacja WLASNEJ instalacji to happy path updatera - guard nie moze jej blokowac.
+        $target = Join-Path $Sandbox "t15-puls"
+        New-Item -ItemType Directory -Path (Join-Path $target "data") -Force | Out-Null
+        Set-Content -Path (Join-Path $target "server.js") -Value "code"
+        $script:NonInteractive = $true
+        $threw = $false
+        try { Confirm-InstallDirReplaceable -Dir $target } catch { $threw = $true }
+        $script:NonInteractive = $false
+
+        if (-not $threw) {
+            Test-Pass "nieinteraktywny: katalog wlasnej instalacji przechodzi guard bez pytania"
+        } else {
+            Test-Problem "nieinteraktywny: guard zablokowal aktualizacje wlasnej instalacji"
+        }
+    }
+
     Write-Host "== install.ps1 - testy bootstrap/preserve =="
     Test-PreserveMovesDataAndNode
     Test-PreserveNoopWhenNoOld
@@ -408,6 +463,9 @@ try {
     Test-ResolveZipSourceWithSha
     Test-ResolveZipSourceFallback
     Test-ResolveZipSourceExplicitUrl
+    Test-NonInteractiveRequiresInstallDir
+    Test-NonInteractiveRejectsForeignDir
+    Test-NonInteractiveAcceptsPulsDir
 
     Write-Host ""
     Write-Host "Wynik: $Pass PASS / $($Pass + $Fail) total"

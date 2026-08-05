@@ -476,4 +476,24 @@ istnieją (czysty CommonJS + vanilla JS) — nie ma czego uruchomić poza `npm t
 push jest bramkowany operator checklistą (cudze niezacommitowane zmiany w `hooks/` do wyjaśnienia
 z autorem). Commit Fazy 5 obejmuje wyłącznie `claude-cron`.
 
-**Ostatnia aktualizacja:** 2026-08-05 (domknięcie Fazy 5)
+## Review Fazy 5 (2026-08-05) — ⛔ BLOKUJE
+
+Raport: `review-faza-5.md`. Findingi: 3× P1, 5× P2, 14× P3 (KOD/TEST) + 9 pozycji OPERATOR.
+
+**Wniosek główny:** happy-path updatera nie domyka się na ŻADNEJ platformie mimo 21/21 i 952/952
+zielonych. Mac: nikt nie zapisuje `data/version.json` po `git pull`, więc panel raportuje sukces
+jako porażkę i w kółko oferuje tę samą aktualizację; dodatkowo skrypt tylko UBIJA daemona, licząc
+na launchd/hook, których ta instalacja nie ma wpiętych (`lib/platform.js` poza ścieżką usera).
+Windows: spawn PowerShella z `cwd` = katalog instalacji blokuje katalog, który `Install-FreshRepo`
+musi przenieść — aktualizacja przerywa się PO ubiciu daemona (learned pattern 2026-07-28).
+
+**Wzorzec do zapamiętania:** testy asertowały wyłącznie KSZTAŁT komend (`git pull --ff-only`,
+`kill <pid>`), a nie kontrakt, po który feature powstał („panel wie o nowej wersji", „serwer wraca").
+To kolejna realizacja learned-patternu 2026-07-03/2026-07-28 — testy czystych funkcji obu stron
+przechodzą przy złamanym zachowaniu systemowym. Brak też szwu HTTP dla `/api/update` (przyczyna:
+`server.js:336/344` woła `updater.checkForUpdate()` bez argumentów — zero DI).
+
+**U12 poza zasięgiem review** — zmiany w `aibiz-plugin` niezacommitowane, push zabramkowany
+wyjaśnieniem cudzych zmian w `hooks/`; odhaczenie ✅ opisuje lokalny katalog operatora, nie stan zespołu.
+
+**Ostatnia aktualizacja:** 2026-08-05 (review Fazy 5)
