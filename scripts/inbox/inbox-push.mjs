@@ -91,7 +91,10 @@ export function renderArchiveThread(thread, closedBy) {
   ].join('\n');
 }
 
-async function appendToArchive(archiveDir, thread, closedBy) {
+// Eksportowana, bo domknięcie wątku ma DWIE ścieżki (checkbox w Skrzynce → ten plik,
+// komenda `close` skilla deleguj → close.mjs) i obie muszą zapisywać archiwum tym samym
+// kodem. Druga kopia w vaulcie cicho rozjechała się z tą i gubiła nitkę.
+export async function appendToArchive(archiveDir, thread, closedBy) {
   await fs.mkdir(archiveDir, { recursive: true });
   const file = archivePath(archiveDir);
   let header = '';

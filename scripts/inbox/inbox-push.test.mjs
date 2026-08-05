@@ -2,7 +2,10 @@
 // Roundtrip render→parse (kontrakt pull↔push) żyje w inbox-pull.test.mjs — tu tylko strona push.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractInboxSection, renderArchiveThread, archivePath } from './inbox-push.mjs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { appendToArchive, extractInboxSection, renderArchiveThread, archivePath } from './inbox-push.mjs';
 
 const T0 = '2026-07-24T07:12:00.000Z';
 const THREAD = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -52,6 +55,34 @@ test('renderArchiveThread: cała nitka w jednym callout — nagłówek, obie wia
   // Kontynuacja wieloliniowej treści zostaje wcięta wewnątrz calloutu
   assert.ok(out.includes('>   Link w Zasobach.'));
   assert.ok(out.includes('by @kacper_'));
+});
+
+// appendToArchive jest publiczna, bo używa jej też close.mjs (druga ścieżka domknięcia).
+test('appendToArchive: tworzy katalog i plik miesiąca z nagłówkiem, drugi zapis tylko dopisuje', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-'));
+  const dir = path.join(tmp, 'Zasoby/inbox-archive');
+
+  await appendToArchive(dir, [msg()], 'kacper');
+  const file = archivePath(dir);
+  const first = await fs.readFile(file, 'utf8');
+  assert.ok(first.startsWith('---\ntags: [archiwum, team-os]\n---'));
+  assert.ok(first.includes('Baner na live sierpniowy'));
+
+  await appendToArchive(dir, [msg({ title: 'Druga nitka' })], 'kacper');
+  const second = await fs.readFile(file, 'utf8');
+  // Nagłówek pliku dokładany TYLKO przy tworzeniu — inaczej front-matter powtarzałby się.
+  assert.equal(second.match(/tags: \[archiwum, team-os\]/g).length, 1);
+  assert.ok(second.includes('Druga nitka'));
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('appendToArchive: niezapisywalny katalog archiwum rzuca (error case)', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-blk-'));
+  const notADir = path.join(tmp, 'plik');
+  await fs.writeFile(notADir, 'x', 'utf8');
+  await assert.rejects(() => appendToArchive(path.join(notADir, 'archiwum'), [msg()], 'kacper'));
+  await fs.rm(tmp, { recursive: true, force: true });
 });
 
 test('renderArchiveThread: nieznany typ i pusta treść nie łamią renderu (error case)', () => {

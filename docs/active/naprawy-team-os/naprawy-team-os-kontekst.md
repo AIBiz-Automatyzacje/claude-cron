@@ -174,4 +174,76 @@ nie wyłącza joba z poprzedniej roli; `NO_ANSWER` gdziekolwiek w odpowiedzi zna
 | Fixtury istniejących testów inbox rozszerzone o seed członków | Wymuszone zmianą kontraktu z planu (adresat musi istnieć w `members`). Zero osłabionych ani usuniętych asercji |
 | Weryfikacje „żywy daemon" (`curl /api/status`) i `[Manual]` niewykonane | Daemon biegnie ze starym kodem; restart to decyzja operatora |
 
-**Ostatnia aktualizacja:** 2026-08-05 (domknięcie Fazy 1)
+### Review Fazy 1 (2026-08-05)
+
+Raport: [review-faza-1.md](review-faza-1.md). Severity gate: **ZASTRZEŻENIA** — 0×P1, 5×P2, 13×P3
+(KOD/TEST) + 7 findingów OPERATOR. `npm test`: 837/837 pass, exit 0.
+
+Kluczowe wnioski:
+
+- **Fail-fast migracji NOCASE jest szerszy niż zamierzony** (`lib/inbox-db.js:120`). Rzucenie z `migrate()`
+  zabija CAŁE połączenie, a `getInboxDb()` biegnie przy każdej operacji — więc kolizja nazw kładzie całą
+  skrzynkę (nie tylko `send`) i blokuje instruowaną w komunikacie naprawę przez `revokeMember`. To dokładnie
+  ta klasa błędu, którą wcześniej „naprawiliśmy" przesuwając przypisanie połączenia za `migrate()` —
+  przesunięcie rozwiązało częściową migrację, ale nie dostępność lekarstwa.
+- **R10 nie jest spełnione na VPS** (`scripts/install-vps.sh`). `data/version.json` pisze wyłącznie
+  `setup.mjs`, którego ścieżka VPS nie uruchamia — hub, czyli maszyna 24/7, zawsze raportuje `unknown`.
+  U8 i U11 stoją na tym polu, więc dług trzeba spłacić w tej fazie.
+- **Bootstrap instalatorów wszedł bez testów**, mimo istniejącego harnessu (`install.test.sh`,
+  `CLAUDE_CRON_LIB_ONLY=1`) — i to jest bezpośrednia przyczyna, dla której defekt zachłannego `sed`
+  w `fetch_ref_sha` przeżył implementację. Analogicznie zero Pesterów dla `Resolve-ZipSource`.
+- **Szew `server.js`↔`lib/version` nieprzetestowany** — potwierdzenie learned pattern „testy czystych funkcji
+  obu stron przechodzą przy złamanym zachowaniu systemowym".
+- **Fold wielkości liter rozjeżdża się z SQLite dla diakrytyk** (`toLowerCase()` vs `COLLATE NOCASE`
+  = tylko ASCII). Przy polskojęzycznym zespole „Michał"/"MICHAŁ" czyni obie osoby trwale nieosiągalnymi.
+
+Bookkeeping `Weryfikacja:`: 8 checkboxów odznaczonych automatycznie (7×CLI + 1×grep), 1 pozostawiony
+operatorowi (`curl /api/status` — potwierdzone, że lokalny daemon biegnie ze starym kodem: odpowiedź nie
+zawiera pola `version`). Tester E2E pominięty przez routing (brak warstwy UI, zero browserowych
+checkboxów), więc żaden checkbox wymagający żywego środowiska nie został odznaczony.
+
+### Faza 2 — Granica repo ↔ vault (2026-08-05) — **zaimplementowana, `npm test` 853/854**
+
+**U4 — `PULS_HOME` ustawia instalator, nie człowiek**
+
+- `setup.mjs` — nowy czysty helper `mergeEnvIntoSettings(existing, key, value)` (lustro
+  `mergeHookIntoSettings` dla sekcji `env` tego samego pliku): cudzych kluczy nie rusza,
+  `changed=false` gdy wartość jest już dokładnie ta sama, więc re-run nie przepisuje pliku.
+- `registerPulsHomeEnv(workspace, installDir)` zapisuje `env.PULS_HOME` do
+  `{workspace}/.claude/settings.json`; `writePulsHomePointer()` + `defaultPulsHomePointer()`
+  piszą wskaźnik `~/.claude-cron-home` z **faktycznym** katalogiem instalacji (konwencja
+  `~/.claude-cron-oauth-token`). Zgadywanie `$HOME/claude-cron` świadomie odrzucone.
+- `persistPulsHome()` wołane **bezwarunkowo**, niezależnie od odpowiedzi o autostart — to od niego
+  zależy, czy skille w vaulcie w ogóle znajdą `data/inbox.env`. Uszkodzony `settings.json` = fail-fast
+  (jak przy hooku), pad zapisu wskaźnika = `warn` (instalacja jest sprawna, traci tylko zasięg).
+- `<vault>/.claude/skills/deleguj/scripts/env.mjs` — kolejność szukania sekretu:
+  `INBOX_ENV_FILE` → `$PULS_HOME/data/inbox.env` → wskaźnik `~/.claude-cron-home` →
+  walk-up `.env` (legacy, tylko odczyt). Komunikat `MISSING_CONFIG_MESSAGE` **przestał** sugerować
+  wpisanie sekretu do `.env` w vaulcie — wskazuje re-run instalatora (`docs/solutions/2026-07-26`).
+
+**U5 — `close` archiwizuje wątek, jedna kopia kodu w repo**
+
+- `appendToArchive` w `scripts/inbox/inbox-push.mjs` jest teraz **eksportowana** (zachowanie bez zmian).
+- Nowy `scripts/inbox/close.mjs` w repo, obok `inbox-push.mjs`: `main({client, argv})` z wstrzykiwanym
+  klientem (wzorzec `inbox-push`), domyka wyłącznie wiadomości **do mnie**, akcją `Zapoznane`
+  (nie `Zrobione` — to wysłałoby nadawcy automatyczną odpowiedź), archiwum zapisuje **raz na wątek**,
+  nie raz na wiadomość. Entry-point guard przez `realpathSync` po obu stronach.
+- `<vault>/.../deleguj/SKILL.md` woła `node "$PULS_HOME/scripts/inbox/close.mjs"` z **guardem na brak
+  `PULS_HOME`** — czytelny komunikat zamiast `MODULE_NOT_FOUND`.
+
+### Odchylenia od planu (Faza 2)
+
+| Odchylenie | Powód |
+|---|---|
+| Nowy plik testowy **poza repo**: `<vault>/.claude/skills/deleguj/scripts/env.test.mjs` (4 testy loadera) | Checklist wymaga testów loadera w vaulcie, a repo-owy `setup.test.mjs` nie może importować pliku spoza repo bez wiązania testów z konkretną maszyną. Odpalanie: `node --test env.test.mjs` z katalogu `scripts/` — `npm test` repo tego **nie obejmuje** |
+| Wydzielone `readSettingsFileOrThrow(settingsFile)` z `registerHook` | Do `{workspace}/.claude/settings.json` piszą teraz DWIE funkcje (hook + `env.PULS_HOME`); definicja „co znaczy uszkodzony plik" ma być jedna. Zachowanie i komunikat `registerHook` bez zmian |
+| Zwrotka `close` rozszerzona o pole `archived` (plan mówił o `{thread_id, closed}`) | Bez tego „nitka trafiła do archiwum" nie jest widoczna w wyjściu komendy — cała naprawa jest o **widocznym** sygnale |
+| `close.mjs` **rzuca** zamiast `process.exit(1)` w `main()` | `exit` siedzi wyłącznie w entry-point guardzie, żeby `main()` dało się testować (wzorzec `main({client})` z `inbox-push`) |
+| Kopia `<vault>/.../deleguj/scripts/close.mjs` **nie usunięta** | Zgodnie z planem to krok operatora po zielonym T8. W okresie przejściowym działają obie ścieżki |
+
+**Walidacja Fazy 2:** `npm test` → 853 pass / 1 fail, przy czym jedyny fail to
+`lib/ask.test.js` „wnuk trzymający pipe po wyjściu CLI…" — plik **nietknięty w tej fazie**,
+w izolacji 30/30 pass (`node --test lib/ask.test.js`). Klasyfikacja: **flake czasowy pod obciążeniem
+pełnego suite'u**, nie defekt. Testy loadera w vaulcie: 4/4 pass (poza `npm test`).
+
+**Ostatnia aktualizacja:** 2026-08-05 (domknięcie Fazy 2)

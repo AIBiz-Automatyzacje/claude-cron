@@ -129,19 +129,19 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U4 — `PULS_HOME` ustawia instalator, nie człowiek *(R4, nakład L, zależności: brak — musi poprzedzać U5)*
 
-- [ ] Modyfikuj `setup.mjs` — `PULS_HOME` do sekcji `env` w `{workspace}/.claude/settings.json` (idempotentny merge obok wpisu hooka, `:176` / `:1064`)
-- [ ] Modyfikuj `setup.mjs` — zapis wskaźnika `~/.claude-cron-home` z **faktycznym** katalogiem instalacji
-- [ ] Modyfikuj `setup.test.mjs`
-- [ ] Modyfikuj `<vault>/.claude/skills/deleguj/scripts/env.mjs` — kolejność: `INBOX_ENV_FILE` → `$PULS_HOME/data/inbox.env` → **`~/.claude-cron-home` → `<ścieżka>/data/inbox.env`** → walk-up `.env` (legacy)
-- [ ] Modyfikuj `<vault>/.claude/skills/deleguj/scripts/env.mjs` — komunikat błędu **przestaje** sugerować wpisanie sekretu do `.env` w vaulcie; wskazuje re-run instalatora
-- [ ] Modyfikuj `<vault>/.claude/skills/deleguj/SKILL.md` — opis nowej kolejności szukania
-- [ ] Test: merge `env.PULS_HOME` do pustego `settings.json` → klucz dodany
-- [ ] Test: merge do `settings.json` z istniejącym `env` i wpisem hooka → oba zachowane
-- [ ] Test: re-run z tą samą wartością → brak zmiany pliku (idempotencja)
-- [ ] Test: uszkodzony `settings.json` → fail-fast, plik **nietknięty**
-- [ ] Test: wskaźnik zapisany z niedomyślnym katalogiem instalacji
-- [ ] Test: loader w vaulcie — brak `PULS_HOME`, obecny wskaźnik → sekret znaleziony
-- [ ] Test: loader — brak obu → komunikat **bez** sugestii zapisu do `.env` vaulta
+- [x] Modyfikuj `setup.mjs` — `PULS_HOME` do sekcji `env` w `{workspace}/.claude/settings.json` (idempotentny merge obok wpisu hooka, `:176` / `:1064`)
+- [x] Modyfikuj `setup.mjs` — zapis wskaźnika `~/.claude-cron-home` z **faktycznym** katalogiem instalacji
+- [x] Modyfikuj `setup.test.mjs`
+- [x] Modyfikuj `<vault>/.claude/skills/deleguj/scripts/env.mjs` — kolejność: `INBOX_ENV_FILE` → `$PULS_HOME/data/inbox.env` → **`~/.claude-cron-home` → `<ścieżka>/data/inbox.env`** → walk-up `.env` (legacy)
+- [x] Modyfikuj `<vault>/.claude/skills/deleguj/scripts/env.mjs` — komunikat błędu **przestaje** sugerować wpisanie sekretu do `.env` w vaulcie; wskazuje re-run instalatora
+- [x] Modyfikuj `<vault>/.claude/skills/deleguj/SKILL.md` — opis nowej kolejności szukania
+- [x] Test: merge `env.PULS_HOME` do pustego `settings.json` → klucz dodany
+- [x] Test: merge do `settings.json` z istniejącym `env` i wpisem hooka → oba zachowane
+- [x] Test: re-run z tą samą wartością → brak zmiany pliku (idempotencja)
+- [x] Test: uszkodzony `settings.json` → fail-fast, plik **nietknięty**
+- [x] Test: wskaźnik zapisany z niedomyślnym katalogiem instalacji
+- [x] Test: loader w vaulcie — brak `PULS_HOME`, obecny wskaźnik → sekret znaleziony
+- [x] Test: loader — brak obu → komunikat **bez** sugestii zapisu do `.env` vaulta
 - [ ] Weryfikacja: `node --test setup.test.mjs` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 - [ ] Weryfikacja: `grep -rn "\.env" <vault>/.claude/skills/deleguj/scripts/env.mjs` — brak komunikatu namawiającego do zapisu sekretu w vaulcie
@@ -150,16 +150,16 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U5 — `close` archiwizuje wątek, jedna kopia kodu w repo *(R2, nakład L, zależności: **U4**)*
 
-- [ ] Stwórz `scripts/inbox/close.mjs` (przeniesienie z vaulta, import `appendToArchive`)
-- [ ] Stwórz `scripts/inbox/close.test.mjs`
-- [ ] Modyfikuj `scripts/inbox/inbox-push.mjs` — eksport `appendToArchive` (zachowanie bez zmian, zmienia się widoczność)
-- [ ] Modyfikuj `scripts/inbox/inbox-push.test.mjs`
-- [ ] Modyfikuj `<vault>/.claude/skills/deleguj/SKILL.md` — wywołanie `node $PULS_HOME/scripts/inbox/close.mjs` + **guard na brak `PULS_HOME`** (czytelny komunikat zamiast `MODULE_NOT_FOUND`)
+- [x] Stwórz `scripts/inbox/close.mjs` (przeniesienie z vaulta, import `appendToArchive`)
+- [x] Stwórz `scripts/inbox/close.test.mjs`
+- [x] Modyfikuj `scripts/inbox/inbox-push.mjs` — eksport `appendToArchive` (zachowanie bez zmian, zmienia się widoczność)
+- [x] Modyfikuj `scripts/inbox/inbox-push.test.mjs`
+- [x] Modyfikuj `<vault>/.claude/skills/deleguj/SKILL.md` — wywołanie `node $PULS_HOME/scripts/inbox/close.mjs` + **guard na brak `PULS_HOME`** (czytelny komunikat zamiast `MODULE_NOT_FOUND`)
 - [ ] Usuń `<vault>/.claude/skills/deleguj/scripts/close.mjs` — **dopiero po zielonym T8**
-- [ ] Test: `close` na otwartym wątku → hub dostaje `done` **i** nitka trafia do pliku miesiąca
-- [ ] Test: `close` powtórzony → `closed: 0`, **archiwum bez drugiego wpisu**
-- [ ] Test: `close` na wątku bez wiadomości do mnie → czytelna nota, zero zapisu
-- [ ] Test: pad zapisu archiwum → błąd widoczny w wyjściu, nie ciche `exit 0`
+- [x] Test: `close` na otwartym wątku → hub dostaje `done` **i** nitka trafia do pliku miesiąca
+- [x] Test: `close` powtórzony → `closed: 0`, **archiwum bez drugiego wpisu**
+- [x] Test: `close` na wątku bez wiadomości do mnie → czytelna nota, zero zapisu
+- [x] Test: pad zapisu archiwum → błąd widoczny w wyjściu, nie ciche `exit 0`
 - [ ] Weryfikacja: `node --test scripts/inbox/close.test.mjs` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 - [ ] Weryfikacja: `grep -n "export.*function appendToArchive" scripts/inbox/inbox-push.mjs` zwraca trafienie

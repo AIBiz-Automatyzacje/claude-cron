@@ -45,6 +45,10 @@ import {
   pickInitialPort,
   readEnvLineValue,
   buildGetUserEnvCommand,
+  mergeEnvIntoSettings,
+  registerPulsHomeEnv,
+  writePulsHomePointer,
+  defaultPulsHomePointer,
 } from './setup.mjs';
 
 import http from 'node:http';
@@ -209,6 +213,82 @@ test('removeHookFromSettings na pustym/niewłaściwym wejściu nie rzuca i nie u
   const result = removeHookFromSettings(noHooks);
   assert.equal(result.removed, false);
   assert.equal(result.settings.otherKey, 'x');
+});
+
+// === mergeEnvIntoSettings + PULS_HOME — wskaźnik instalacji dla skilli w vaulcie ===
+
+test('mergeEnvIntoSettings dodaje PULS_HOME do pustego settings.json', () => {
+  const { settings, changed } = mergeEnvIntoSettings({}, 'PULS_HOME', '/opt/puls');
+
+  assert.equal(changed, true);
+  assert.equal(settings.env.PULS_HOME, '/opt/puls');
+});
+
+test('mergeEnvIntoSettings zachowuje istniejący env i wpis hooka', () => {
+  const command = 'node "/ws/.claude/hooks/claude-cron-autostart.js"';
+  const { settings: withHook } = mergeHookIntoSettings({ env: { INNE: 'x' } }, command);
+
+  const { settings, changed } = mergeEnvIntoSettings(withHook, 'PULS_HOME', '/opt/puls');
+
+  assert.equal(changed, true);
+  assert.equal(settings.env.INNE, 'x');
+  assert.equal(settings.env.PULS_HOME, '/opt/puls');
+  assert.equal(settings.hooks.UserPromptSubmit[0].hooks[0].command, command);
+});
+
+test('mergeEnvIntoSettings z tą samą wartością nie zgłasza zmiany (idempotencja)', () => {
+  const first = mergeEnvIntoSettings({}, 'PULS_HOME', '/opt/puls');
+  const second = mergeEnvIntoSettings(first.settings, 'PULS_HOME', '/opt/puls');
+
+  assert.equal(second.changed, false);
+  assert.equal(second.settings.env.PULS_HOME, '/opt/puls');
+});
+
+test('registerPulsHomeEnv na re-runie nie dotyka pliku', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-home-settings-'));
+  const settingsFile = path.join(dir, '.claude', 'settings.json');
+
+  assert.equal(registerPulsHomeEnv(dir, '/opt/puls'), true);
+  const firstContent = fs.readFileSync(settingsFile, 'utf-8');
+  const mtimeBefore = fs.statSync(settingsFile).mtimeMs;
+
+  assert.equal(registerPulsHomeEnv(dir, '/opt/puls'), false);
+  assert.equal(fs.readFileSync(settingsFile, 'utf-8'), firstContent);
+  assert.equal(fs.statSync(settingsFile).mtimeMs, mtimeBefore);
+  assert.equal(JSON.parse(firstContent).env.PULS_HOME, '/opt/puls');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('registerPulsHomeEnv na uszkodzonym settings.json robi fail-fast i NIE tyka pliku', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-home-broken-'));
+  const settingsFile = path.join(dir, '.claude', 'settings.json');
+  const broken = '{ "permissions": [ ,, }';
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, broken, 'utf-8');
+
+  assert.throws(() => registerPulsHomeEnv(dir, '/opt/puls'), /niepoprawnym JSON-em/);
+  assert.equal(fs.readFileSync(settingsFile, 'utf-8'), broken);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('writePulsHomePointer zapisuje FAKTYCZNY katalog instalacji, nie domyślny', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-home-pointer-'));
+  const pointer = path.join(dir, '.claude-cron-home');
+  const installDir = '/Users/ktoś/Documents/Kodowanie/claude-cron';
+
+  const written = writePulsHomePointer(installDir, pointer);
+
+  assert.equal(written, pointer);
+  assert.equal(fs.readFileSync(pointer, 'utf-8').trim(), installDir);
+  assert.notEqual(fs.readFileSync(pointer, 'utf-8').trim(), path.join(os.homedir(), 'claude-cron'));
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('defaultPulsHomePointer trzyma konwencję ~/.claude-cron-*', () => {
+  assert.equal(defaultPulsHomePointer('/home/u'), '/home/u/.claude-cron-home');
 });
 
 // === buildHookSource — absolutna ścieżka node + flaga --disable-warning ===

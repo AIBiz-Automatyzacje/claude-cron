@@ -243,6 +243,24 @@ export function removeHookFromSettings(existing) {
   return { settings, removed: true };
 }
 
+// === Pure helper: idempotentny merge zmiennej do sekcji env w settings.json ===
+// Lustro mergeHookIntoSettings dla drugiej sekcji tego samego pliku. `changed=false`
+// gdy klucz ma już DOKŁADNIE tę wartość — re-run instalatora nie przepisuje pliku.
+// Cudzych kluczy (permissions, hooks, inne env) NIE ruszamy: to plik usera, nie nasz.
+export function mergeEnvIntoSettings(existing, key, value) {
+  const settings = existing && typeof existing === 'object' ? { ...existing } : {};
+  const env = settings.env && typeof settings.env === 'object' ? { ...settings.env } : {};
+
+  if (env[key] === value) {
+    settings.env = env;
+    return { settings, changed: false };
+  }
+
+  env[key] = value;
+  settings.env = env;
+  return { settings, changed: true };
+}
+
 // === Pure helper: źródło hooka autostartu z absolutną ścieżką node + flagą ===
 // Port wypalany razem z resztą: hook żyje w sesji Claude Code, której env pochodzi
 // sprzed instalacji (zmiana env nie propaguje się do żyjących procesów — docs/solutions
@@ -1060,23 +1078,77 @@ function installPulsSkill() {
   }
 }
 
+// === I/O: odczyt {workspace}/.claude/settings.json z fail-fast na uszkodzonym JSON ===
+// Wydzielone, bo do tego pliku piszą DWIE rzeczy (hook autostartu i env.PULS_HOME) —
+// jedna definicja „co znaczy uszkodzony plik" zamiast dwóch, które mogą się rozjechać.
+function readSettingsFileOrThrow(settingsFile) {
+  if (!fs.existsSync(settingsFile)) return {};
+  const raw = fs.readFileSync(settingsFile, 'utf-8');
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    // Fail-fast: NIE nadpisujemy uszkodzonego settings.json — zniszczyłoby to
+    // permissions/inne hooki/env usera. Każemy userowi naprawić ręcznie.
+    throw new Error(
+      `Plik ${settingsFile} jest niepoprawnym JSON-em (${error.message}). ` +
+        'Setup NIE nadpisze go, by nie utracić Twoich permissions/hooków/env. ' +
+        'Napraw plik ręcznie (albo usuń go, jeśli nie zawiera nic ważnego) i uruchom setup ponownie.',
+    );
+  }
+}
+
+// === I/O: PULS_HOME do sekcji env w {workspace}/.claude/settings.json ===
+// Dzięki temu KAŻDA sesja Claude Code w tym workspace zna katalog instalacji Pulsa —
+// skille w vaulcie (deleguj) znajdą `data/inbox.env` bez ręcznego kroku usera.
+// Zwraca true gdy plik faktycznie zmieniony (re-run z tą samą wartością = false).
+export function registerPulsHomeEnv(workspace, installDir) {
+  const settingsFile = path.join(workspace, '.claude', 'settings.json');
+  const existing = readSettingsFileOrThrow(settingsFile);
+  const { settings, changed } = mergeEnvIntoSettings(existing, 'PULS_HOME', installDir);
+  if (!changed) return false;
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf-8');
+  return true;
+}
+
+// === I/O: wskaźnik ~/.claude-cron-home z FAKTYCZNYM katalogiem instalacji ===
+// settings.json ratuje tylko sesje w jednym workspace; wskaźnik o stałej nazwie działa
+// dla każdego procesu (konwencja: ~/.claude-cron-oauth-token). Zgadywanie
+// `$HOME/claude-cron` odpada — katalog instalacji to wolne wejście usera.
+export function writePulsHomePointer(installDir, pointerFile = defaultPulsHomePointer()) {
+  fs.writeFileSync(pointerFile, `${installDir}\n`, 'utf-8');
+  return pointerFile;
+}
+
+export function defaultPulsHomePointer(homeDir = os.homedir()) {
+  return path.join(homeDir, '.claude-cron-home');
+}
+
+// === I/O shell: oba zapisy PULS_HOME (settings.json + wskaźnik) ===
+// Uszkodzony settings.json = fail-fast (jak przy hooku — nie nadpisujemy cudzego pliku).
+// Pad zapisu wskaźnika = warn: instalacja jest sprawna, traci tylko wygodę dla procesów
+// spoza tego workspace'u.
+function persistPulsHome(workspace, installDir) {
+  const changed = registerPulsHomeEnv(workspace, installDir);
+  console.log(
+    changed
+      ? `[ok] PULS_HOME=${installDir} zapisane w ${path.join(workspace, '.claude', 'settings.json')}`
+      : '[ok] PULS_HOME już ustawione w settings.json workspace.',
+  );
+  try {
+    const pointer = writePulsHomePointer(installDir);
+    console.log(`[ok] Wskaźnik instalacji: ${pointer}`);
+  } catch (error) {
+    console.log(
+      `[warn] Nie udało się zapisać wskaźnika ~/.claude-cron-home (${error.message}) — `
+      + 'skille poza tym workspace mogą nie znaleźć konfiguracji skrzynki.',
+    );
+  }
+}
+
 function registerHook(workspace, hookFile, nodeBin) {
   const settingsFile = path.join(workspace, '.claude', 'settings.json');
-  let existing = {};
-  if (fs.existsSync(settingsFile)) {
-    const raw = fs.readFileSync(settingsFile, 'utf-8');
-    try {
-      existing = JSON.parse(raw);
-    } catch (error) {
-      // Fail-fast: NIE nadpisujemy uszkodzonego settings.json — zniszczyłoby to
-      // permissions/inne hooki/env usera. Każemy userowi naprawić ręcznie.
-      throw new Error(
-        `Plik ${settingsFile} jest niepoprawnym JSON-em (${error.message}). ` +
-          'Setup NIE nadpisze go, by nie utracić Twoich permissions/hooków/env. ' +
-          'Napraw plik ręcznie (albo usuń go, jeśli nie zawiera nic ważnego) i uruchom setup ponownie.',
-      );
-    }
-  }
+  const existing = readSettingsFileOrThrow(settingsFile);
   const command = `${JSON.stringify(nodeBin)} ${JSON.stringify(hookFile)}`;
   const { settings, added } = mergeHookIntoSettings(existing, command);
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
@@ -1255,6 +1327,11 @@ async function main() {
     // Powiadomienia idą do state DB (nie env) — zmiana z dashboardu działa bez restartu,
     // a env DISCORD_WEBHOOK_URL/TELEGRAM_* pozostaje fallbackiem dla starych instalacji (R3).
     notifyPayload = buildNotificationSettingsPayload(await askNotificationSettings(rl));
+
+    // Wskaźnik katalogu instalacji — BEZWARUNKOWO (niezależnie od autostartu): to on
+    // pozwala skillom w vaulcie znaleźć data/inbox.env bez ręcznego kroku usera. Pad
+    // zapisu = warn, nigdy przerwanie setupu — instalacja jest sprawna także bez niego.
+    persistPulsHome(workspace, REPO_DIR);
 
     const installHook = (await ask(rl, 'Zainstalować autostart? [T/n]: ', 'T')).toLowerCase();
     if (installHook === 't') {

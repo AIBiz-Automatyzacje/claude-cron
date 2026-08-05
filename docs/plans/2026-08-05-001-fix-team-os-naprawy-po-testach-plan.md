@@ -318,7 +318,7 @@ To jest zachowanie kontraktowe huba, warto je przybić testem przed dotknięciem
 
 ### Faza 2 — Granica repo ↔ vault
 
-- [ ] **Unit 4: `PULS_HOME` ustawia instalator, nie człowiek**
+- [x] **Unit 4: `PULS_HOME` ustawia instalator, nie człowiek**
 
 **Cel:** świeża instalacja u osoby nietechnicznej działa bez ani jednego ręcznego kroku —
 i bez komunikatu namawiającego do cofnięcia migracji bezpieczeństwa.
@@ -373,7 +373,7 @@ i bez komunikatu namawiającego do cofnięcia migracji bezpieczeństwa.
 
 ---
 
-- [ ] **Unit 5: `close` archiwizuje wątek — jedna kopia kodu w repo**
+- [x] **Unit 5: `close` archiwizuje wątek — jedna kopia kodu w repo**
 
 **Cel:** obie ścieżki domykania (checkbox i komenda) zapisują nitkę do archiwum. Znika
 obejście operacyjne „domykać wyłącznie checkboxami".
