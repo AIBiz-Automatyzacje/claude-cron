@@ -26,6 +26,7 @@ import {
   parseInviteCode,
   upsertDotenvLine,
   askInboxInvite,
+  resolveInstallVersionInput,
   NODE_VERSION,
   DEFAULT_DASHBOARD_PORT,
   PORT_STATE,
@@ -1216,4 +1217,24 @@ test('buildStaleHookPortWarning: hook z poprzednim portem → ostrzeżenie z now
   const warning = buildStaleHookPortWarning(source, 8123);
   assert.ok(warning, 'rozjazd portu hook↔dashboard musi być zgłoszony');
   assert.ok(warning.includes('8123'));
+});
+
+// === Wersja instalacji ===
+
+test('resolveInstallVersionInput: rewizja z instalatora wygrywa z gitem', () => {
+  const out = resolveInstallVersionInput(
+    { CLAUDE_CRON_INSTALL_REVISION: 'a1b2c3d', CLAUDE_CRON_INSTALL_SOURCE: 'tarball' },
+    'zzzzzzz',
+  );
+  assert.deepEqual(out, { revision: 'a1b2c3d', source: 'tarball' });
+});
+
+test('resolveInstallVersionInput: bez env spada na rewizję z gita (klon dev)', () => {
+  const out = resolveInstallVersionInput({}, 'abc1234');
+  assert.deepEqual(out, { revision: 'abc1234', source: 'git' });
+});
+
+test('resolveInstallVersionInput: brak obu źródeł → unknown, nigdy pusty string', () => {
+  const out = resolveInstallVersionInput({ CLAUDE_CRON_INSTALL_REVISION: '  ' }, '');
+  assert.deepEqual(out, { revision: 'unknown', source: 'unknown' });
 });

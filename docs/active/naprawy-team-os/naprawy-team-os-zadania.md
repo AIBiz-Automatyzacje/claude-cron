@@ -15,15 +15,15 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U1 — Wersja instalacji widoczna w `/api/status` *(R10a, nakład M, zależności: brak)*
 
-- [ ] Stwórz `lib/version.js` — czysty odczyt `data/version.json` (rewizja, data pobrania, źródło) z fallbackiem `unknown`
-- [ ] Stwórz `lib/version.test.js`
-- [ ] Modyfikuj `server.js` — pole wersji w `/api/status` (~`:344`, obok `repo_dir`)
-- [ ] Modyfikuj `setup.mjs` — zapis `data/version.json` **po** swapie katalogów (allowlista stanowa)
-- [ ] Modyfikuj `install.sh` — przekazanie faktycznie pobranej rewizji
-- [ ] Modyfikuj `install.ps1` — j.w. + pobieranie zipa **po skrócie commita**, nie po nazwie gałęzi
-- [ ] Test: plik wersji istnieje i poprawny → `/api/status` zwraca rewizję i datę
-- [ ] Test: plik nie istnieje (stara instalacja) → `unknown`, bez rzucania wyjątku
-- [ ] Test: plik uszkodzony / niepełny JSON → `unknown`, bez rzucania wyjątku
+- [x] Stwórz `lib/version.js` — czysty odczyt `data/version.json` (rewizja, data pobrania, źródło) z fallbackiem `unknown`
+- [x] Stwórz `lib/version.test.js`
+- [x] Modyfikuj `server.js` — pole wersji w `/api/status` (~`:344`, obok `repo_dir`)
+- [x] Modyfikuj `setup.mjs` — zapis `data/version.json` **po** swapie katalogów (allowlista stanowa)
+- [x] Modyfikuj `install.sh` — przekazanie faktycznie pobranej rewizji
+- [x] Modyfikuj `install.ps1` — j.w. + pobieranie zipa **po skrócie commita**, nie po nazwie gałęzi
+- [x] Test: plik wersji istnieje i poprawny → `/api/status` zwraca rewizję i datę
+- [x] Test: plik nie istnieje (stara instalacja) → `unknown`, bez rzucania wyjątku
+- [x] Test: plik uszkodzony / niepełny JSON → `unknown`, bez rzucania wyjątku
 - [ ] Weryfikacja: `node --test lib/version.test.js` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości (baseline 155/155)
 - [ ] Weryfikacja: `curl -s localhost:7777/api/status` zwraca niepuste pole wersji
@@ -38,18 +38,18 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 > **Notatka wykonawcza:** zacznij od failing testu `sendMessage(to_user='cav')` → oczekiwany
 > `InboxDbError`. To zachowanie kontraktowe huba — przybij je testem przed dotknięciem schematu.
 
-- [ ] Modyfikuj `lib/inbox-db.js` — `migrate()`: `members.name` na `COLLATE NOCASE` (przepisanie tabeli, idempotentne, fail-fast przy istniejącym duplikacie z **nazwami**)
-- [ ] Modyfikuj `lib/inbox-db.js` — `sendMessage()`: lookup po `listMembers()` przed `INSERT`, dopasowanie case-insensitive → podmiana na nazwę kanoniczną; brak trafienia **lub więcej niż jedno** → `InboxDbError`
-- [ ] Modyfikuj `lib/inbox-db.js` — `addMember()`: duplikat case-insensitive → `InboxDbError`
-- [ ] Modyfikuj `lib/inbox-api.js` — `handleSend:169` mapuje `InboxDbError` na `400 unknown_recipient` **z listą członków**
-- [ ] Modyfikuj `lib/inbox-db.test.js`
-- [ ] Modyfikuj `lib/inbox-api.test.js`
-- [ ] Test: `to_user='cave'` przy członku `Cave` → INSERT z `to_user='Cave'`
-- [ ] Test: `to_user='cav'` → `InboxDbError`, **zero wierszy** w `inbox`
-- [ ] Test: `handleSend` z nieznanym adresatem → `400`, ciało zawiera listę członków
-- [ ] Test: `addMember('cave')` przy istniejącym `Cave` → `InboxDbError`
-- [ ] Test: migracja na bazie z `Cave` i `cave` → czytelny błąd z obiema nazwami, baza nietknięta
-- [ ] Test: migracja idempotentna — drugi `migrate()` nie przepisuje tabeli
+- [x] Modyfikuj `lib/inbox-db.js` — `migrate()`: `members.name` na `COLLATE NOCASE` (przepisanie tabeli, idempotentne, fail-fast przy istniejącym duplikacie z **nazwami**)
+- [x] Modyfikuj `lib/inbox-db.js` — `sendMessage()`: lookup po `listMembers()` przed `INSERT`, dopasowanie case-insensitive → podmiana na nazwę kanoniczną; brak trafienia **lub więcej niż jedno** → `InboxDbError`
+- [x] Modyfikuj `lib/inbox-db.js` — `addMember()`: duplikat case-insensitive → `InboxDbError`
+- [x] Modyfikuj `lib/inbox-api.js` — `handleSend:169` mapuje `InboxDbError` na `400 unknown_recipient` **z listą członków**
+- [x] Modyfikuj `lib/inbox-db.test.js`
+- [x] Modyfikuj `lib/inbox-api.test.js`
+- [x] Test: `to_user='cave'` przy członku `Cave` → INSERT z `to_user='Cave'`
+- [x] Test: `to_user='cav'` → `InboxDbError`, **zero wierszy** w `inbox`
+- [x] Test: `handleSend` z nieznanym adresatem → `400`, ciało zawiera listę członków
+- [x] Test: `addMember('cave')` przy istniejącym `Cave` → `InboxDbError`
+- [x] Test: migracja na bazie z `Cave` i `cave` → czytelny błąd z obiema nazwami, baza nietknięta
+- [x] Test: migracja idempotentna — drugi `migrate()` nie przepisuje tabeli
 - [ ] Weryfikacja: `node --test lib/inbox-db.test.js` przechodzi
 - [ ] Weryfikacja: `node --test lib/inbox-api.test.js` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
@@ -65,13 +65,13 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U3 — Odpowiedziane pytanie znika z „Wysłanych" (T6) *(R3, nakład S, zależności: U2)*
 
-- [ ] Modyfikuj `lib/inbox-db.js` — `pullForUser:177`, zapytanie `delegated`: alias `FROM inbox i` + `NOT EXISTS (reply w tym thread_id **od kogoś innego niż `i.from_user`**)`, ograniczone do `type='query'`
-- [ ] Modyfikuj `lib/inbox-db.test.js`
-- [ ] Test: `query` + `reply` od adresata → **nie ma** w `delegated`
-- [ ] Test: `query` + `reply` **od samego nadawcy** → **jest** w `delegated` (własne dopowiedzenie nie zamyka)
-- [ ] Test: `task` + `reply` od adresata → **jest** w `delegated` (zadania zamyka checkbox)
-- [ ] Test: `query` bez odpowiedzi → jest w `delegated`
-- [ ] Test: wątek z dopowiedzeniem nadawcy pozostaje znajdowalny przez `findOriginal` (regresja `reply.mjs`)
+- [x] Modyfikuj `lib/inbox-db.js` — `pullForUser:177`, zapytanie `delegated`: alias `FROM inbox i` + `NOT EXISTS (reply w tym thread_id **od kogoś innego niż `i.from_user`**)`, ograniczone do `type='query'`
+- [x] Modyfikuj `lib/inbox-db.test.js`
+- [x] Test: `query` + `reply` od adresata → **nie ma** w `delegated`
+- [x] Test: `query` + `reply` **od samego nadawcy** → **jest** w `delegated` (własne dopowiedzenie nie zamyka)
+- [x] Test: `task` + `reply` od adresata → **jest** w `delegated` (zadania zamyka checkbox)
+- [x] Test: `query` bez odpowiedzi → jest w `delegated`
+- [x] Test: wątek z dopowiedzeniem nadawcy pozostaje znajdowalny przez `findOriginal` (regresja `reply.mjs`)
 - [ ] Weryfikacja: `node --test lib/inbox-db.test.js` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 

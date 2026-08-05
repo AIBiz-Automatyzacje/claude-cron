@@ -171,7 +171,7 @@ są w tym repo **bezczynne** — nie ma tu ani Supabase, ani Figmy, ani Tailwind
 
 ### Faza 1 — Widoczność i hub
 
-- [ ] **Unit 1: Wersja instalacji widoczna w `/api/status`**
+- [x] **Unit 1: Wersja instalacji widoczna w `/api/status`**
 
 **Cel:** każda maszyna raportuje, jaki kod ma zainstalowany — niezależnie od tego, czy przyszedł
 z gita, czy z zipa. Fundament pod U8, U11 i pod wiarygodność każdej rundy testowej.
@@ -217,7 +217,7 @@ z gita, czy z zipa. Fundament pod U8, U11 i pod wiarygodność każdej rundy tes
 
 ---
 
-- [ ] **Unit 2: Hub odrzuca nieznanego adresata i prostuje wielkość liter**
+- [x] **Unit 2: Hub odrzuca nieznanego adresata i prostuje wielkość liter**
 
 **Cel:** literówka w nicku przestaje być cichą utratą wiadomości.
 
@@ -273,7 +273,7 @@ To jest zachowanie kontraktowe huba, warto je przybić testem przed dotknięciem
 
 ---
 
-- [ ] **Unit 3: Odpowiedziane pytanie znika z „Wysłanych" (T6)**
+- [x] **Unit 3: Odpowiedziane pytanie znika z „Wysłanych" (T6)**
 
 **Cel:** zamknąć jedyny oblany test rundy 04.08, nie psując `reply.mjs`.
 

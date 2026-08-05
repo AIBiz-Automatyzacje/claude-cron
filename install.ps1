@@ -20,10 +20,19 @@ $ErrorActionPreference = "Stop"
 # spojny z oknem engines ">=22.13 <25".
 $NodeVersion = "22.17.0"
 
-# Bootstrap: zip brancha main (rozpakowuje sie do claude-cron-main\).
-# Override przez env (test z brancha przed mergem, forki, mirrory).
-$ZipUrl    = if ($env:CLAUDE_CRON_ZIP_URL) { $env:CLAUDE_CRON_ZIP_URL } else { "https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/main.zip" }
-$ZipTopDir = if ($env:CLAUDE_CRON_ZIP_TOPDIR) { $env:CLAUDE_CRON_ZIP_TOPDIR } else { "claude-cron-main" }
+# Bootstrap: skad bierzemy kod. Zip adresujemy po SHA commita (rozstrzyganym PRZED
+# pobraniem), nie po nazwie galezi - URL z nazwa galezi jest cache'owany po stronie
+# GitHuba i nie mowi, CO faktycznie rozpakowalismy. Override URL-a przez env
+# (test z brancha przed mergem, forki, mirrory) pomija rozstrzyganie.
+$RepoSlug  = if ($env:CLAUDE_CRON_REPO_SLUG) { $env:CLAUDE_CRON_REPO_SLUG } else { "AIBiz-Automatyzacje/claude-cron" }
+$RepoRef   = if ($env:CLAUDE_CRON_REF) { $env:CLAUDE_CRON_REF } else { "main" }
+$ZipUrl    = if ($env:CLAUDE_CRON_ZIP_URL) { $env:CLAUDE_CRON_ZIP_URL } else { "" }
+$ZipTopDir = if ($env:CLAUDE_CRON_ZIP_TOPDIR) { $env:CLAUDE_CRON_ZIP_TOPDIR } else { "" }
+
+# Rewizja faktycznie pobranego kodu - przekazywana do setup.mjs, ktory zapisuje ja
+# do data\version.json (widoczne w /api/status). Pusta = nieznana.
+$InstallRevision = if ($env:CLAUDE_CRON_INSTALL_REVISION) { $env:CLAUDE_CRON_INSTALL_REVISION } else { "" }
+$InstallSource   = if ($env:CLAUDE_CRON_INSTALL_SOURCE) { $env:CLAUDE_CRON_INSTALL_SOURCE } else { "zip" }
 
 # Docelowy katalog instalacji w trybie bootstrap. Env-override (testy, automatyzacja,
 # druga instancja obok pierwszej) wygrywa i POMIJA pytanie - inaczej nieinteraktywny
@@ -228,6 +237,47 @@ function Move-PreservedDirs {
     }
 }
 
+# Pyta API GitHuba o SHA commita wskazywanego przez galaz. Zwraca "" gdy sie nie uda -
+# brak sieci / limit API nie moze wywrocic instalacji, zejdziemy na URL po nazwie galezi.
+function Get-RefSha {
+    param(
+        [Parameter(Mandatory = $true)][string] $Slug,
+        [Parameter(Mandatory = $true)][string] $Ref
+    )
+    try {
+        $resp = Invoke-RestMethod -Uri "https://api.github.com/repos/$Slug/commits/$Ref" -UseBasicParsing
+        if ($resp.sha -match '^[0-9a-f]{40}$') { return $resp.sha }
+        return ""
+    }
+    catch {
+        return ""
+    }
+}
+
+# Ustala URL zipa, nazwe katalogu po rozpakowaniu i rewizje do zapisania.
+# Ustawia zmienne skryptowe $ZipUrl / $ZipTopDir / $InstallRevision.
+function Resolve-ZipSource {
+    if ($ZipUrl) {
+        # Jawny override: nie zgadujemy rewizji, ufamy temu, co podal wolajacy.
+        if (-not $ZipTopDir) { $script:ZipTopDir = "claude-cron-$RepoRef" }
+        return
+    }
+
+    Write-Host "[info] Ustalam rewizje galezi $RepoRef..." -ForegroundColor Cyan
+    $sha = Get-RefSha -Slug $RepoSlug -Ref $RepoRef
+    if ($sha) {
+        $script:ZipUrl          = "https://github.com/$RepoSlug/archive/$sha.zip"
+        $script:ZipTopDir       = "claude-cron-$sha"
+        $script:InstallRevision = $sha
+        Write-Host "[ok] Rewizja: $sha" -ForegroundColor Green
+    }
+    else {
+        Write-Warning "Nie ustalilem rewizji - pobieram po nazwie galezi (wersja instalacji: unknown)."
+        $script:ZipUrl    = "https://github.com/$RepoSlug/archive/refs/heads/$RepoRef.zip"
+        $script:ZipTopDir = "claude-cron-$RepoRef"
+    }
+}
+
 # Pobiera zip brancha, rozpakowuje do tmp i zwraca sciezke do rozpakowanego
 # repo. Weryfikuje obecnosc setup.mjs (fail fast, throw).
 function Expand-RepoFromZip {
@@ -349,6 +399,7 @@ function Invoke-Bootstrap {
     $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("claude-cron-boot-" + [System.Guid]::NewGuid().ToString())
     New-Item -ItemType Directory -Path $tmpDir | Out-Null
     try {
+        Resolve-ZipSource
         $freshDir = Expand-RepoFromZip -TmpDir $tmpDir
         Install-FreshRepo -FreshDir $freshDir -TmpDir $tmpDir
     }
@@ -476,6 +527,13 @@ function Invoke-Setup {
         [Parameter(Mandatory = $true)][string] $RepoDir
     )
     Write-Host "[info] Przekazuje sterowanie do setup.mjs..." -ForegroundColor Cyan
+    # Rewizja jedzie env-em: setup.mjs zapisuje ja do data\version.json JUZ PO swapie
+    # katalogow - inaczej plik trafilby do katalogu, ktory za chwile ladowal w koszu.
+    # W trybie lokalnym nic nie ustawiamy i setup siega po `git rev-parse`.
+    if ($InstallRevision) {
+        $env:CLAUDE_CRON_INSTALL_REVISION = $InstallRevision
+        $env:CLAUDE_CRON_INSTALL_SOURCE   = $InstallSource
+    }
     # --disable-warning=ExperimentalWarning: setup.mjs czyta lib/db (node:sqlite),
     # a ostrzezenie o eksperymentalnym module wypadloby POMIEDZY pytaniami setupu -
     # dla kursanta nieodroznialne od bledu. Ta sama flaga co w package.json.

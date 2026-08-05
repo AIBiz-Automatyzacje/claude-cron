@@ -15,6 +15,7 @@ const keepAwake = require('./lib/keep-awake');
 const inboxSeed = require('./lib/inbox-seed');
 const inboxDb = require('./lib/inbox-db');
 const { isInboxHub } = require('./lib/inbox-hub');
+const { getInstallVersion } = require('./lib/version');
 const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
 const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
@@ -347,6 +348,10 @@ async function handleApi(req, res) {
       // maszynie potrafią stać DWIE instalacje. Bez tego pola setup.mjs nie odróżnia
       // własnego re-runu od cudzej instancji na tym samym porcie i adoptuje obcy proces.
       repo_dir: __dirname,
+      // Wersja zainstalowanego kodu (rewizja + data pobrania + źródło). Czytana z pliku
+      // pisanego przez instalator, nie z gita — instalacja zipowa/tarballowa nie ma repo.
+      // Odczyt nie rzuca: brak pliku (stara instalacja) daje `unknown`, /api/status żyje dalej.
+      version: getInstallVersion(),
       current_run: currentRun,
       current_runs: currentRuns,
       queue_length: queued.length,

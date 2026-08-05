@@ -125,3 +125,53 @@ nie wyłącza joba z poprzedniej roli; `NO_ANSWER` gdziekolwiek w odpowiedzi zna
 - Obowiązują `.claude/rules/coding-rules.md` i `.claude/rules/learned-patterns.md`
 - **Nie zmieniać identyfikatorów technicznych** `claude-cron` (nazwa w `package.json`, `data/claude-cron.db`,
   `CLAUDE_CRON_*`, label launchd) — „Puls" to warstwa prezentacji
+
+---
+
+## Dziennik wykonania
+
+### Faza 1 — Widoczność i hub (2026-08-05) — **zaimplementowana, `npm test` 837/837**
+
+**U1 — wersja instalacji w `/api/status`**
+
+- Nowe `lib/version.js` (+ `lib/version.test.js`): `readVersionFile`/`getInstallVersion`/`writeVersionFile`
+  nad `data/version.json`. Kontrakt: **odczyt nigdy nie rzuca** — brak pliku, uszkodzony JSON i błąd I/O
+  dają ten sam kształt `{revision:'unknown', installed_at:null, source:'unknown'}`.
+- `server.js` — pole `version` w `/api/status` obok `repo_dir`.
+- `setup.mjs` — `persistInstallVersion()` wołane **przed pytaniami** setupu (setup biegnie już z docelowego
+  katalogu, więc jest po swapie; jeśli setup padnie w połowie, ślad wersji i tak zostaje na dysku).
+  Pad zapisu = `warn`, nigdy przerwanie instalacji.
+- `install.sh` / `install.ps1` — archiwum pobierane **po SHA commita** (`resolve_tarball_source`
+  / `Resolve-ZipSource`, SHA z API GitHuba), rewizja przekazywana do `setup.mjs` env-em
+  `CLAUDE_CRON_INSTALL_REVISION` / `CLAUDE_CRON_INSTALL_SOURCE`. Pad rozstrzygania SHA (brak sieci,
+  limit API) = zejście na URL po nazwie gałęzi + wersja `unknown`; instalacja leci dalej.
+
+**U2 — hub odrzuca nieznanego adresata**
+
+- `members.name` z `COLLATE NOCASE`. SQLite nie zmienia kolacji przez `ALTER`, więc przepisanie tabeli;
+  guard `needsMembersNocaseRebuild` czyta **faktyczny DDL** z `sqlite_master.sql` (`PRAGMA table_info`
+  nie zdradza kolacji) — bez sentinela, bo źródłem prawdy jest schemat, a `migrate()` leci co boot.
+- Kolizja `Cave` + `cave` → `InboxDbError` z obiema nazwami i **zero zmian w danych** (duplikaty liczone
+  w JS, nie agregatem SQL — pułapka BigInt).
+- `sendMessage` → `resolveRecipient()` przed `INSERT`: dopasowanie case-insensitive, podmiana na nazwę
+  kanoniczną z `members`; brak trafienia → `unknown_recipient`, wiele trafień → `ambiguous_recipient`
+  (nigdy „pierwszy z brzegu").
+- `lib/inbox-api.js` — `handleSend` mapuje te dwa kody na `400 {error:'unknown_recipient', members:[…]}`.
+
+**U3 — odpowiedziane pytanie znika z „Wysłanych"**
+
+- `pullForUser` — zapytanie `delegated` z `NOT EXISTS (reply w tym thread_id od `from_user` ≠ autora)`,
+  ograniczone do `type='query'`. `task` bez zmian. Rekord **nie** dostaje `status='done'` (świadomy dług
+  widok↔status).
+
+### Odchylenia od planu (Faza 1)
+
+| Odchylenie | Powód |
+|---|---|
+| `setup.mjs` eksportuje dodatkowo `resolveInstallVersionInput` | Czysty helper priorytetu `env > git > unknown`; bez wydzielenia logika byłaby nietestowalna |
+| `InboxDbError` dostał opcjonalne pole `code` | API rozpoznaje powód po kodzie, nie po treści komunikatu (komunikaty zmieniają się przy korektach językowych). Plan mówił tylko o „mapowaniu `InboxDbError`" |
+| `getInboxDb()` przypisuje połączenie do modułu **po** migracji i smoke-teście | Wcześniej przypisywał przed `migrate()` — fail-fast kolizji nazw zostawiłby częściowo zmigrowaną bazę jako „gotową" |
+| Fixtury istniejących testów inbox rozszerzone o seed członków | Wymuszone zmianą kontraktu z planu (adresat musi istnieć w `members`). Zero osłabionych ani usuniętych asercji |
+| Weryfikacje „żywy daemon" (`curl /api/status`) i `[Manual]` niewykonane | Daemon biegnie ze starym kodem; restart to decyzja operatora |
+
+**Ostatnia aktualizacja:** 2026-08-05 (domknięcie Fazy 1)

@@ -21,10 +21,19 @@ set -euo pipefail
 # spójny z oknem engines ">=22.13 <25".
 NODE_VERSION="22.17.0"
 
-# Bootstrap: tarball brancha main (rozpakowuje się do claude-cron-main/).
-# Override przez env (test z brancha przed mergem, forki, mirrory).
-TARBALL_URL="${CLAUDE_CRON_TARBALL_URL:-https://github.com/AIBiz-Automatyzacje/claude-cron/archive/refs/heads/main.tar.gz}"
-TARBALL_TOPDIR="${CLAUDE_CRON_TARBALL_TOPDIR:-claude-cron-main}"
+# Bootstrap: skąd bierzemy kod. Archiwum adresujemy po SHA commita (rozstrzyganym przed
+# pobraniem), nie po nazwie gałęzi — nazwa gałęzi jest cache'owana po stronie GitHuba,
+# a przy okazji nie mówi, CO faktycznie rozpakowaliśmy. Override URL-a przez env
+# (test z brancha przed mergem, forki, mirrory) pomija rozstrzyganie.
+REPO_SLUG="${CLAUDE_CRON_REPO_SLUG:-AIBiz-Automatyzacje/claude-cron}"
+REPO_REF="${CLAUDE_CRON_REF:-main}"
+TARBALL_URL="${CLAUDE_CRON_TARBALL_URL:-}"
+TARBALL_TOPDIR="${CLAUDE_CRON_TARBALL_TOPDIR:-}"
+
+# Rewizja faktycznie pobranego kodu — przekazywana do setup.mjs, który zapisuje ją do
+# data/version.json (widoczne w /api/status). Pusta = nieznana; instalacja leci dalej.
+INSTALL_REVISION="${CLAUDE_CRON_INSTALL_REVISION:-}"
+INSTALL_SOURCE="${CLAUDE_CRON_INSTALL_SOURCE:-tarball}"
 
 # Docelowy katalog instalacji w trybie bootstrap. Env-override (testy, automatyzacja,
 # druga instancja obok pierwszej) wygrywa i POMIJA pytanie — inaczej nieinteraktywny
@@ -303,6 +312,49 @@ preserve_existing_dirs() {
   done
 }
 
+# Pyta API GitHuba o SHA commita wskazywanego przez gałąź. Bez `jq` — instalator nie
+# zakłada narzędzi ponad curl/wget. Pierwsze "sha" w odpowiedzi to sha commita.
+#   fetch_ref_sha <owner/repo> <ref>
+fetch_ref_sha() {
+  local slug="$1" ref="$2" out sha
+  out="$(mktemp)"
+  if ! download "https://api.github.com/repos/$slug/commits/$ref" "$out"; then
+    rm -f "$out"
+    return 1
+  fi
+  sha="$(sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$out" | head -n1)"
+  rm -f "$out"
+  [ -n "$sha" ] || return 1
+  printf '%s' "$sha"
+}
+
+# Ustala URL archiwum, nazwę katalogu po rozpakowaniu i rewizję do zapisania.
+# Pad rozstrzygania (brak sieci, limit API) NIE przerywa instalacji — schodzimy na URL
+# po nazwie gałęzi, a wersja zostaje nieznana. Lepiej działający Puls bez metadanych
+# niż instalacja przerwana przez API GitHuba.
+resolve_tarball_source() {
+  if [ -n "$TARBALL_URL" ]; then
+    # Jawny override: nie zgadujemy rewizji, ufamy temu, co podał wołający.
+    TARBALL_TOPDIR="${TARBALL_TOPDIR:-claude-cron-$REPO_REF}"
+    return 0
+  fi
+
+  local sha=""
+  info "Ustalam rewizję gałęzi $REPO_REF..."
+  sha="$(fetch_ref_sha "$REPO_SLUG" "$REPO_REF")" || sha=""
+
+  if [ -n "$sha" ]; then
+    TARBALL_URL="https://github.com/$REPO_SLUG/archive/$sha.tar.gz"
+    TARBALL_TOPDIR="claude-cron-$sha"
+    INSTALL_REVISION="$sha"
+    ok "Rewizja: $sha"
+  else
+    warn "Nie ustaliłem rewizji — pobieram po nazwie gałęzi (wersja instalacji: unknown)."
+    TARBALL_URL="https://github.com/$REPO_SLUG/archive/refs/heads/$REPO_REF.tar.gz"
+    TARBALL_TOPDIR="claude-cron-$REPO_REF"
+  fi
+}
+
 # Pobiera tarball brancha, rozpakowuje do tmp i zwraca (echo) ścieżkę do
 # rozpakowanego repo. Weryfikuje obecność setup.mjs (fail fast).
 #   extract_repo_from_tarball <tmp-dir>
@@ -367,6 +419,8 @@ run_bootstrap() {
   local tmp_dir
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' EXIT
+
+  resolve_tarball_source
 
   local fresh_dir
   fresh_dir="$(extract_repo_from_tarball "$tmp_dir")"
@@ -469,6 +523,14 @@ ensure_dependencies() {
 # dla kursanta nieodróżnialne od błędu. Ta sama flaga co w package.json.
 handoff_to_setup() {
   info "Przekazuję sterowanie do setup.mjs..."
+  # Rewizja jedzie env-em (exec zachowuje eksport): setup.mjs zapisuje ją do
+  # data/version.json JUŻ PO swapie katalogów — inaczej plik trafiłby do katalogu,
+  # który za chwilę ląduje w koszu. W trybie lokalnym nic nie eksportujemy i setup
+  # sam sięga po `git rev-parse`.
+  if [ -n "$INSTALL_REVISION" ]; then
+    export CLAUDE_CRON_INSTALL_REVISION="$INSTALL_REVISION"
+    export CLAUDE_CRON_INSTALL_SOURCE="$INSTALL_SOURCE"
+  fi
   # has_tty zamiast `-r /dev/tty`: samo prawo odczytu nie znaczy, że urządzenie da się
   # otworzyć (macOS bez terminala kontrolującego) — a nieudany `exec ... < /dev/tty`
   # kończy instalację twardym błędem zamiast wejść w ścieżkę nieinteraktywną.

@@ -1084,6 +1084,47 @@ function registerHook(workspace, hookFile, nodeBin) {
   return added;
 }
 
+// === Wersja instalacji: pure rozstrzygnięcie źródła rewizji ===
+// Priorytet: to, co podał instalator (tarball/zip pobrany po skrócie commita), przed
+// `git rev-parse` — instalacja bootstrapowa nie ma repozytorium git, a lokalny klon
+// ma. Brak obu = `unknown`: wersja nieznana nigdy nie może wywrócić instalacji.
+export function resolveInstallVersionInput(env = {}, gitRevision = '') {
+  const envRevision = String(env.CLAUDE_CRON_INSTALL_REVISION ?? '').trim();
+  const envSource = String(env.CLAUDE_CRON_INSTALL_SOURCE ?? '').trim();
+  if (envRevision) return { revision: envRevision, source: envSource || 'installer' };
+
+  const gitRev = String(gitRevision ?? '').trim();
+  if (gitRev) return { revision: gitRev, source: envSource || 'git' };
+
+  return { revision: 'unknown', source: envSource || 'unknown' };
+}
+
+// === I/O shell: zapis data/version.json ===
+// MUSI biec PO swapie katalogów instalatora — i biegnie, bo setup.mjs jest odpalany
+// dopiero z docelowego katalogu instalacji. `data/` jest na allowliście stanowej, więc
+// plik przeżyje kolejny re-run (i zostanie nadpisany świeżą rewizją).
+// Pad zapisu = warn, nigdy przerwanie setupu: brak wersji to utrudniona diagnostyka,
+// nie zepsuta instalacja.
+function persistInstallVersion() {
+  const gitRevision = readGitRevision(REPO_DIR);
+  const { revision, source } = resolveInstallVersionInput(process.env, gitRevision);
+  try {
+    const { writeVersionFile } = require('./lib/version');
+    const written = writeVersionFile({ revision, source });
+    console.log(`[ok] Wersja instalacji: ${written.revision} (${written.source})`);
+  } catch (err) {
+    console.warn(`[warn] Nie zapisałem wersji instalacji: ${err.message}`);
+  }
+}
+
+// Rewizja z gita — tylko dla instalacji z klona (dev). Brak gita / brak repo = pusty
+// string, NIE błąd: to normalny stan instalacji bootstrapowej.
+function readGitRevision(repoDir) {
+  const res = spawnSync('git', ['-C', repoDir, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' });
+  if (res.error || res.status !== 0) return '';
+  return String(res.stdout || '').trim();
+}
+
 // === I/O shell: zapis roli maszyny do state lokalnej DB (wzorzec persistNotifySettings) ===
 // Ta sama baza co daemon (bez override'u ścieżki) — seed jobów skrzynki czyta tę wartość
 // przy starcie. Zamykamy połączenie od razu: setup zadaje dalej pytania (minuty), a rolę
@@ -1137,6 +1178,10 @@ async function main() {
     process.exit(1);
   }
   console.log('[ok] Claude Code znaleziony w PATH.');
+
+  // Wersja PRZED pytaniami: gdy setup padnie w połowie, na dysku i tak zostaje ślad,
+  // z jakim kodem maszyna pracuje (fundament diagnostyki i rund testowych).
+  persistInstallVersion();
 
   const nodeBin = detectPortableNodeBin(process.execPath, process.platform, REPO_DIR, process.arch);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
