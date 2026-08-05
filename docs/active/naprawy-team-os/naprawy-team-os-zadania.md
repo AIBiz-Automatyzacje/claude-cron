@@ -293,18 +293,18 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U9 — Panel: adres w użyciu obok zapisanego + sygnał rozjazdu *(R7, nakład M, zależności: U1)*
 
-- [ ] Stwórz `lib/persisted-env.js` — odczyt utrwalonej wartości: Windows rejestr HKCU, Unix linia `export` z `~/.zshrc`/`~/.bashrc`
-- [ ] Stwórz `lib/persisted-env.test.js`
-- [ ] Dopisz komentarz wiążący parser z `upsertEnvLine` (`setup.mjs:312`) **po obu stronach** — świadoma druga implementacja (ESM↔CJS), precedens `INBOX_CODE_PREFIX`
-- [ ] Modyfikuj `server.js` — `/api/status`: adres z pamięci procesu + adres zapisany (odczyt w czasie żądania) + flaga rozjazdu
-- [ ] Modyfikuj `public/index.html`, `public/app.js` — pole w ustawieniach na górze panelu + komunikat „zmiana wymaga restartu"
-- [ ] Zabezpiecz `/api/vps/*` — brak nowych pól po drugiej stronie **nie może** wywalić widoku
-- [ ] Test: RC z `export CLAUDE_CRON_VPS_URL="https://x"` → parser zwraca `https://x`
-- [ ] Test: RC z zakomentowaną / uszkodzoną linią → `null`, bez rzucania
-- [ ] Test: brak pliku RC → `null`, bez rzucania
-- [ ] Test: wartość ze spacjami i cudzysłowami → poprawnie odkodowana
-- [ ] Test: `/api/status` — wartość z pamięci ≠ zapisana → flaga rozjazdu `true`
-- [ ] Test: wartości równe → flaga `false`
+- [x] Stwórz `lib/persisted-env.js` — odczyt utrwalonej wartości: Windows rejestr HKCU, Unix linia `export` z `~/.zshrc`/`~/.bashrc`
+- [x] Stwórz `lib/persisted-env.test.js`
+- [x] Dopisz komentarz wiążący parser z `upsertEnvLine` (`setup.mjs:312`) **po obu stronach** — świadoma druga implementacja (ESM↔CJS), precedens `INBOX_CODE_PREFIX`
+- [x] Modyfikuj `server.js` — `/api/status`: adres z pamięci procesu + adres zapisany (odczyt w czasie żądania) + flaga rozjazdu
+- [x] Modyfikuj `public/index.html`, `public/app.js` — pole w ustawieniach na górze panelu + komunikat „zmiana wymaga restartu" *(odchylenie: panel nie ma sekcji „ustawienia na górze" — pole trafiło jako osobny pasek `#vps-addr` pod statbarem)*
+- [x] Zabezpiecz `/api/vps/*` — brak nowych pól po drugiej stronie **nie może** wywalić widoku
+- [x] Test: RC z `export CLAUDE_CRON_VPS_URL="https://x"` → parser zwraca `https://x`
+- [x] Test: RC z zakomentowaną / uszkodzoną linią → `null`, bez rzucania
+- [x] Test: brak pliku RC → `null`, bez rzucania
+- [x] Test: wartość ze spacjami i cudzysłowami → poprawnie odkodowana
+- [x] Test: `/api/status` — wartość z pamięci ≠ zapisana → flaga rozjazdu `true`
+- [x] Test: wartości równe → flaga `false`
 - [ ] Weryfikacja: `node --test lib/persisted-env.test.js` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 - [ ] Weryfikacja: `curl -s localhost:7777/api/status` zwraca oba pola adresu i flagę rozjazdu
@@ -316,13 +316,13 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U10 — Instalator podpowiada zapisany adres VPS *(R11, nakład S, zależności: U9)*
 
-- [ ] Modyfikuj `setup.mjs` — zapisana wartość jako domyślna w pytaniu o adres VPS (jak dla portu i workspace'u)
-- [ ] Modyfikuj `setup.mjs` — pusty Enter przy istniejącej konfiguracji → „bez zmian: `<adres>`"; „Tryb tylko lokalny" **wyłącznie** gdy adresu faktycznie nie ma
-- [ ] Modyfikuj `setup.test.mjs`
-- [ ] Test: zapisany adres + pusty Enter → wartość zachowana, komunikat „bez zmian"
-- [ ] Test: brak zapisanego adresu + pusty Enter → „tryb tylko lokalny", env nie zapisywany
-- [ ] Test: podany nowy adres → nadpisuje stary
-- [ ] Test: adres z białymi znakami / cudzysłowami → sanityzowany jak dziś (`buildVpsUrl`)
+- [x] Modyfikuj `setup.mjs` — zapisana wartość jako domyślna w pytaniu o adres VPS (jak dla portu i workspace'u)
+- [x] Modyfikuj `setup.mjs` — pusty Enter przy istniejącej konfiguracji → „bez zmian: `<adres>`"; „Tryb tylko lokalny" **wyłącznie** gdy adresu faktycznie nie ma
+- [x] Modyfikuj `setup.test.mjs`
+- [x] Test: zapisany adres + pusty Enter → wartość zachowana, komunikat „bez zmian"
+- [x] Test: brak zapisanego adresu + pusty Enter → „tryb tylko lokalny", env nie zapisywany
+- [x] Test: podany nowy adres → nadpisuje stary
+- [x] Test: adres z białymi znakami / cudzysłowami → sanityzowany jak dziś (`buildVpsUrl`)
 - [ ] Weryfikacja: `node --test setup.test.mjs` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 

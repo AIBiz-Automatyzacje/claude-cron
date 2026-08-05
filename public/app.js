@@ -323,6 +323,7 @@ async function loadStatus() {
     const status = await API.get('/api/status');
     lastStatus = status;
     renderStatbar(status);
+    renderVpsAddr(status);
     renderKillBar(status);
   } catch { /* silent — statbar degraduje cicho */ }
 }
@@ -355,6 +356,30 @@ function renderKillBar(status) {
     const durEl = document.getElementById(`kill-dur-${r.id}`);
     if (durEl) durEl.textContent = r.elapsed;
   }
+}
+
+// Pasek adresu VPS (R7): adres w użyciu przez proces vs adres zapisany w konfiguracji.
+// Rozjazd = env zmienione po instalacji, ale proces trzyma starą wartość → „wymaga restartu".
+// Pole `vps_url` może NIE ISTNIEĆ, gdy patrzymy przez proxy na starszą instancję VPS —
+// wtedy pasek po prostu znika, zamiast wywalić render całego statbara.
+function renderVpsAddr(status) {
+  const box = document.getElementById('vps-addr');
+  if (!box) return;
+  const info = status.vps_url || null;
+  const inUse = info && typeof info.in_use === 'string' ? info.in_use : '';
+  const saved = info && typeof info.persisted === 'string' ? info.persisted : '';
+
+  // Bez skonfigurowanego VPS-a (obie wartości puste) pasek nie ma co mówić.
+  if (!info || (!inUse && !saved)) {
+    box.hidden = true;
+    return;
+  }
+
+  box.hidden = false;
+  // „nie wiem" (null) rozróżnione od „pusty adres" — nieczytelne źródło nigdy nie udaje wartości.
+  document.getElementById('vps-addr-inuse').textContent = inUse || '(brak)';
+  document.getElementById('vps-addr-saved').textContent = saved || 'nie udało się odczytać';
+  document.getElementById('vps-addr-warn').hidden = info.mismatch !== true;
 }
 
 // Statbar: Następne / Aktywne / Dziś+health / Kolejka / Uptime.

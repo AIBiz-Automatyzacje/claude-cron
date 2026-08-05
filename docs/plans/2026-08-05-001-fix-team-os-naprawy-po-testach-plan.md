@@ -569,7 +569,7 @@ markery `%% … %%` w `inbox-pull.mjs`; script-joby (`job_type: 'script'`) w `li
 
 ### Faza 4 — Konfiguracja VPS
 
-- [ ] **Unit 9: Panel pokazuje adres w użyciu obok zapisanego i sygnalizuje rozjazd**
+- [x] **Unit 9: Panel pokazuje adres w użyciu obok zapisanego i sygnalizuje rozjazd**
 
 **Cel:** koniec z godziną diagnozy „dlaczego Puls gada z inną maszyną, niż pokazuje konfiguracja".
 
@@ -622,7 +622,7 @@ konfiguracji w czasie użycia, nie przy require); podpis payloadu w `public/app.
 
 ---
 
-- [ ] **Unit 10: Instalator podpowiada zapisany adres VPS**
+- [x] **Unit 10: Instalator podpowiada zapisany adres VPS**
 
 **Cel:** re-run instalatora przestaje kłamać, że konfiguracja zniknęła.
 

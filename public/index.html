@@ -50,6 +50,14 @@
       <div class="stat"><span class="stat-label">Uptime</span> <span class="stat-strong" id="stat-uptime">—</span></div>
     </div>
 
+    <!-- Adres VPS w DWÓCH wartościach (R7): używany przez proces vs zapisany w konfiguracji.
+         Ukryty, gdy VPS nie jest w ogóle skonfigurowany. -->
+    <div class="statbar vps-addr" id="vps-addr" hidden>
+      <div class="stat"><span class="stat-label">Puls proxuje do:</span> <span class="stat-strong" id="vps-addr-inuse">—</span></div>
+      <div class="stat"><span class="stat-label">w konfiguracji zapisane:</span> <span class="stat-strong" id="vps-addr-saved">—</span></div>
+      <div class="stat vps-addr-warn" id="vps-addr-warn" hidden>⚠ Rozjazd — zmiana adresu wymaga restartu Pulsa</div>
+    </div>
+
     <!-- ── Sekcje ── -->
     <main>
       <!-- Zadania -->

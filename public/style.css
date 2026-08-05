@@ -145,6 +145,11 @@ body {
 .stat-err::before { content: "✗ "; }
 /* Zero błędów nie jest alarmem — wyszarz zamiast krzyczeć czerwienią */
 .stat-err.zero { color: var(--mute); }
+/* Pasek adresu VPS (R7) — ta sama skorupa co statbar, mniejsza czcionka: to diagnostyka,
+   nie metryka. Adresy łamią się w monospace, żeby dało się je porównać wzrokiem. */
+.vps-addr { margin-top: -8px; font-size: 12.5px; }
+.vps-addr .stat-strong { font-family: 'JetBrains Mono', monospace; word-break: break-all; }
+.vps-addr-warn { color: var(--amber); font-weight: 600; }
 .health-bar {
   display: inline-flex;
   width: 72px; height: 8px;

@@ -16,6 +16,7 @@ const inboxSeed = require('./lib/inbox-seed');
 const inboxDb = require('./lib/inbox-db');
 const { isInboxHub } = require('./lib/inbox-hub');
 const { getInstallVersion } = require('./lib/version');
+const { describeEnvUsage, readPersistedEnv } = require('./lib/persisted-env');
 const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
 const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
@@ -352,6 +353,14 @@ async function handleApi(req, res) {
       // pisanego przez instalator, nie z gita — instalacja zipowa/tarballowa nie ma repo.
       // Odczyt nie rzuca: brak pliku (stara instalacja) daje `unknown`, /api/status żyje dalej.
       version: getInstallVersion(),
+      // Adres VPS w DWÓCH wartościach: ta w pamięci procesu (config.js czyta env RAZ przy
+      // require) i ta utrwalona przez instalator (odczyt w CZASIE ŻĄDANIA — wzorzec
+      // notify-config.js). Rozjazd = serwer proxuje pod stary adres, bo env nie propaguje się
+      // do żyjących procesów; bez tego pola diagnoza kosztuje godzinę (R7).
+      vps_url: describeEnvUsage({
+        inUse: VPS_API_URL,
+        persisted: readPersistedEnv('CLAUDE_CRON_VPS_URL'),
+      }),
       current_run: currentRun,
       current_runs: currentRuns,
       queue_length: queued.length,

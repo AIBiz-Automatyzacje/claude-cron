@@ -33,6 +33,13 @@ export { parseInviteCode, upsertDotenvLine };
 
 const require = createRequire(import.meta.url);
 
+// Odczyt UTRWALONEJ wartości env (RC shellu / rejestr Windows) — most ESM→CJS przez
+// createRequire, którego ten plik i tak używa. Jedna implementacja parsera z `/api/status`
+// (lib/persisted-env.js): duplikat rozjechałby się z formatem zapisu `upsertEnvLine`.
+// Moduł jest bez efektów ubocznych (fs/os/path/child_process), więc require na górze
+// nie ciągnie node:sqlite ani niczego, co wymaga gotowego środowiska.
+const { readPersistedEnv } = require('./lib/persisted-env');
+
 // Pinowana wersja portable Node — MUSI być spójna z install.sh / install.ps1.
 export const NODE_VERSION = '22.17.0';
 
@@ -327,6 +334,10 @@ export function detectPortableNodeBin(execPath, platform, repoDir, arch) {
 // Zwraca nową treść pliku. Gdy linia `export VAR=...` już istnieje — podmienia ją
 // (idempotentny re-run nie duplikuje). Gdy nie ma — dopisuje na końcu z komentarzem.
 // Lustro logiki ze starego setup.sh (grep -q + sed | echo >>).
+// UWAGA: format tej linii CZYTA `lib/persisted-env.js` (`parsePersistedExport`) — panel
+// pokazuje adres zapisany obok adresu w użyciu. To świadoma druga implementacja (ten plik
+// jest ESM, server.js CommonJS — synchroniczny import nie przejdzie), więc zmiana formatu
+// zapisu MUSI trafić tam. Precedens: `INBOX_CODE_PREFIX` w server.js vs scripts/inbox/invite.mjs.
 export function upsertEnvLine(rcContent, varName, value, comment) {
   const content = typeof rcContent === 'string' ? rcContent : '';
   const exportLine = `export ${varName}=${JSON.stringify(value)}`;
@@ -350,6 +361,47 @@ export function buildVpsUrl(host, port) {
   }
   const resolvedPort = String(port || '').trim() || '7777';
   return `http://${trimmedHost}:${resolvedPort}`;
+}
+
+// === Pure helper: który adres VPS jest „zapisany" dla potrzeb podpowiedzi ===
+// Pierwszeństwo ma wartość UTRWALONA (RC shellu / rejestr Windows), bo to ją zobaczy
+// następny proces; `process.env` bieżącej sesji bywa nieświeże (udokumentowana pułapka:
+// docs/solutions/deployment-issues/2026-07-07-stale-env-vps-url-hook-respawn-serwera.md).
+// Brak obu → null („nie ma adresu"), co dopiero uprawnia komunikat o trybie lokalnym.
+export function resolveSavedVpsUrl({ persisted, inUse } = {}) {
+  const saved = typeof persisted === 'string' ? persisted.trim() : '';
+  if (saved) return saved;
+  const current = typeof inUse === 'string' ? inUse.trim() : '';
+  return current || null;
+}
+
+// === Pure helper: treść pytania o host VPS ===
+// Z zapisanym adresem podpowiadamy go w nawiasach — pusty Enter (czyli także instalacja
+// nieinteraktywna pod `curl|bash`, gdzie readline dostaje EOF) ZACHOWUJE konfigurację.
+export function buildVpsHostPrompt(savedUrl) {
+  const saved = typeof savedUrl === 'string' ? savedUrl.trim() : '';
+  return saved
+    ? `Tailscale IP VPS-a [Enter = bez zmian: ${saved}]: `
+    : 'Tailscale IP VPS-a (puste = tryb tylko lokalny): ';
+}
+
+// === Pure helper: odpowiedzi o VPS → decyzja (adres + czy zapisywać env + komunikat) ===
+// Trzy rozłączne stany:
+//  - pusty host przy zapisanym adresie → 'kept': nic nie nadpisujemy, „bez zmian";
+//  - pusty host bez zapisanego adresu → 'none': dopiero TU „tryb tylko lokalny";
+//  - podany host → 'set': nowy adres nadpisuje stary (sanityzacja jak dziś, buildVpsUrl).
+// `persist` mówi callerowi, czy w ogóle dotykać env — przepisywanie tej samej wartości
+// byłoby zbędnym zapisem do RC i myliłoby komunikatem o „zapisaniu" tego, co już było.
+export function resolveVpsChoice({ savedUrl, hostInput, portInput } = {}) {
+  const saved = typeof savedUrl === 'string' ? savedUrl.trim() : '';
+  const url = buildVpsUrl(hostInput, portInput);
+
+  if (!url) {
+    return saved
+      ? { url: saved, action: 'kept', persist: false }
+      : { url: null, action: 'none', persist: false };
+  }
+  return { url, action: 'set', persist: true };
 }
 
 // === Pure helper: odpowiedzi setupu → payload state powiadomień ===
@@ -772,6 +824,8 @@ function psSingleQuote(value) {
 }
 
 // Pure: komenda ustawienia User-scoped env var na Windows (rejestr HKCU\Environment).
+// Lustro odczytu: `lib/persisted-env.js` woła `[Environment]::GetEnvironmentVariable(..., 'User')`
+// z tym samym scope — zmiana scope'u tutaj musi trafić tam (panel porównuje obie wartości).
 // Widoczna w NOWYCH procesach bez `source`. Pojedyncze cudzysłowy: backslashe ścieżek
 // (C:\Users\...) zostają dosłowne, inaczej niż przy JSON/double-quote.
 export function buildSetUserEnvCommand(varName, value) {
@@ -1327,12 +1381,24 @@ async function main() {
     const portLoc = persistEnvVar('CLAUDE_CRON_PORT', String(dashboardPort), 'Claude-Cron dashboard port');
     console.log(`[ok] Port dashboardu: ${dashboardPort} (zapisano w ${portLoc})`);
 
-    const vpsHost = await ask(rl, 'Tailscale IP VPS-a (puste = tryb tylko lokalny): ');
+    // Re-run instalatora podpowiada ZAPISANY adres VPS (jak port i workspace wyżej) —
+    // bez tego pusty Enter kasował konfigurację i setup twierdził „tryb tylko lokalny"
+    // mimo działającego VPS-a. Utrwaloną wartość czytamy tym samym modułem co /api/status.
+    const savedVpsUrl = resolveSavedVpsUrl({
+      persisted: readPersistedEnv('CLAUDE_CRON_VPS_URL'),
+      inUse: process.env.CLAUDE_CRON_VPS_URL,
+    });
+    const vpsHost = await ask(rl, buildVpsHostPrompt(savedVpsUrl));
     const vpsPort = vpsHost ? await ask(rl, 'Port VPS [7777]: ', '7777') : '7777';
-    vpsUrl = buildVpsUrl(vpsHost, vpsPort);
-    if (vpsUrl) {
+    const vpsChoice = resolveVpsChoice({ savedUrl: savedVpsUrl, hostInput: vpsHost, portInput: vpsPort });
+    vpsUrl = vpsChoice.url;
+    if (vpsChoice.persist) {
       const vpsLoc = persistEnvVar('CLAUDE_CRON_VPS_URL', vpsUrl, 'Claude-Cron VPS connection');
       console.log(`[ok] VPS: ${vpsUrl} (zapisano w ${vpsLoc})`);
+    } else if (vpsChoice.action === 'kept') {
+      // Mowa o wartości ZAPISANEJ — żyjący serwer może mieć w pamięci starszą (env nie
+      // propaguje się do działających procesów), dlatego nie obiecujemy tu nic o restarcie.
+      console.log(`[ok] VPS bez zmian: ${vpsUrl}`);
     } else {
       console.log('[info] Tryb tylko lokalny — joby działają gdy komputer nie śpi.');
     }

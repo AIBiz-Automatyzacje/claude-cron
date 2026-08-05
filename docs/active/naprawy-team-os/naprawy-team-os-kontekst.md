@@ -335,3 +335,53 @@ projekcie nie istnieją (czysty CommonJS + vanilla JS, `node:test` bez zależno�
 uruchomić poza `npm test`.
 
 **Ostatnia aktualizacja:** 2026-08-05 (domknięcie Fazy 3)
+
+---
+
+## Faza 4 — Konfiguracja VPS (2026-08-05)
+
+**U9 — panel pokazuje adres w użyciu obok zapisanego**
+
+- Nowy `lib/persisted-env.js` (+ testy): odczyt wartości **utrwalonej** przez instalator — Unix
+  ostatnia linia `export NAZWA=...` z `~/.zshrc`/`~/.bashrc` (czytane OBA, bo launchd/systemd
+  startują bez `SHELL`), Windows `[Environment]::GetEnvironmentVariable(..., 'User')`.
+  I/O wstrzykiwane (`REAL_IO`, wzorzec `lib/platform.js`), więc testy nie dotykają maszyny usera.
+- `/api/status` dostaje pole `vps_url` = `{ in_use, persisted, mismatch }` z `describeEnvUsage`.
+  Odczyt utrwalonej wartości leci **w czasie żądania** (wzorzec `notify-config.js`), a `mismatch`
+  jest `true` wyłącznie gdy obie wartości są znane i różne — nieczytelne źródło to „nie wiem"
+  (`persisted: null`), nigdy oskarżenie o rozjazd.
+- Panel: pasek `#vps-addr` renderowany przez `renderVpsAddr`; brak pola `vps_url` (proxy do
+  starszej instancji VPS) chowa pasek, zamiast wywalić render statbara.
+
+**U10 — instalator podpowiada zapisany adres VPS**
+
+- `setup.mjs` pyta o adres z podpowiedzią zapisanej wartości (jak port i workspace). Trzy rozłączne
+  stany w czystym `resolveVpsChoice`: `kept` (pusty Enter przy istniejącej konfiguracji — env NIE
+  jest przepisywany), `none` (dopiero tu „tryb tylko lokalny"), `set` (nowy adres nadpisuje).
+- Utrwaloną wartość czyta **ten sam** `readPersistedEnv` co `/api/status`; pierwszeństwo ma wartość
+  z RC/rejestru nad `process.env` bieżącej sesji (pułapka stale env, `docs/solutions/…2026-07-07…`).
+
+### Decyzje i odchylenia (Faza 4)
+
+| Odchylenie | Powód |
+|---|---|
+| Pole trafiło jako osobny pasek `#vps-addr` **pod statbarem**, nie do „sekcji ustawień na górze panelu" z planu | Panel takiej sekcji nie ma — ustawienia żyją w modalach („Ile naraz", „Powiadomienia"). Pasek reużywa skorupy CSS statbara i znika, gdy VPS nie jest skonfigurowany |
+| Brak duplikacji parsera env między `setup.mjs` (ESM) a `server.js` (CJS) — plan dopuszczał świadomy duplikat | Most okazał się darmowy: `setup.mjs` już trzyma `createRequire(import.meta.url)` (używa go do `require('./lib/db')`), więc `lib/persisted-env.js` jest importowany wprost. Zero rozjazdu z formatem `upsertEnvLine` |
+| Lustro zapis↔odczyt związane komentarzem po **obu** stronach (`upsertEnvLine`, `buildSetUserEnvCommand` ↔ `persisted-env.js`) | Format `JSON.stringify` i scope `'User'` to kontrakt między plikami; zmiana po jednej stronie musi trafić na drugą (precedens `INBOX_CODE_PREFIX`) |
+
+**Audyt error-handlingu (przed commitem):** zero `console.log`/`console.error` w kodzie
+produkcyjnym tej fazy (komunikaty w `setup.mjs` to CLI instalatora, jak cały ten plik). Żaden
+`catch` nie jest pusty — wszystkie zwracają `null`/`continue` z komentarzem uzasadniającym:
+kontrakt `readPersistedEnv` brzmi „nigdy nie rzuca, nieczytelne źródło = «nie wiem»", bo pad
+odczytu RC nie może zabić `/api/status`.
+
+**Do rozstrzygnięcia w review:** `readWindowsPersistedEnv` spawnuje PowerShell **synchronicznie**
+w ścieżce `/api/status`, a panel odpytuje co 3 s — na Windowsie to spawn co odświeżenie. Nie
+zmieniane w domknięciu (zmiana kształtu, nie naprawa błędu), zgłoszone reviewowi Fazy 4.
+
+**Walidacja Fazy 4:** `npm test` → **912/912 pass, exit 0** (0 fail, 0 skipped).
+`node --test lib/persisted-env.test.js` → 13/13 pass, `node --test setup.test.mjs` → 134/134 pass.
+Typecheck, linter i build w tym projekcie nie istnieją (czysty CommonJS + vanilla JS) — nie ma
+czego uruchomić poza `npm test`.
+
+**Ostatnia aktualizacja:** 2026-08-05 (domknięcie Fazy 4)

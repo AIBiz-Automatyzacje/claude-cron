@@ -15,6 +15,9 @@ import {
   isClaudeInstalled,
   upsertEnvLine,
   buildVpsUrl,
+  resolveSavedVpsUrl,
+  buildVpsHostPrompt,
+  resolveVpsChoice,
   buildFolderPickerCommand,
   parseFolderPickerResult,
   buildOpenBrowserCommand,
@@ -404,6 +407,68 @@ test('buildVpsUrl domyślny port 7777 gdy port pusty', () => {
 test('buildVpsUrl zwraca null dla pustego/białego hosta (tryb tylko lokalny)', () => {
   assert.equal(buildVpsUrl('', '7777'), null);
   assert.equal(buildVpsUrl('   ', '7777'), null);
+});
+
+// === resolveSavedVpsUrl / buildVpsHostPrompt / resolveVpsChoice — re-run nie kasuje adresu ===
+
+test('resolveSavedVpsUrl: utrwalona wartość wygrywa z env bieżącej sesji (stale env)', () => {
+  const saved = resolveSavedVpsUrl({
+    persisted: 'http://100.64.0.1:7777',
+    inUse: 'http://stary:7777',
+  });
+  assert.equal(saved, 'http://100.64.0.1:7777');
+});
+
+test('resolveSavedVpsUrl: bez utrwalonej wartości spada do env, bez obu → null', () => {
+  assert.equal(resolveSavedVpsUrl({ persisted: null, inUse: 'http://100.64.0.1:7777' }), 'http://100.64.0.1:7777');
+  assert.equal(resolveSavedVpsUrl({ persisted: null, inUse: '  ' }), null);
+  assert.equal(resolveSavedVpsUrl(), null);
+});
+
+test('buildVpsHostPrompt pokazuje zapisany adres jako domyślny', () => {
+  assert.ok(buildVpsHostPrompt('http://100.64.0.1:7777').includes('bez zmian: http://100.64.0.1:7777'));
+});
+
+test('buildVpsHostPrompt bez zapisanego adresu mówi o trybie tylko lokalnym', () => {
+  assert.ok(buildVpsHostPrompt(null).includes('tryb tylko lokalny'));
+  assert.ok(!buildVpsHostPrompt('').includes('bez zmian'));
+});
+
+test('resolveVpsChoice: zapisany adres + pusty Enter → wartość zachowana, bez zapisu env', () => {
+  const choice = resolveVpsChoice({ savedUrl: 'http://100.64.0.1:7777', hostInput: '', portInput: '7777' });
+  assert.equal(choice.url, 'http://100.64.0.1:7777');
+  assert.equal(choice.action, 'kept');
+  assert.equal(choice.persist, false);
+});
+
+test('resolveVpsChoice: brak zapisanego adresu + pusty Enter → tryb tylko lokalny, env nie zapisywany', () => {
+  const choice = resolveVpsChoice({ savedUrl: null, hostInput: '', portInput: '7777' });
+  assert.equal(choice.url, null);
+  assert.equal(choice.action, 'none');
+  assert.equal(choice.persist, false);
+});
+
+test('resolveVpsChoice: podany nowy adres nadpisuje stary', () => {
+  const choice = resolveVpsChoice({
+    savedUrl: 'http://100.64.0.1:7777',
+    hostInput: '100.99.99.9',
+    portInput: '8888',
+  });
+  assert.equal(choice.url, 'http://100.99.99.9:8888');
+  assert.equal(choice.action, 'set');
+  assert.equal(choice.persist, true);
+});
+
+test('resolveVpsChoice: host z białymi znakami sanityzowany jak dziś (buildVpsUrl)', () => {
+  const choice = resolveVpsChoice({ savedUrl: null, hostInput: '  100.64.0.1  ', portInput: '  ' });
+  assert.equal(choice.url, 'http://100.64.0.1:7777');
+  assert.equal(choice.action, 'set');
+});
+
+test('resolveVpsChoice: sam biały znak w odpowiedzi to nadal „bez zmian", nie nowy adres', () => {
+  const choice = resolveVpsChoice({ savedUrl: 'http://100.64.0.1:7777', hostInput: '   ', portInput: '7777' });
+  assert.equal(choice.action, 'kept');
+  assert.equal(choice.url, 'http://100.64.0.1:7777');
 });
 
 // === buildFolderPickerCommand — natywne okno wyboru folderu per OS ===
