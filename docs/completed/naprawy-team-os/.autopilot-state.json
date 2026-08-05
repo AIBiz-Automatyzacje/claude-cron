@@ -135,8 +135,8 @@
     }
   ],
   "zakonczenie": {
-    "walidacja": "pending",
-    "complete": "pending",
-    "compound": "pending"
+    "walidacja": "done",
+    "complete": "done",
+    "compound": "done"
   }
 }
