@@ -358,19 +358,19 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U11 — Aktualizacja Pulsa przyciskiem w panelu *(R10 b/c/d, nakład XL, zależności: U1)*
 
-- [ ] Stwórz `lib/updater.js` — sprawdzenie dostępności przez publiczne API GitHuba + porównanie z rewizją z U1
-- [ ] Stwórz `lib/updater.test.js`
-- [ ] Modyfikuj `server.js` — endpointy sprawdzenia i uruchomienia aktualizacji
-- [ ] Implementuj updater macOS — `git pull --ff-only` + zgaszenie procesu (launchd/hook podnosi sam)
-- [ ] Implementuj updater Windows — PowerShell przeżywający śmierć rodzica; ubijanie filtrem po **ścieżce instalacji**, nigdy po nazwie binarki
-- [ ] Modyfikuj `install.ps1` — tryb nieinteraktywny dla ścieżki updatera
-- [ ] Modyfikuj `public/app.js`, `public/index.html` — badge + przycisk + odpytywanie aż wróci nowa wersja, z **komunikatem o niepowodzeniu** po przekroczeniu czasu
-- [ ] Test: wersja lokalna == zdalna → brak sygnału aktualizacji
-- [ ] Test: wersja lokalna starsza → sygnał z numerem
-- [ ] Test: wersja `unknown` → czytelny stan „nie wiem", **nie** fałszywe „aktualne"
-- [ ] Test: API GitHuba niedostępne → stan „nie udało się sprawdzić", panel nie wisi
-- [ ] Weryfikacja: `node --test lib/updater.test.js` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości
+- [x] Stwórz `lib/updater.js` — sprawdzenie dostępności przez publiczne API GitHuba + porównanie z rewizją z U1
+- [x] Stwórz `lib/updater.test.js`
+- [x] Modyfikuj `server.js` — endpointy sprawdzenia i uruchomienia aktualizacji (`GET/POST /api/update`, rewizja ze świeżego sprawdzenia — klient nie decyduje, co się instaluje)
+- [x] Implementuj updater macOS — `git pull --ff-only` + zgaszenie procesu (launchd/hook podnosi sam); `kill` tylko po udanym pullu
+- [x] Implementuj updater Windows — PowerShell przeżywający śmierć rodzica; ubijanie filtrem po **ścieżce instalacji**, nigdy po nazwie binarki (`Stop-PulsProcesses` w `install.ps1`)
+- [x] Modyfikuj `install.ps1` — tryb nieinteraktywny dla ścieżki updatera *(odchylenie: `CLAUDE_CRON_NONINTERACTIVE=1` POMIJA `setup.mjs` zamiast puszczać go bez pytań — aktualizacja to podmiana KODU, nie ponowna konfiguracja; `Invoke-UpdateFinish` robi dwie rzeczy, których updater potrzebuje: zapis `data/version.json` i start serwera)*
+- [x] Modyfikuj `public/app.js`, `public/index.html` — badge + przycisk + odpytywanie aż wróci nowa wersja, z **komunikatem o niepowodzeniu** po przekroczeniu czasu (6 min) *(odchylenie: czyste helpery `shortRevision`/`revisionsMatch`/`updateBarView` trafiły do `public/render-helpers.js` — jedyny testowalny plik frontu w projekcie)*
+- [x] Test: wersja lokalna == zdalna → brak sygnału aktualizacji
+- [x] Test: wersja lokalna starsza → sygnał z numerem
+- [x] Test: wersja `unknown` → czytelny stan „nie wiem", **nie** fałszywe „aktualne"
+- [x] Test: API GitHuba niedostępne → stan „nie udało się sprawdzić", panel nie wisi
+- [x] Weryfikacja: `node --test lib/updater.test.js` przechodzi — 21/21 pass
+- [x] Weryfikacja: `npm test` przechodzi w całości — 952/952 pass
 
 **Operator checklist:**
 - [ ] Windows: aktualizacja przy działającym daemonie → `data\` i `.node\` nietknięte, serwer wraca
@@ -381,12 +381,16 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U12 — Aktualizacja pluginu zespołowego *(R14, R15, nakład M, zależności: **wszystkie pozostałe zrobione I przetestowane**)*
 
-- [ ] Modyfikuj `<aibiz-plugin>/plugins/aibiz/skills/onboard/templates/skrzynka.css` — synchronizacja z rendererem
-- [ ] Modyfikuj `<aibiz-plugin>/plugins/aibiz/skills/onboard/SKILL.md` — opis flow Skrzynki, `--refresh-theme`, wymagana wersja Obsidiana
-- [ ] Weryfikacja: `npm test` przechodzi w całości (regresja po stronie renderera)
+- [x] Modyfikuj `<aibiz-plugin>/plugins/aibiz/skills/onboard/templates/skrzynka.css` — synchronizacja z rendererem *(odchylenie: baseline szablonu = ŻYWY snippet vaulta wraz z kolejnością deklaracji — consistency-check porównuje tekst po normalizacji CRLF, więc sama przestawka linii byłaby wiecznym fałszywym rozjazdem; zamyka finding #26 z review Fazy 3. Poza literą planu: jasny kolor bazowy `.os-av`, `p:empty` uogólnione na wszystkie karty, reguła `.os-tag.t-close`, usunięte martwe reguły)*
+- [x] Modyfikuj `<aibiz-plugin>/plugins/aibiz/skills/onboard/SKILL.md` — opis flow Skrzynki, `--refresh-theme`, wymagana wersja Obsidiana *(odchylenie: wymaganie sformułowane objawowo — „Chromium 105+ / zaktualizuj Obsidiana", BEZ numeru wersji Obsidiana: brak pewnej mapy Obsidian→Electron/Chromium)*
+- [x] Weryfikacja: `npm test` przechodzi w całości (regresja po stronie renderera) — 952/952 pass
+
+**Uwaga (zmiany w drugim repo):** `aibiz-plugin` jest OSOBNYM repozytorium — zmiany U12 leżą tam **niezacommitowane** i celowo nie zostały wypchnięte: push jest bramkowany operator checklistą poniżej (cudze zmiany w `hooks/`).
 
 **Operator checklist:**
 - [ ] ⚠️ Wyjaśnienie niezacommitowanych cudzych zmian w `aibiz-plugin` z autorem (`D hooks/frontmatter-validate.sh`, `M hooks/hooks.json`) — **przed pushem**
+- [ ] Commit zmian U12 w `aibiz-plugin` (`skills/onboard/SKILL.md`, `skills/onboard/templates/skrzynka.css`) — poza tym repo, więc poza commitem Fazy 5
+- [ ] Po wypchnięciu pluginu do zespołu: zamienić ręczne kroki `THEME_FIX_COMMAND` (`scripts/consistency-check.mjs:31`) na `/onboard --refresh-theme` — tryb istnieje dopiero od U12, więc do czasu `/reload-plugins` u zespołu komenda byłaby martwa u odbiorcy
 - [ ] `/plugin-zespolowy check`
 - [ ] Push + `Update marketplace` + `/reload-plugins` u zespołu
 - [ ] **CAVE:** `install.ps1` + świeże snippety w tamtejszym vaulcie

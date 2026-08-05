@@ -665,7 +665,7 @@ oba już podpowiadają zapisane wartości.
 
 ### Faza 5 — Aktualizacja i dystrybucja
 
-- [ ] **Unit 11: Aktualizacja Pulsa przyciskiem w panelu**
+- [x] **Unit 11: Aktualizacja Pulsa przyciskiem w panelu**
 
 **Cel:** aktualizacja jak w normalnej aplikacji — „dostępna nowa wersja → klik → aktualizuje się
 i wraca". Człowiek widzi wynik, zamiast dowiadywać się rano, że coś się zepsuło bez świadka.
@@ -710,16 +710,21 @@ i wraca". Człowiek widzi wynik, zamiast dowiadywać się rano, że coś się ze
 - [Manual] Windows: aktualizacja przy działającym daemonie → `data\` i `.node\` nietknięte, serwer wraca
 - [Manual] Mac: aktualizacja → proces wraca sam, wersja w panelu nowa
 
-**Weryfikacja:**
-- `node --test lib/updater.test.js` przechodzi
-- `npm test` przechodzi w całości
+**Weryfikacja (05.08.2026 — ✅ wykonana):**
+- ✅ `node --test lib/updater.test.js` przechodzi — 21/21 pass
+- ✅ `npm test` przechodzi w całości — 952/952 pass, exit 0
+- ✅ [Unit] wersja lokalna == zdalna → brak sygnału aktualizacji
+- ✅ [Unit] wersja lokalna starsza → sygnał dostępnej aktualizacji z numerem
+- ✅ [Unit] wersja `unknown` → czytelny stan „nie wiem", nie fałszywe „aktualne"
+- ✅ [Unit] API GitHuba niedostępne → stan „nie udało się sprawdzić", panel nie wisi
+- ⏸️ [Manual] Windows/Mac (aktualizacja przy działającym daemonie) — Operator checklist
 
 **Operator checklist:**
 - [ ] **Sprawdzenie M2** wg szablonu testów, na Macu i na CAVE
 
 ---
 
-- [ ] **Unit 12: Aktualizacja pluginu zespołowego**
+- [x] **Unit 12: Aktualizacja pluginu zespołowego**
 
 **Cel:** identyczny wygląd i zachowanie Skrzynki na wszystkich maszynach zespołu i u kursantów.
 
@@ -750,8 +755,10 @@ aktualizacja na końcu zamiast kilku po drodze)
 - [Manual] po `/reload-plugins` Skrzynka wygląda identycznie na Macu, VPS i CAVE
 - [Manual] świeży vault po `onboard` dostaje snippet i `cssclasses` bez ręcznych kroków
 
-**Weryfikacja:**
-- `npm test` przechodzi w całości (regresja po stronie renderera)
+**Weryfikacja (05.08.2026 — ✅ wykonana):**
+- ✅ `npm test` przechodzi w całości (regresja po stronie renderera) — 952/952 pass
+- ⏸️ [Manual] wygląd Skrzynki i świeży vault po `onboard` — Operator checklist (wymaga pushu pluginu)
+- ℹ️ Zmiany leżą w repo `aibiz-plugin` NIEZACOMMITOWANE — push bramkowany wyjaśnieniem cudzych zmian w `hooks/`
 
 **Operator checklist:**
 - [ ] Wyjaśnienie niezacommitowanych zmian w `aibiz-plugin` z autorem

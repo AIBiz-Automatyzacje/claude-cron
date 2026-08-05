@@ -384,4 +384,96 @@ zmieniane w domknięciu (zmiana kształtu, nie naprawa błędu), zgłoszone revi
 Typecheck, linter i build w tym projekcie nie istnieją (czysty CommonJS + vanilla JS) — nie ma
 czego uruchomić poza `npm test`.
 
-**Ostatnia aktualizacja:** 2026-08-05 (domknięcie Fazy 4)
+---
+
+## Review Fazy 4 (2026-08-05)
+
+Raport: `docs/active/naprawy-team-os/review-faza-4.md`. Gate: **⛔ BLOKUJE** — 1× P1, 4× P2,
+8× P3, 2× OPERATOR. `npm test` w review: **918/918 pass, exit 0**.
+
+Kluczowe wnioski:
+
+- **P1: `hidden` nie chowa elementu z `display:flex`.** Pasek `#vps-addr` (`.statbar`) i
+  ostrzeżenie (`.stat`) mają regułę autora bijącą UA-owe `[hidden]{display:none}` — a projekt nie
+  ma globalnego override'u (jedyny precedens: `.modal-overlay[hidden]`, style.css:529). Skutek:
+  „⚠ Rozjazd" wisi zawsze, także przy `mismatch:false`. Feature zbudowany po to, żeby ufać
+  diagnostyce, świeci fałszywym alarmem u każdego usera.
+- **Pytanie „do rozstrzygnięcia w review" rozstrzygnięte: to defekt, nie kształt.** Synchroniczny
+  `spawnSync` PowerShella w ścieżce `/api/status` (bez cache i bez `timeout`) siedzi za
+  endpointem bez autoryzacji, bez rate limitu i z `ACAO: *` — dowolna odwiedzona strona robi z
+  niego DoS schedulera. Wzorzec „odczyt w czasie żądania" z `notify-config.js` NIE przenosi się
+  ze state DB na spawn procesu.
+- **`kept` w `resolveVpsChoice` odtwarza dokładnie ten błąd, który faza miała zamknąć (R7/R11):**
+  pomija nie tylko zapis do RC, ale i `process.env` bieżącego procesu, więc serwer wskrzeszany
+  przez ten sam run setupu leci bez adresu → `/api/vps/*` 503.
+- **Deklarowane scenariusze `/api/status` pokryte tylko testem czystej funkcji** — szew
+  server ↔ persisted-env ↔ app.js niepokryty, mimo precedensu `server.runs.test.js:156` z Fazy 1
+  i learned-patternu o testach czystych funkcji przy złamanym zachowaniu systemowym.
+- **Środowisko:** lokalny daemon na 7777 biegnie z kodem sprzed Fazy 4 (legacy launchd
+  `com.claude-cron.daemon`), więc weryfikacja `curl`-em przeszła dopiero na świeżej instancji.
+
+**Ostatnia aktualizacja:** 2026-08-05 (review Fazy 4)
+
+---
+
+## Faza 5 — Aktualizacja i dystrybucja (2026-08-05)
+
+**U11 — aktualizacja Pulsa przyciskiem w panelu**
+
+- `lib/updater.js` — czterowartościowy kontrakt stanu i to jest sedno modułu: `current`,
+  `available`, `unknown` (lokalna rewizja nieznana) i `check_failed` (pad API GitHuba) są
+  ROZŁĄCZNE. „Nie wiem" i „nie udało się sprawdzić" NIE MOGĄ udawać „masz aktualne" — fałszywa
+  zieleń jest gorsza niż brak odpowiedzi, bo user przestaje sprawdzać.
+- Wersja lokalna z `data/version.json` (U1), nie z gita: instalacja zipowa/tarballowa nie ma
+  repozytorium, a to ona jest domyślną drogą u użytkowników. Porównanie po prefiksie ≥7 znaków
+  (lokalna bywa skrócona z `git rev-parse --short`, zdalna jest zawsze pełna).
+- `GET /api/update` (sprawdzenie) i `POST /api/update` (start) siedzą za guardem XFF jak cały
+  dashboard, a POST dodatkowo za wspólnym guardem cross-origin `handleApi` — to zdalne pobranie
+  kodu z GitHuba + restart daemona, czyli najgroźniejszy endpoint w całym API. **Rewizja bierze
+  się ze świeżego sprawdzenia po stronie serwera, nigdy z body** — klient nie decyduje, co się
+  instaluje.
+- macOS: `git pull --ff-only && kill <pid>` — `kill` TYLKO po udanym pullu (`&&`), przy
+  konflikcie/braku sieci serwer żyje dalej, a panel po timeoucie mówi wprost, że się nie udało.
+  Windows: `install.ps1` pobierany po **SHA**, nie po nazwie gałęzi (raw.githubusercontent
+  cachuje URL-e gałęziowe — learned pattern 2026-07-28), proces `detached` przeżywa śmierć
+  rodzica, bo to on ubija daemona (zablokowane pliki).
+- Panel: sprawdzenie RAZ przy starcie (publiczne API GitHuba ma limit 60/h na IP, a odpowiedź
+  zmienia się w skali dni). Pasek widoczny wyłącznie, gdy jest co powiedzieć — „masz najnowszą"
+  nie zasługuje na stały pasek. Po kliknięciu odpytywanie co 5 s, a po 6 min **jawny komunikat
+  o niepowodzeniu**: cisza po kliknięciu wygląda identycznie jak „padło w połowie".
+
+**U12 — aktualizacja pluginu zespołowego** (repo `aibiz-plugin`, poza tym repozytorium)
+
+- `skills/onboard/templates/skrzynka.css` zsynchronizowany z rendererem po Fazach 1–4;
+  `SKILL.md` opisuje flow Skrzynki, tryb `--refresh-theme` i wymaganie Chromium 105+ (`:has()`).
+
+### Decyzje i odchylenia (Faza 5)
+
+| Odchylenie | Powód |
+|---|---|
+| `CLAUDE_CRON_NONINTERACTIVE=1` w `install.ps1` **pomija `setup.mjs`**, zamiast puszczać go bez pytań | `setup.mjs` to onboarding sterowany pytaniami (workspace, VPS, powiadomienia, kod zaproszenia). Aktualizacja to podmiana KODU, nie ponowna konfiguracja — stan żyje w `data\` i env User-scope i przeżywa swap katalogów. `Invoke-UpdateFinish` robi dokładnie dwie brakujące rzeczy: zapis `data/version.json` (inaczej panel w kółko pokazuje „dostępna nowa wersja") i start serwera (`Stop-PulsProcesses` go ubił, a zadanie Task Scheduler jest ONLOGON) |
+| Czyste helpery paska (`shortRevision`, `revisionsMatch`, `updateBarView`) w `public/render-helpers.js` — plik spoza listy „Pliki" w planie | To jedyny testowalny plik frontu w projekcie. Bez tego reguła „chowamy pasek WYŁĄCZNIE przy `current`" siedziałaby w `app.js` bez żadnego testu |
+| Brak testu HTTP na żywym procesie dla `/api/update` (wzorzec `lib/ask.http.test.js`) | GET biłby w prawdziwe API GitHuba (flake + limit 60/h), POST realnie zaktualizowałby maszynę operatora. Szew pokryty jednostkowo: `checkForUpdate` (wersja + odpowiedź API → jeden stan) i `startUpdate` (plan → spawn) |
+| Baseline `skrzynka.css` w pluginie ustawiony na **żywy snippet vaulta** (z kolejnością deklaracji) | Poprawka centrowania checkboxa z 05.08 nigdy nie trafiła do repo pluginu, a consistency-check porównuje tekst po normalizacji CRLF — sama przestawka linii byłaby wiecznym fałszywym rozjazdem. Zamyka finding #26 z review Fazy 3 |
+| Wymaganie wersji Obsidiana opisane **objawowo** („zaktualizuj Obsidiana"), bez numeru | Brak pewnej mapy Obsidian → Electron/Chromium; instrukcja opiera się na „Sprawdź aktualizacje" i objawie (surowe callouty), nie na numerze, którego nie da się zweryfikować |
+| `THEME_FIX_COMMAND` (`scripts/consistency-check.mjs:31`) NADAL opisuje kroki ręczne, mimo że `--refresh-theme` już istnieje | Tryb istnieje wyłącznie w niezacommitowanym `aibiz-plugin`. Do czasu pushu + `/reload-plugins` u zespołu komenda byłaby u odbiorcy martwa — a to dokładnie ten defekt (P2 z review Fazy 3), który uczy człowieka, że sygnał kłamie. Przełączenie jest w operator checkliście U12 |
+
+**Audyt error-handlingu (przed commitem):** zero `console.log`/`console.error` dodanych do kodu
+produkcyjnego poza wstrzykiwalnym `REAL_IO` w `lib/updater.js` (`io.log`/`io.warn` — konwencja
+backendu tego repo, wymienne w testach). Żaden `catch` nie jest niemy bez uzasadnienia:
+`fetchLatestRevision` zwraca `{ok:false, error}` (pad sieci/limit API to normalny stan, nie 500
+w panelu), `loadUpdateStatus` zamienia pad na widoczny stan „nie udało się sprawdzić", a jedyny
+milczący `catch` (`pollUpdateProgress`) jest udokumentowany i **raportuje przez timeout** —
+serwer w trakcie restartu MUSI móc nie odpowiadać, a niepowodzenie i tak wychodzi po 6 min.
+`public/app.js` nie ma ani jednego `console.*` w całym pliku (30 milczących catchów z
+komentarzem) — nowy kod trzyma tę konwencję.
+
+**Walidacja Fazy 5:** `npm test` → **952/952 pass, exit 0** (0 fail, 0 skipped).
+`node --test lib/updater.test.js` → 21/21 pass. Typecheck, linter i build w tym projekcie nie
+istnieją (czysty CommonJS + vanilla JS) — nie ma czego uruchomić poza `npm test`.
+
+**Granica repo:** zmiany U12 leżą w OSOBNYM repozytorium `aibiz-plugin` jako niezacommitowane —
+push jest bramkowany operator checklistą (cudze niezacommitowane zmiany w `hooks/` do wyjaśnienia
+z autorem). Commit Fazy 5 obejmuje wyłącznie `claude-cron`.
+
+**Ostatnia aktualizacja:** 2026-08-05 (domknięcie Fazy 5)

@@ -40,6 +40,13 @@ $InstallSource   = if ($env:CLAUDE_CRON_INSTALL_SOURCE) { $env:CLAUDE_CRON_INSTA
 $InstallDirDefault = Join-Path $HOME "claude-cron"
 $InstallDir = if ($env:INSTALL_DIR) { $env:INSTALL_DIR } else { $InstallDirDefault }
 
+# Tryb NIEINTERAKTYWNY - sciezka updatera z panelu (POST /api/update). Instalator biegnie
+# wtedy bez konsoli i bez czlowieka: KAZDE pytanie musialoby zgadnac odpowiedz, wiec
+# zamiast zgadywac - nie pytamy wcale (Read-Host pominiety, decyzje fail-closed) i
+# POMIJAMY setup.mjs. Aktualizacja to podmiana KODU, nie ponowna konfiguracja: baza,
+# .env i env systemowe leza w data\ / User-scope i przezywaja swap katalogow.
+$NonInteractive = ($env:CLAUDE_CRON_NONINTERACTIVE -eq "1")
+
 # Katalogi przenoszone ze starej instalacji do swiezej (allowlist, NIE blacklist).
 # data\  = baza SQLite + logi (NIGDY nie kasowac przy re-run).
 # .node\ = przenosny Node (oszczedza ponowne pobieranie).
@@ -89,6 +96,11 @@ function Read-InstallDir {
     if ($env:INSTALL_DIR) {
         Write-Host "[info] Katalog instalacji z env INSTALL_DIR: $InstallDir" -ForegroundColor Cyan
         return $InstallDir
+    }
+    # Bez konsoli katalog domyslny bylby ZGADYWANIEM - a updater aktualizuje konkretna,
+    # istniejaca instalacje. Pomylka oznacza druga kopie obok, nie aktualizacje.
+    if ($NonInteractive) {
+        throw "Tryb nieinteraktywny wymaga jawnego INSTALL_DIR - nie zgaduje katalogu instalacji."
     }
     $answer = ""
     try {
@@ -189,6 +201,10 @@ function Confirm-InstallDirReplaceable {
     $canAsk = $true
     if ($PSBoundParameters.ContainsKey("Answer")) {
         $reply = $Answer
+    }
+    elseif ($NonInteractive) {
+        # Fail-closed: updater NIE kasuje obcej zawartosci bez zgody czlowieka.
+        $canAsk = $false
     }
     else {
         try {
@@ -521,11 +537,52 @@ function Install-Dependencies {
 #
 # GATE 0 - ZWERYFIKOWANE 2026-07-01 (Windows 11 + PowerShell 5.1): pod irm|iex
 # pytania setup.mjs czytaja klawiature, latka CONIN$ okazala sie niepotrzebna.
+# Domkniecie aktualizacji BEZ setup.mjs (tryb nieinteraktywny). Dwa kroki, oba potrzebne:
+#   1) zapis data\version.json - bez tego panel po aktualizacji nadal pokazywalby stara
+#      rewizje i "dostepna nowa wersja" w kolko (to setup.mjs normalnie pisze ten plik);
+#   2) start serwera - daemona ubil Stop-PulsProcesses, a zadanie Task Scheduler jest
+#      ONLOGON, wiec samo z siebie podnioslby go dopiero przy nastepnym logowaniu.
+function Invoke-UpdateFinish {
+    param(
+        [Parameter(Mandatory = $true)][string] $NodeExe,
+        [Parameter(Mandatory = $true)][string] $RepoDir
+    )
+    Write-Host "[info] Tryb nieinteraktywny - pomijam setup.mjs (aktualizacja kodu, nie konfiguracja)." -ForegroundColor Cyan
+
+    if ($InstallRevision) {
+        $env:CLAUDE_CRON_INSTALL_REVISION = $InstallRevision
+        $env:CLAUDE_CRON_INSTALL_SOURCE   = $InstallSource
+        $writer = "require('./lib/version').writeVersionFile({revision:process.env.CLAUDE_CRON_INSTALL_REVISION,source:process.env.CLAUDE_CRON_INSTALL_SOURCE})"
+        $oldLocation = Get-Location
+        try {
+            Set-Location $RepoDir
+            & $NodeExe "--disable-warning=ExperimentalWarning" "-e" $writer
+            if ($LASTEXITCODE -ne 0) { Write-Warning "Nie zapisalem wersji instalacji (kod $LASTEXITCODE)." }
+            else { Write-Host "[ok] Wersja instalacji: $InstallRevision" -ForegroundColor Green }
+        }
+        catch {
+            # Pad zapisu wersji NIE moze zablokowac startu serwera - wersja to metadana.
+            Write-Warning "Nie zapisalem wersji instalacji: $($_.Exception.Message)"
+        }
+        finally { Set-Location $oldLocation }
+    }
+
+    Write-Host "[info] Uruchamiam serwer Pulsa..." -ForegroundColor Cyan
+    Start-Process -FilePath $NodeExe `
+        -ArgumentList "--disable-warning=ExperimentalWarning", "server.js" `
+        -WorkingDirectory $RepoDir -WindowStyle Hidden
+    Write-Host "[ok] Aktualizacja zakonczona." -ForegroundColor Green
+}
+
 function Invoke-Setup {
     param(
         [Parameter(Mandatory = $true)][string] $NodeExe,
         [Parameter(Mandatory = $true)][string] $RepoDir
     )
+    if ($NonInteractive) {
+        Invoke-UpdateFinish -NodeExe $NodeExe -RepoDir $RepoDir
+        return
+    }
     Write-Host "[info] Przekazuje sterowanie do setup.mjs..." -ForegroundColor Cyan
     # Rewizja jedzie env-em: setup.mjs zapisuje ja do data\version.json JUZ PO swapie
     # katalogow - inaczej plik trafilby do katalogu, ktory za chwile ladowal w koszu.

@@ -16,6 +16,7 @@ const inboxSeed = require('./lib/inbox-seed');
 const inboxDb = require('./lib/inbox-db');
 const { isInboxHub } = require('./lib/inbox-hub');
 const { getInstallVersion } = require('./lib/version');
+const updater = require('./lib/updater');
 const { describeEnvUsage, readPersistedEnvCached } = require('./lib/persisted-env');
 const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
 const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
@@ -326,6 +327,27 @@ async function handleApi(req, res) {
       scheduler.processQueue().catch((err) => console.error('[scheduler] processQueue:', err.message));
       return json(res, { max_concurrent: scheduler.readMaxConcurrent() });
     }
+  }
+
+  // GET /api/update — stan aktualizacji (lokalna rewizja vs czoło gałęzi na GitHubie).
+  // PRYWATNY jak cały dashboard (za guardem XFF). Odpowiedź NIGDY nie udaje „aktualne":
+  // brak znanej wersji i pad API GitHuba mają własne, rozłączne statusy.
+  if (method === 'GET' && urlPath === '/api/update') {
+    return json(res, await updater.checkForUpdate());
+  }
+
+  // POST /api/update — uruchomienie aktualizacji. Mutujące, więc objęte wspólnym guardem
+  // cross-origin z góry handleApi: to zdalne pobranie kodu z GitHuba + restart daemona,
+  // czyli najgroźniejszy endpoint w całym API (guard XFF sam by tego nie złapał).
+  // Rewizję bierzemy ze ŚWIEŻEGO sprawdzenia, nie z body — klient nie decyduje, co się instaluje.
+  if (method === 'POST' && urlPath === '/api/update') {
+    const info = await updater.checkForUpdate();
+    if (!info.can_update) {
+      return json(res, { ...info, started: false }, 409);
+    }
+    const started = updater.startUpdate({ revision: info.remote_revision });
+    if (!started.ok) return json(res, { started: false, error: started.error }, 500);
+    return json(res, { started: true, kind: started.kind, revision: info.remote_revision });
   }
 
   // GET /api/status

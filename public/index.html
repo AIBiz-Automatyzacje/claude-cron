@@ -58,6 +58,15 @@
       <div class="stat vps-addr-warn" id="vps-addr-warn" hidden>⚠ Rozjazd — zmiana adresu wymaga restartu Pulsa</div>
     </div>
 
+    <!-- Pasek aktualizacji (R10): wersja zainstalowana + stan porównania z GitHubem.
+         Widoczny TYLKO gdy jest co powiedzieć (nowa wersja / „nie wiem" / pad sprawdzenia
+         / trwa aktualizacja) — „masz najnowszą" nie zasługuje na stały pasek. -->
+    <div class="statbar vps-addr" id="update-bar" hidden>
+      <div class="stat"><span class="stat-label">Wersja:</span> <span class="stat-strong" id="update-local">—</span></div>
+      <div class="stat" id="update-msg" role="status" aria-live="polite">—</div>
+      <button class="btn btn-primary" id="update-btn" onclick="startPulsUpdate()" hidden>⬇ Zaktualizuj Pulsa</button>
+    </div>
+
     <!-- ── Sekcje ── -->
     <main>
       <!-- Zadania -->
