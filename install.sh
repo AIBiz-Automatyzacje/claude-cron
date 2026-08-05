@@ -322,7 +322,11 @@ fetch_ref_sha() {
     rm -f "$out"
     return 1
   fi
-  sha="$(sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' "$out" | head -n1)"
+  # `tr ',' '\n'` PRZED sedem: POSIX-owy `.*` jest zachłanny, więc na odpowiedzi w JEDNEJ
+  # linii wzorzec dowiązałby się do OSTATNIEGO "sha" w dokumencie (blob z `files`) zamiast
+  # do sha commita — instalator pobrałby wtedy nieistniejące archiwum. Rozbicie po przecinkach
+  # daje jedno pole w linii, więc `head -n1` wybiera pierwsze "sha" niezależnie od formatowania.
+  sha="$(tr ',' '\n' < "$out" | sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([0-9a-f]\{40\}\)".*/\1/p' | head -n1)"
   rm -f "$out"
   [ -n "$sha" ] || return 1
   printf '%s' "$sha"

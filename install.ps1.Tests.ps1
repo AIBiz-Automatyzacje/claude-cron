@@ -324,6 +324,72 @@ try {
         }
     }
 
+    # --- Test 12: Resolve-ZipSource - sha ustalone => ZIP i topdir po SHA + rewizja ---
+    # Parytet z install.test.sh (resolve_tarball_source). To kod decydujacy, JAKI kod
+    # trafia na maszyne usera: literowka w $script:ZipTopDir wywala instalacje u kazdego.
+    # Mock granicy sieci: przedefiniowanie Get-RefSha w zasiegu testu (DI jak stub download).
+    function Test-ResolveZipSourceWithSha {
+        $sha = "1234567890abcdef1234567890abcdef12345678"
+        $script:ZipUrl = ""
+        $script:ZipTopDir = ""
+        $script:InstallRevision = ""
+        $script:RepoSlug = "Owner/repo"
+        $script:RepoRef = "main"
+        function Get-RefSha { param($Slug, $Ref) return $sha }
+
+        Resolve-ZipSource | Out-Null
+
+        if ($ZipUrl -eq "https://github.com/Owner/repo/archive/$sha.zip" `
+            -and $ZipTopDir -eq "claude-cron-$sha" `
+            -and $InstallRevision -eq $sha) {
+            Test-Pass "Resolve-ZipSource: sha OK => archiwum po SHA, topdir po SHA, InstallRevision ustawione"
+        } else {
+            Test-Problem "Resolve-ZipSource (sha OK): url='$ZipUrl' topdir='$ZipTopDir' rev='$InstallRevision'"
+        }
+    }
+
+    # --- Test 13: Resolve-ZipSource - pad API => fallback po nazwie galezi, rewizja PUSTA ---
+    # Kontrakt: brak sieci / limit api.github.com nie przerywa instalacji, gubi tylko wersje.
+    function Test-ResolveZipSourceFallback {
+        $script:ZipUrl = ""
+        $script:ZipTopDir = ""
+        $script:InstallRevision = ""
+        $script:RepoSlug = "Owner/repo"
+        $script:RepoRef = "main"
+        function Get-RefSha { param($Slug, $Ref) return "" }
+
+        Resolve-ZipSource 3>$null | Out-Null
+
+        if ($ZipUrl -eq "https://github.com/Owner/repo/archive/refs/heads/main.zip" `
+            -and $ZipTopDir -eq "claude-cron-main" `
+            -and [string]::IsNullOrEmpty($InstallRevision)) {
+            Test-Pass "Resolve-ZipSource: pad Get-RefSha => ZIP po galezi, topdir po galezi, pusta rewizja"
+        } else {
+            Test-Problem "Resolve-ZipSource (pad API): url='$ZipUrl' topdir='$ZipTopDir' rev='$InstallRevision'"
+        }
+    }
+
+    # --- Test 14: jawny ZipUrl => ZERO zapytan do API, topdir domyslny po galezi ---
+    function Test-ResolveZipSourceExplicitUrl {
+        $script:ZipUrl = "https://example.test/custom.zip"
+        $script:ZipTopDir = ""
+        $script:InstallRevision = ""
+        $script:RepoSlug = "Owner/repo"
+        $script:RepoRef = "main"
+        $script:RefShaCalls = 0
+        function Get-RefSha { param($Slug, $Ref) $script:RefShaCalls++; return "" }
+
+        Resolve-ZipSource | Out-Null
+
+        if ($ZipUrl -eq "https://example.test/custom.zip" `
+            -and $ZipTopDir -eq "claude-cron-main" `
+            -and $RefShaCalls -eq 0) {
+            Test-Pass "Resolve-ZipSource: jawny ZipUrl uszanowany, API GitHuba nieodpytane"
+        } else {
+            Test-Problem "Resolve-ZipSource (override): url='$ZipUrl' topdir='$ZipTopDir' wywolan=$RefShaCalls"
+        }
+    }
+
     Write-Host "== install.ps1 - testy bootstrap/preserve =="
     Test-PreserveMovesDataAndNode
     Test-PreserveNoopWhenNoOld
@@ -339,6 +405,9 @@ try {
     Test-InstallTargetKinds
     Test-StopPulsPathBoundary
     Test-StopPulsCaseInsensitive
+    Test-ResolveZipSourceWithSha
+    Test-ResolveZipSourceFallback
+    Test-ResolveZipSourceExplicitUrl
 
     Write-Host ""
     Write-Host "Wynik: $Pass PASS / $($Pass + $Fail) total"

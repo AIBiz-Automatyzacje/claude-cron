@@ -495,6 +495,124 @@ test_stop_puls_kills_daemon_from_install_dir() {
   wait "$pid" 2>/dev/null || true
 }
 
+# === Bootstrap: rozstrzyganie źródła archiwum (JAKI kod trafia na maszynę usera) ===
+#
+# DI: podmieniamy `download` (jedyne wyjście do sieci) na stub zapisujący fixture.
+# Bez tych testów cicho psuje się dokładnie to, co decyduje o pobranym kodzie: parser SHA,
+# ścieżka fallbacku i override przez CLAUDE_CRON_TARBALL_URL.
+
+COMMIT_SHA="1234567890abcdef1234567890abcdef12345678"
+PARENT_SHA="fedcba9876543210fedcba9876543210fedcba98"
+BLOB_SHA="aaaabbbbccccddddeeeeffff0000111122223333"
+
+# Odpowiedź /repos/:slug/commits/:ref w kształcie GitHuba: sha commita NA POCZĄTKU,
+# a dalej `parents` i `files` z WŁASNYMI polami "sha" — pułapka dla zachłannego wzorca.
+write_commit_fixture() {
+  cat > "$1" <<EOF
+{
+  "sha": "$COMMIT_SHA",
+  "node_id": "C_kwDO",
+  "commit": { "message": "feat: cokolwiek" },
+  "parents": [ { "sha": "$PARENT_SHA" } ],
+  "files": [ { "sha": "$BLOB_SHA", "filename": "install.sh" } ]
+}
+EOF
+}
+
+# Czyści stan globalny bootstrapu przed każdym przypadkiem (install.sh czyta te zmienne
+# z env, więc test bez resetu widziałby wynik poprzedniego).
+reset_tarball_vars() {
+  TARBALL_URL=""
+  TARBALL_TOPDIR=""
+  INSTALL_REVISION=""
+  REPO_SLUG="Owner/repo"
+  REPO_REF="main"
+}
+
+# --- Test 21: fetch_ref_sha wyciąga sha COMMITA, nie sha z parents/files ---
+test_fetch_ref_sha_parses_commit_sha() {
+  local got
+  download() { write_commit_fixture "$2"; }
+  got="$(fetch_ref_sha "Owner/repo" "main")"
+  unset -f download
+
+  if [ "$got" = "$COMMIT_SHA" ]; then
+    pass "fetch_ref_sha: zwraca sha commita (nie parents/files)"
+  else
+    problem "fetch_ref_sha zwrócił '$got' zamiast '$COMMIT_SHA'"
+  fi
+}
+
+# --- Test 22: fetch_ref_sha na odpowiedzi w JEDNEJ linii (bez pretty-printu) ---
+test_fetch_ref_sha_handles_single_line_json() {
+  local got
+  download() {
+    printf '{"sha":"%s","parents":[{"sha":"%s"}],"files":[{"sha":"%s"}]}' \
+      "$COMMIT_SHA" "$PARENT_SHA" "$BLOB_SHA" > "$2"
+  }
+  got="$(fetch_ref_sha "Owner/repo" "main")"
+  unset -f download
+
+  if [ "$got" = "$COMMIT_SHA" ]; then
+    pass "fetch_ref_sha: kompaktowy JSON też daje sha commita (wzorzec nie zachłanny)"
+  else
+    problem "fetch_ref_sha na jednej linii zwrócił '$got' zamiast '$COMMIT_SHA'"
+  fi
+}
+
+# --- Test 23: resolve_tarball_source — sha ustalone → URL i topdir po SHA + rewizja ---
+test_resolve_tarball_source_with_sha() {
+  reset_tarball_vars
+  download() { write_commit_fixture "$2"; }
+  resolve_tarball_source > /dev/null
+  unset -f download
+
+  if [ "$TARBALL_URL" = "https://github.com/Owner/repo/archive/$COMMIT_SHA.tar.gz" ] \
+    && [ "$TARBALL_TOPDIR" = "claude-cron-$COMMIT_SHA" ] \
+    && [ "$INSTALL_REVISION" = "$COMMIT_SHA" ]; then
+    pass "resolve_tarball_source: sha OK → archiwum po SHA, topdir po SHA, INSTALL_REVISION ustawione"
+  else
+    problem "resolve_tarball_source (sha OK): url='$TARBALL_URL' topdir='$TARBALL_TOPDIR' rev='$INSTALL_REVISION'"
+  fi
+}
+
+# --- Test 24: resolve_tarball_source — pad API → fallback po gałęzi, rewizja PUSTA ---
+# Kontrakt: brak sieci/limit API nie przerywa instalacji, tylko gubi metadane wersji.
+test_resolve_tarball_source_fallback_on_api_failure() {
+  reset_tarball_vars
+  download() { return 1; }
+  resolve_tarball_source > /dev/null
+  unset -f download
+
+  if [ "$TARBALL_URL" = "https://github.com/Owner/repo/archive/refs/heads/main.tar.gz" ] \
+    && [ "$TARBALL_TOPDIR" = "claude-cron-main" ] \
+    && [ -z "$INSTALL_REVISION" ]; then
+    pass "resolve_tarball_source: pad API → URL po gałęzi, topdir po gałęzi, pusta rewizja"
+  else
+    problem "resolve_tarball_source (pad API): url='$TARBALL_URL' topdir='$TARBALL_TOPDIR' rev='$INSTALL_REVISION'"
+  fi
+}
+
+# --- Test 25: jawny TARBALL_URL → ZERO zapytań do API, topdir domyślny po gałęzi ---
+test_resolve_tarball_source_respects_explicit_url() {
+  local api_calls="$SANDBOX/api-calls"
+  reset_tarball_vars
+  TARBALL_URL="https://example.test/custom.tar.gz"
+  : > "$api_calls"
+  download() { echo "$1" >> "$api_calls"; return 1; }
+  resolve_tarball_source > /dev/null
+  unset -f download
+
+  if [ "$TARBALL_URL" = "https://example.test/custom.tar.gz" ] \
+    && [ "$TARBALL_TOPDIR" = "claude-cron-main" ] \
+    && [ ! -s "$api_calls" ]; then
+    pass "resolve_tarball_source: jawny URL uszanowany, API GitHuba nieodpytane"
+  else
+    problem "resolve_tarball_source (override): url='$TARBALL_URL' topdir='$TARBALL_TOPDIR' calls='$(cat "$api_calls")'"
+  fi
+  reset_tarball_vars
+}
+
 echo "== install.sh — testy bootstrap/preserve =="
 test_preserve_moves_data_and_node
 test_preserve_noop_when_no_old
@@ -519,6 +637,11 @@ test_classify_install_target_canonicalization_keeps_normal_dirs
 test_find_puls_pids_matches_only_install_dir
 test_stop_puls_ignores_foreign_process
 test_stop_puls_kills_daemon_from_install_dir
+test_fetch_ref_sha_parses_commit_sha
+test_fetch_ref_sha_handles_single_line_json
+test_resolve_tarball_source_with_sha
+test_resolve_tarball_source_fallback_on_api_failure
+test_resolve_tarball_source_respects_explicit_url
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

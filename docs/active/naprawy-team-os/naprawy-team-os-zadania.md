@@ -24,9 +24,9 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 - [x] Test: plik wersji istnieje i poprawny → `/api/status` zwraca rewizję i datę
 - [x] Test: plik nie istnieje (stara instalacja) → `unknown`, bez rzucania wyjątku
 - [x] Test: plik uszkodzony / niepełny JSON → `unknown`, bez rzucania wyjątku
-- [ ] Weryfikacja: `node --test lib/version.test.js` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości (baseline 155/155)
-- [ ] Weryfikacja: `curl -s localhost:7777/api/status` zwraca niepuste pole wersji
+- [x] Weryfikacja: `node --test lib/version.test.js` przechodzi
+- [x] Weryfikacja: `npm test` przechodzi w całości (baseline 155/155) — 837/837 pass
+- [ ] Weryfikacja: `curl -s localhost:7777/api/status` zwraca niepuste pole wersji (SKIP — daemon biegnie ze starym kodem, wymaga restartu; patrz Operator checklist faza 1)
 
 **Operator checklist:**
 - [ ] Instalacja zipowa na Windows raportuje tę samą rewizję co pobrany zip
@@ -50,10 +50,10 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 - [x] Test: `addMember('cave')` przy istniejącym `Cave` → `InboxDbError`
 - [x] Test: migracja na bazie z `Cave` i `cave` → czytelny błąd z obiema nazwami, baza nietknięta
 - [x] Test: migracja idempotentna — drugi `migrate()` nie przepisuje tabeli
-- [ ] Weryfikacja: `node --test lib/inbox-db.test.js` przechodzi
-- [ ] Weryfikacja: `node --test lib/inbox-api.test.js` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości
-- [ ] Weryfikacja: `grep -n "COLLATE NOCASE" lib/inbox-db.js` zwraca trafienie w definicji `members`
+- [x] Weryfikacja: `node --test lib/inbox-db.test.js` przechodzi
+- [x] Weryfikacja: `node --test lib/inbox-api.test.js` przechodzi
+- [x] Weryfikacja: `npm test` przechodzi w całości — 837/837 pass
+- [x] Weryfikacja: `grep -n "COLLATE NOCASE" lib/inbox-db.js` zwraca trafienie w definicji `members` (`lib/inbox-db.js:101`)
 
 **Operator checklist:**
 - [ ] Kopia zapasowa `data/inbox.db` z VPS przed deployem
@@ -72,12 +72,56 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 - [x] Test: `task` + `reply` od adresata → **jest** w `delegated` (zadania zamyka checkbox)
 - [x] Test: `query` bez odpowiedzi → jest w `delegated`
 - [x] Test: wątek z dopowiedzeniem nadawcy pozostaje znajdowalny przez `findOriginal` (regresja `reply.mjs`)
-- [ ] Weryfikacja: `node --test lib/inbox-db.test.js` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości
+- [x] Weryfikacja: `node --test lib/inbox-db.test.js` przechodzi
+- [x] Weryfikacja: `npm test` przechodzi w całości — 837/837 pass
 
 **Operator checklist:**
 - [ ] **Retest T6** wg szablonu, z wariantem kontrolnym „własne dopowiedzenie nie zamyka"
 - [ ] Dopisanie do `STATUS.md` zdania o świadomym długu widok↔status
+
+---
+
+## Do poprawy po review fazy 1
+
+> Raport: [review-faza-1.md](review-faza-1.md) · severity gate: **ZASTRZEŻENIA** (0×P1, 5×P2, 13×P3)
+
+- [x] 🟠 [P2] **lib/inbox-db.js:120** — Fail-fast migracji NOCASE blokuje własne lekarstwo: `rebuildMembersWithNocase` rzuca z wnętrza `migrate()`, które biegnie w `getInboxDb()` przy KAŻDEJ operacji. Na hubie z parą „Cave"+"cave" każde żądanie `/inbox/v1/:token/*` → 500 (martwa cała skrzynka, nie tylko `send`), a instruowany w komunikacie `revokeMember`/`listMembers`/`/api/inbox/members` też idzie przez `getInboxDb()` → naprawa przez aplikację niemożliwa. Albo otwieraj bazę w trybie legacy i odrzucaj tylko `sendMessage`, albo daj komunikat wykonywalny poza aplikacją (dokładny `sqlite3 data/inbox.db "UPDATE members ..."`). Testy tego nie łapią — wołają `migrate(db)` na własnym połączeniu, z pominięciem `getInboxDb()`.
+- [x] 🟠 [P2] **scripts/install-vps.sh:1080** — Wersja instalacji nigdy nie powstaje na VPS/hubie: `data/version.json` pisze tylko `persistInstallVersion()` w `setup.mjs`, a `install-vps.sh` go nie uruchamia (`git clone` + `npm install` + start serwisu). `/api/status` na hubie zawsze `{revision:'unknown', source:'unknown'}` → rozjazd z R10 i podkopanie U8/U11. Napraw: po klonie/aktualizacji repo (jako user `claude`, PRZED restartem serwisu) zapisz plik przez `lib/version.writeVersionFile` z `git rev-parse --short HEAD`, albo dołóż w `lib/version.js` fallback na `git rev-parse` przy braku pliku.
+- [x] 🟠 [P2] **server.runs.test.js:90** — Szew `server.js`↔`lib/version` nieprzetestowany: scenariusz U1 („`/api/status` zwraca rewizję i datę") pokryty wyłącznie unit-testami `lib/version.test.js`, nikt nie asertuje pola `version` w odpowiedzi endpointu. Usunięcie/przemianowanie pola przechodzi cały `npm test` na zielono. Dołóż w `server.runs.test.js` (jest tam żywy proces serwera i helper `getStatus()`): `assert.ok(status.version && typeof status.version.revision === 'string')` + `assert.ok('installed_at' in status.version)`; wariant bez pliku → `revision === 'unknown'`.
+- [x] 🟠 [P2] **install.sh:335** — Nowa logika bootstrapu (`resolve_tarball_source`, `fetch_ref_sha`) bez żadnego testu, mimo że harness `install.test.sh` ją obsługuje (`CLAUDE_CRON_LIB_ONLY=1` + DI przez podmianę `download`). To kod decydujący, JAKI kod trafia na maszynę użytkownika. Dopisz trzy przypadki: sha OK → URL i topdir po SHA + `INSTALL_REVISION`; `fetch_ref_sha` zwraca 1 → URL po gałęzi i pusty `INSTALL_REVISION`; jawny `TARBALL_URL` → brak zapytania do API.
+- [x] 🟠 [P2] **install.test.sh** — `grep -n 'fetch_ref_sha\|resolve_tarball\|REPO_SLUG' install.test.sh` nie zwraca nic: nowy kontrakt zmiennych `TARBALL_URL`/`TARBALL_TOPDIR` (domyślnie PUSTYCH) jest niepokryty. To bezpośrednia przyczyna, dla której defekt zachłannego `sed` przeszedł przez fazę — test `fetch_ref_sha` na fixture odpowiedzi API (z `parents` i `files`) złapałby go natychmiast. Analogicznie brak przypadku w `install.ps1.Tests.ps1` dla `Resolve-ZipSource` (w tym fallback na nazwę gałęzi przy padzie `Get-RefSha`).
+
+<details>
+<summary>🟡 P3 (opcjonalne, 13 pozycji — pełne opisy w raporcie)</summary>
+
+- [ ] 🟡 [P3] **lib/inbox-db.js:202** — `resolveRecipient` składa Unicode (`toLowerCase()`), a `COLLATE NOCASE` tylko ASCII: para „Michał"/"MICHAŁ" przechodzi UNIQUE i czyni obie osoby TRWALE nieosiągalnymi (`ambiguous_recipient` → 400). Ujednolicić fold albo dołożyć guard w `addMember`.
+- [ ] 🟡 [P3] **lib/inbox-db.js:111** — `needsMembersNocaseRebuild` matchuje `/COLLATE\s+NOCASE/i` na CAŁYM DDL, nie na kolumnie `name`; NOCASE przy innej kolumnie cicho wyłączy migrację. Zawęzić wzorzec + test.
+- [ ] 🟡 [P3] **lib/inbox-db.js:84** — zapytanie `delegated` filtruje po `i.from_user` bez indeksu (pełny skan + korelowany `NOT EXISTS`), `pull` co 1 min, `inbox` bez retencji. Dołożyć `CREATE INDEX IF NOT EXISTS idx_inbox_from_type ON inbox(from_user, type);`.
+- [ ] 🟡 [P3] **lib/inbox-db.js:52** — pad `migrate`/smoke-testu w `getInboxDb()` zostawia niezamknięte `DatabaseSync` bez referencji; `/api/status` woła `listMembers()` co 3 s → uchwyty do bazy i WAL narastają. Owinąć w `try/catch` z `conn.close()` przed przypisaniem.
+- [ ] 🟡 [P3] **lib/inbox-db.js:388** — brak trimowania nazwy w `addMember`/`resolveRecipient`: `"kamil "` wchodzi jako osobny członek, a `send` do `"kamil"` dostaje 400 z listą, gdzie obie nazwy wyglądają identycznie.
+- [ ] 🟡 [P3] **install.sh:318** — `fetch_ref_sha` / `Get-RefSha` bez timeoutów (`curl -fsSL` bez `--max-time`, `Invoke-RestMethod` bez `-TimeoutSec`): zdławione API wiesza instalator zamiast wejść w zaplanowany fallback.
+- [ ] 🟡 [P3] **install.sh:340** — fallback składa topdir jako `claude-cron-$REPO_REF`, a GitHub zamienia `/` na `-`; ref ze slashem (`feature/naprawy-team-os`) wywraca instalację. Sanityzować ref w obu instalatorach.
+- [ ] 🟡 [P3] **lib/version.js:66** — nadmiarowe API: alias `getInstallVersion()`, nieużywane eksporty `VERSION_FILE`/`unknownVersion`, nieużywany parametr `installedAt`. Wyciąć.
+- [ ] 🟡 [P3] **setup.mjs:1222** — martwe `envSource || 'git'` / `envSource || 'unknown'` (oba instalatory eksportują SOURCE wyłącznie razem z REVISION); przy ręcznie ustawionym samym SOURCE potrafi skłamać. Zamienić na literały.
+- [ ] 🟡 [P3] **setup.mjs:1247** — `readGitRevision` nie sprawdza, czy REPO_DIR jest korzeniem repo: instalacja wewnątrz cudzego repo raportuje `source:'git'` z obcą rewizją (gorsze niż `unknown`). Porównać `rev-parse --show-toplevel` przez `realpathSync`.
+- [ ] 🟡 [P3] **install.ps1.Tests.ps1:1** — zero testów Pester dla `Get-RefSha`/`Resolve-ZipSource`/`Invoke-Setup`; literówka w `$script:ZipTopDir` wywala instalację u KAŻDEGO usera Windows przy zielonym `npm test`.
+- [ ] 🟡 [P3] **lib/inbox-api.test.js:247** — gałąź `ambiguous_recipient` bez testu; po migracji NOCASE nieosiągalna przez prawdziwą bazę → test ze stubem `inboxDb` przez deps (400 + `error:'unknown_recipient'` + lista członków).
+
+</details>
+
+---
+
+## Operator checklist faza 1
+
+> Warunki środowiskowe niewykonalne headless — **nie są zadaniami do fix** i nie liczą się do ukończenia fazy.
+
+- [ ] Operator: kontrola żywej bazy huba pod kątem nazw różniących się tylko wielkością liter — migracja `members` na COLLATE NOCASE odpala się przy pierwszym otwarciu bazy i przy kolizji robi fail-fast, po którym hub nie obsłuży ŻADNEGO żądania skrzynki — Operator action: na VPS wykonaj `sqlite3 ~/claude-cron/data/inbox.db "SELECT lower(name), count(*) FROM members GROUP BY 1 HAVING count(*)>1;"` **PRZED** deployem/restartem daemona; przy trafieniu rozstrzygnij duplikaty (`revokeMember` na starym kodzie albo `UPDATE members` na kopii) i dopiero wtedy deployuj.
+- [ ] Operator: zapytanie kontrolne o wiersze `inbox` z `to_user` spoza `members` (rekordy sprzed walidacji adresata pozostają niedostarczalne, backfillu świadomie nie ma) — Operator action: `sqlite3 ~/claude-cron/data/inbox.db "SELECT id, from_user, to_user, type, status FROM inbox WHERE to_user NOT IN (SELECT name FROM members);"`, wynik przenieś do `STATUS.md` jako znany dług.
+- [ ] Operator: kopia zapasowa `data/inbox.db` z VPS i przetestowanie migracji na tej kopii — Operator action: `scp` bazy na maszynę lokalną, `node -e "require('./lib/inbox-db').getInboxDb()"` z `INBOX_DB_PATH` wskazującym kopię, sprawdź brak wyjątku i obecność `COLLATE NOCASE` w `sqlite3 kopia.db ".schema members"`.
+- [ ] Operator: restart daemona na VPS po deployu — Operator action: `sudo systemctl restart claude-cron` (jako admin), potem `curl -s localhost:7777/api/status` na VPS i weryfikacja, że serwis wstał.
+- [ ] Operator: `curl -s localhost:7777/api/status` zwraca niepuste pole wersji (U1) — potwierdzone w tej sesji, że lokalny daemon biegnie ze STARYM kodem (odpowiedź nie zawiera pola `version`); dodatkowo `data/version.json` powstaje dopiero przy najbliższym `setup.mjs`, więc świeży odczyt da `unknown` dopóki setup nie pobiegnie — Operator action: zrestartuj lokalny daemon (`launchctl kickstart -k gui/$(id -u)/com.claude-cron.daemon`), następnie `curl -s localhost:7777/api/status | python3 -m json.tool | grep -A3 version`; pełną rewizję zobaczysz dopiero po re-instalacji przez `setup.mjs`.
+- [ ] Operator: realny przebieg bootstrapu `curl|bash` / `irm|iex` — jedyny dowód, że archiwum po SHA faktycznie się pobiera i rozpakowuje do `claude-cron-<40-hex>` oraz że `setup.mjs` zapisał `data/version.json` (wymaga sieci, API GitHuba i świeżej maszyny) — Operator action: wykonaj **PO** naprawie P2 z `install.sh` (inaczej zweryfikujesz błędny SHA); na czystym katalogu `INSTALL_DIR=/tmp/puls-test curl -fsSL <raw-url-po-SHA> | bash`, potem `cat /tmp/puls-test/data/version.json` i porównaj z `git rev-parse --short <ref>`.
+- [ ] Operator: `[Manual]` instalacja zipowa na Windows raportuje tę samą rewizję co pobrany zip — Operator action: na CAVE odpal `irm <url> | iex`, po instalacji porównaj `Get-Content data\version.json` z nazwą rozpakowanego katalogu (`claude-cron-<sha>`) oraz z wynikiem `Get-RefSha`; wymaga niezablokowanego limitu `api.github.com` (60/h dla anonimowych).
 
 ---
 

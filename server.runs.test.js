@@ -149,6 +149,27 @@ after(() => {
   if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+// Szew server.js ↔ lib/version: testy jednostkowe obu stron przechodzą, gdy pole `version`
+// zniknie z odpowiedzi endpointu (learned pattern: „testy czystych funkcji obu stron
+// przechodzą przy złamanym zachowaniu systemowym"). Tu asertujemy PUBLICZNY kontrakt
+// /api/status na żywym procesie serwera.
+test('GET /api/status: pole version niesie rewizję i datę instalacji z lib/version', async () => {
+  const status = await getStatus();
+
+  assert.ok(status.version, 'brak pola version w /api/status');
+  assert.equal(typeof status.version.revision, 'string');
+  assert.ok('installed_at' in status.version, 'brak klucza installed_at w version');
+  assert.equal(typeof status.version.source, 'string');
+
+  // Serwer musi oddawać DOKŁADNIE to, co wylicza lib/version (ten sam DATA_DIR — spawnujemy
+  // serwer z tego repo). Bez pliku wersji kontrakt to jawne 'unknown', nie brak pola.
+  const expected = require('./lib/version').getInstallVersion();
+  assert.deepEqual(status.version, expected);
+  if (!fs.existsSync(require('./lib/version').VERSION_FILE)) {
+    assert.equal(status.version.revision, 'unknown');
+  }
+});
+
 test('GET /api/status: current_runs to tablica obu aktywnych runów, current_run = pierwszy', async (t) => {
   t.after(killAllRunning);
 

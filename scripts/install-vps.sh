@@ -1082,6 +1082,29 @@ clone_repo() {
   ok "Repo: $INSTALL_DIR"
 }
 
+# Wersja zainstalowanego kodu dla /api/status (data/version.json). Na VPS kod przychodzi
+# z gita, a setup.mjs — jedyny dotąd autor tego pliku — na tej ścieżce NIE biegnie
+# (clone + npm install + start serwisu). Bez tego kroku hub, czyli jedyna maszyna 24/7,
+# raportował wersję 'unknown' mimo znanej rewizji. Zapis jako $CLAUDE_USER (właściciel
+# data/) i PRZED utworzeniem/restartem serwisu. Pad = warn, nigdy fail: metadane wersji
+# nie są warte przerwania zweryfikowanej instalacji.
+write_install_version() {
+  local rev quoted_dir
+  quoted_dir="$(printf '%q' "$INSTALL_DIR")"
+  rev="$(run_as_claude "cd $quoted_dir && git rev-parse --short HEAD" 2>/dev/null | tr -d '[:space:]')" || rev=""
+  if [ -z "$rev" ]; then
+    warn "Nie ustaliłem rewizji gita w $INSTALL_DIR — /api/status pokaże wersję 'unknown'."
+    return 0
+  fi
+  # Zapis przez lib/version.writeVersionFile, nie ręcznym printf — kształt pliku ma JEDNO
+  # źródło prawdy po stronie aplikacji (rewizja przez env, żeby nie wstrzykiwać jej do kodu).
+  if run_as_claude "cd $quoted_dir && CLAUDE_CRON_INSTALL_REVISION=$(printf '%q' "$rev") node -e 'require(\"./lib/version\").writeVersionFile({ revision: process.env.CLAUDE_CRON_INSTALL_REVISION, source: \"git\" })'"; then
+    ok "Wersja instalacji: $rev"
+  else
+    warn "Nie zapisałem data/version.json — /api/status pokaże wersję 'unknown'."
+  fi
+}
+
 # Zależności npm aplikacji Puls (po clone) — celowo BEZ prefixu install_*:
 # ten prefix jest zarezerwowany dla narzędzi FAZY 2 (przed login_block),
 # a test sekwencji w harnessie pilnuje tego po nazwach.
@@ -1091,6 +1114,7 @@ setup_puls_dependencies() {
   mkdir -p "$INSTALL_DIR/data"
   chown "$CLAUDE_USER:$CLAUDE_USER" "$INSTALL_DIR/data"
   ok "Zależności zainstalowane"
+  write_install_version
 }
 
 # ============ FAZA 1: BLOK 4 PYTAŃ ============
@@ -1811,7 +1835,21 @@ if [ "\$MAJOR" -ge "\$MAX_NODE_MAJOR" ]; then
   exit 1
 fi
 
+# Odświeżenie data/version.json po nocnym `git pull` — bez tego /api/status pokazywałby
+# rewizję z dnia instalacji. Katalog instalacji wyprowadzamy z położenia TEGO skryptu
+# (\$INSTALL_DIR/scripts/cron-node-guard.sh), więc guard nie zależy od zmiennej instalatora.
+# Każdy pad (brak gita, brak repo) jest cichy: to metadane, nie warunek restartu.
+refresh_install_version() {
+  local dir rev
+  dir="\$(cd "\$(dirname "\$0")/.." 2>/dev/null && pwd)" || return 0
+  rev="\$(cd "\$dir" && git rev-parse --short HEAD 2>/dev/null)" || return 0
+  [ -n "\$rev" ] || return 0
+  (cd "\$dir" && CLAUDE_CRON_INSTALL_REVISION="\$rev" node -e 'require("./lib/version").writeVersionFile({ revision: process.env.CLAUDE_CRON_INSTALL_REVISION, source: "git" })') >/dev/null 2>&1 \
+    || log_warn "Nie zapisałem data/version.json po auto-update — /api/status pokaże poprzednią rewizję."
+}
+
 if [ "\$MAJOR" -gt "\$MIN_NODE_MAJOR" ] || { [ "\$MAJOR" -eq "\$MIN_NODE_MAJOR" ] && [ "\$MINOR" -ge "\$MIN_NODE_MINOR" ]; }; then
+  refresh_install_version
   exit 0
 fi
 
