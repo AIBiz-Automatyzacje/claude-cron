@@ -8,7 +8,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { main, parseArgs } from './close.mjs';
+import { main, parseArgs, MISSING_WORKSPACE_MESSAGE } from './close.mjs';
 
 const THREAD = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const MSG_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -70,7 +70,9 @@ test('close na otwartym wątku: hub dostaje done ORAZ nitka trafia do pliku mies
 
   const out = await main({ client: hub, argv: ['node', 'close.mjs', '--thread-id', THREAD] });
 
-  assert.deepEqual(hub.calls.done, [{ id: MSG_ID, action: 'Zapoznane' }]);
+  // `Zrobione`, nie `Zapoznane`: task zdelegowany przez drugą osobę domykany bez reply
+  // znikał nadawcy z widoku „Delegowane" (filtr `status != 'done'`) bez ŻADNEGO sygnału.
+  assert.deepEqual(hub.calls.done, [{ id: MSG_ID, action: 'Zrobione' }]);
   assert.equal(out.closed, 1);
   assert.equal(out.archived, true);
 
@@ -136,6 +138,94 @@ test('pad zapisu archiwum: błąd propaguje się z main, nie ciche powodzenie (e
 
   await fs.rm(tmp, { recursive: true, force: true });
   await fs.rm(blocker, { recursive: true, force: true });
+});
+
+test('close na query: akcja Zapoznane — nikt nie czeka na potwierdzenie wykonania', async () => {
+  const tmp = await withEnv();
+  const hub = fakeHub([row({ type: 'query', title: 'Czy live idzie w czwartek?' })]);
+
+  await main({ client: hub, argv: ['node', 'close.mjs', '--thread-id', THREAD] });
+
+  assert.deepEqual(hub.calls.done, [{ id: MSG_ID, action: 'Zapoznane' }]);
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('wątek z DWIEMA moimi wiadomościami: done per wiadomość, archiwum RAZ na wątek', async () => {
+  const tmp = await withEnv();
+  const SECOND_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const hub = fakeHub([
+    row(),
+    row({ id: SECOND_ID, type: 'reply', title: 'Baner na live sierpniowy', content: 'Dorzucam wymiary.' }),
+  ]);
+
+  const out = await main({ client: hub, argv: ['node', 'close.mjs', '--thread-id', THREAD] });
+
+  assert.equal(hub.calls.done.length, 2);
+  assert.deepEqual(
+    hub.calls.done.map((c) => c.id).sort(),
+    [MSG_ID, SECOND_ID].sort()
+  );
+  assert.equal(out.closed, 2);
+
+  // Regresja „appendToArchive w pętli" dołożyłaby całą nitkę N razy — tytuł wątku
+  // ma wystąpić DOKŁADNIE raz, mimo dwóch domkniętych wiadomości.
+  const files = await fs.readdir(process.env.INBOX_ARCHIVE_DIR);
+  assert.equal(files.length, 1);
+  const content = await fs.readFile(path.join(process.env.INBOX_ARCHIVE_DIR, files[0]), 'utf8');
+  assert.equal(content.split('**Zadanie:** Baner na live sierpniowy').length - 1, 1);
+  // Obie wiadomości nitki są w tym jednym wpisie.
+  assert.ok(content.includes('Dorzucam wymiary.'));
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('pad huba PO zapisie archiwum: nitka jest już w pliku miesiąca (odwracalność)', async () => {
+  const tmp = await withEnv();
+  const hub = fakeHub([row()]);
+  hub.done = async () => { throw new Error('hub 503'); };
+
+  await assert.rejects(
+    () => main({ client: hub, argv: ['node', 'close.mjs', '--thread-id', THREAD] }),
+    /hub 503/
+  );
+
+  // Kolejność „archiwum przed hubem" znaczy, że pad domknięcia zostawia wątek
+  // W SKRZYNCE i JEDNOCZEŚNIE w archiwum — powtórka `close` jest bezpieczna.
+  const files = await fs.readdir(process.env.INBOX_ARCHIVE_DIR);
+  assert.equal(files.length, 1);
+  const content = await fs.readFile(path.join(process.env.INBOX_ARCHIVE_DIR, files[0]), 'utf8');
+  assert.ok(content.includes('Baner na live sierpniowy'));
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('brak CLAUDE_CRON_WORKSPACE: komunikat kieruje do instalatora, nie do .env w vaulcie', async () => {
+  const snapshot = {
+    INBOX_ENV_FILE: process.env.INBOX_ENV_FILE,
+    INBOX_TODO_PATH: process.env.INBOX_TODO_PATH,
+    INBOX_SKRZYNKA_PATH: process.env.INBOX_SKRZYNKA_PATH,
+    INBOX_ARCHIVE_DIR: process.env.INBOX_ARCHIVE_DIR,
+    CLAUDE_CRON_WORKSPACE: process.env.CLAUDE_CRON_WORKSPACE,
+  };
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-close-nows-'));
+  process.env.INBOX_ENV_FILE = path.join(tmp, 'brak-inbox.env');
+  for (const key of ['INBOX_TODO_PATH', 'INBOX_SKRZYNKA_PATH', 'INBOX_ARCHIVE_DIR', 'CLAUDE_CRON_WORKSPACE']) {
+    delete process.env[key];
+  }
+
+  await assert.rejects(
+    () => main({ client: fakeHub([row()]), argv: ['node', 'close.mjs', '--thread-id', THREAD] }),
+    (e) => e.message === MISSING_WORKSPACE_MESSAGE
+  );
+  assert.match(MISSING_WORKSPACE_MESSAGE, /instalator/i);
+  assert.doesNotMatch(MISSING_WORKSPACE_MESSAGE, /\.env/);
+
+  for (const [k, v] of Object.entries(snapshot)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  await fs.rm(tmp, { recursive: true, force: true });
 });
 
 test('brak --thread-id: rzuca instrukcję użycia zamiast milczeć (error case)', async () => {

@@ -1105,6 +1105,23 @@ write_install_version() {
   fi
 }
 
+# Wskaźnik katalogu instalacji (~/.claude-cron-home) — ten sam dług co data/version.json:
+# oba kontrakty PULS_HOME (env w settings.json vaulta i ten wskaźnik) pisze WYŁĄCZNIE
+# setup.mjs, a ścieżka VPS go nie uruchamia. Bez tego kroku na maszynie 24/7 (rola „agent")
+# żaden proces nie znajdzie katalogu instalacji, więc komendy skilla `deleguj`
+# (node "$PULS_HOME/scripts/inbox/close.mjs") trafiają w guard „brak PULS_HOME".
+# Zapis jako $CLAUDE_USER — to w JEGO $HOME szukają wskaźnika joby i sesje Claude Code
+# na tej maszynie (tam też leży ~/.claude-cron-oauth-token). Format: JEDNA linia ze
+# ścieżką (kontrakt czytelnika: pierwsza linia = katalog instalacji).
+# Pad = warn, nigdy fail: wskaźnik to wygoda, nie warunek działania schedulera.
+write_puls_home_pointer() {
+  if run_as_claude "printf '%s\n' $(printf '%q' "$INSTALL_DIR") > ~/.claude-cron-home"; then
+    ok "Wskaźnik instalacji: /home/$CLAUDE_USER/.claude-cron-home → $INSTALL_DIR"
+  else
+    warn "Nie zapisałem wskaźnika ~/.claude-cron-home — skille w vaulcie mogą nie znaleźć konfiguracji skrzynki (PULS_HOME)."
+  fi
+}
+
 # Zależności npm aplikacji Puls (po clone) — celowo BEZ prefixu install_*:
 # ten prefix jest zarezerwowany dla narzędzi FAZY 2 (przed login_block),
 # a test sekwencji w harnessie pilnuje tego po nazwach.
@@ -1115,6 +1132,7 @@ setup_puls_dependencies() {
   chown "$CLAUDE_USER:$CLAUDE_USER" "$INSTALL_DIR/data"
   ok "Zależności zainstalowane"
   write_install_version
+  write_puls_home_pointer
 }
 
 # ============ FAZA 1: BLOK 4 PYTAŃ ============

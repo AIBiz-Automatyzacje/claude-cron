@@ -142,9 +142,9 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 - [x] Test: wskaźnik zapisany z niedomyślnym katalogiem instalacji
 - [x] Test: loader w vaulcie — brak `PULS_HOME`, obecny wskaźnik → sekret znaleziony
 - [x] Test: loader — brak obu → komunikat **bez** sugestii zapisu do `.env` vaulta
-- [ ] Weryfikacja: `node --test setup.test.mjs` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości
-- [ ] Weryfikacja: `grep -rn "\.env" <vault>/.claude/skills/deleguj/scripts/env.mjs` — brak komunikatu namawiającego do zapisu sekretu w vaulcie
+- [x] Weryfikacja: `node --test setup.test.mjs` przechodzi — 124/124 pass
+- [x] Weryfikacja: `npm test` przechodzi w całości — 854/854 pass
+- [x] Weryfikacja: `grep -rn "\.env" <vault>/.claude/skills/deleguj/scripts/env.mjs` — brak komunikatu namawiającego do zapisu sekretu w vaulcie
 
 ---
 
@@ -160,14 +160,41 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 - [x] Test: `close` powtórzony → `closed: 0`, **archiwum bez drugiego wpisu**
 - [x] Test: `close` na wątku bez wiadomości do mnie → czytelna nota, zero zapisu
 - [x] Test: pad zapisu archiwum → błąd widoczny w wyjściu, nie ciche `exit 0`
-- [ ] Weryfikacja: `node --test scripts/inbox/close.test.mjs` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości
-- [ ] Weryfikacja: `grep -n "export.*function appendToArchive" scripts/inbox/inbox-push.mjs` zwraca trafienie
+- [x] Weryfikacja: `node --test scripts/inbox/close.test.mjs` przechodzi — 6/6 pass
+- [x] Weryfikacja: `npm test` przechodzi w całości — 854/854 pass
+- [x] Weryfikacja: `grep -n "export.*function appendToArchive" scripts/inbox/inbox-push.mjs` zwraca trafienie (`inbox-push.mjs:97`)
 
 **Operator checklist:**
 - [ ] **Retest T8** wg szablonu — z warunkiem 3 (nitka w archiwum)
 - [ ] Usunięcie kopii `close.mjs` z vaulta po zielonym T8
 - [ ] Zdjęcie ostrzeżenia „domykać wyłącznie checkboxami" ze `STATUS.md`
+
+---
+
+## Do poprawy po review fazy 2
+
+- [x] 🟠 [P2] **scripts/inbox/close.mjs:69** — `close` domyka KAŻDĄ nie-`done` wiadomość do mnie akcją `Zapoznane`, w tym `task` zdelegowany przez drugą osobę; `markDone` dla `Zapoznane` robi `UPDATE inbox SET status='done'` bez reply (`lib/inbox-db.js:365`), a widok „Delegowane" nadawcy filtruje `i.status != 'done'` (`lib/inbox-db.js:301-318`) → zadanie znika z listy delegującego bez wiadomości zwrotnej (komentarz `close.mjs:11` twierdzi odwrotnie). Akcja: dla `type === 'task'` użyć akcji `Zrobione` (albo odmówić domknięcia taska komendą `close`) + test z atrapą huba odwzorowującą `delegated`.
+- [x] 🟠 [P2] **scripts/inbox/close.mjs:79** — kolejność „najpierw domknij w hubie, potem zapisz archiwum" czyni pad zapisu nieodwracalnym: pętla `client.done` (`:68-72`) przechodzi, `appendToArchive` (`:79`) rzuca → wątek zniknął ze Skrzynki, archiwum puste, a ponowny `close` leci ścieżką `mine.length === 0` i zwraca `{closed:0, archived:false}`. Test `close.test.mjs:429` utrwala tę stratę jako poprawną. Akcja: zbuduj snapshot nitki z `threadRows` (`pull()` już je zwraca) i zapisz archiwum przed pętlą albo w `catch` wokół zapisu; znika też N+1 round-tripów z powtarzanym payloadem `thread`.
+- [x] 🟠 [P2] **scripts/inbox/close.mjs:243** — nowa ścieżka `close` woła repo-owy `env-loader.loadEnv()`, który twardo wymaga `CLAUDE_CRON_WORKSPACE` (`requireWorkspace`), a `persistPulsHome()` wpisuje do `settings.json` wyłącznie `PULS_HOME` (`setup.mjs:580-602`); guard w `SKILL.md:57` też sprawdza tylko `PULS_HOME`. Proces bez zmiennej z RC przechodzi guard i wywala się komunikatem „Ustaw INBOX_TODO_PATH w .env" — tą samą sugestią, którą U4 celowo usunął. Akcja: mergeować też `CLAUDE_CRON_WORKSPACE`, albo wyprowadzić `INBOX_ARCHIVE_DIR` bez `requireWorkspace` z własnym komunikatem.
+- [x] 🟠 [P2] **setup.mjs:1333** — `persistPulsHome()` woła `registerPulsHomeEnv()` bez try/catch, więc uszkodzony `{workspace}/.claude/settings.json` ubija CAŁY setup (także u usera, który autostartu nie chce), i to PRZED `writePulsHomePointer` — user traci oba mechanizmy lokalizacji instalacji. Kod przeczy własnemu komentarzowi („Pad zapisu = warn, nigdy przerwanie setupu"). Akcja: najpierw `writePulsHomePointer`, potem `registerPulsHomeEnv` w try/catch → `[warn]`.
+- [x] 🟠 [P2] **scripts/install-vps.sh:1086** — oba kontrakty `PULS_HOME` (`env.PULS_HOME` w `settings.json` + wskaźnik `~/.claude-cron-home`) pisze wyłącznie `setup.mjs`, którego ścieżka VPS nie uruchamia; na maszynie z rolą `agent` żaden wskaźnik nie powstaje, więc `node "$PULS_HOME/scripts/inbox/close.mjs"` trafia w guard „brak PULS_HOME" (R4 spełnione tylko na laptopie). Akcja: w finale `install-vps.sh` (obok `data/inbox.env` i roli, jako user `claude`) zapisać wskaźnik `~/.claude-cron-home`.
+- [x] 🟠 [P2] **scripts/inbox/close.test.mjs:372** — brak testu boundary „wątek z WIELOMA moimi wiadomościami" (wszystkie case'y używają `fakeHub([row()])`). Nietestowane: (a) `done` dla każdej mojej wiadomości i sumowanie `closed`, (b) „Archiwum RAZ na wątek" (komentarz `close.mjs:271`) — regresja przenosząca `appendToArchive` do pętli przechodzi cały suite. Akcja: case z dwoma wierszami `to_user:'kacper'` w jednym `thread_id` → `hub.calls.done.length === 2`, `out.closed === 2`, tytuł wątku w pliku miesiąca dokładnie raz.
+- [x] 🟠 [P2] **`<vault>/.claude/skills/deleguj/scripts/env.mjs`** — loader sekretu skilla `deleguj` wraz z 4 testami (`env.test.mjs`) został zmieniony i pozostawiony POZA repo, więc `npm test` go nie obejmuje, a to on rozstrzyga skąd wczytywany jest `INBOX_TOKEN`; nie da się też zweryfikować, czy sprawdza ISTNIENIE `$PULS_HOME/data/inbox.env` przed zaakceptowaniem wartości (`settings.json` bywa synchronizowany z obcą ścieżką). Akcja: przenieść loader do `scripts/inbox/` obok `env-loader.mjs`, a skill w vaulcie niech importuje go przez `$PULS_HOME` — tak jak robi to teraz z `close.mjs`.
+- [ ] 🟡 [P3] **scripts/inbox/close.mjs:41** — `--thread-id` bez walidacji kształtu (`--thread-id --foo` da `'--foo'`, literówka w UUID daje mylącą notę „Brak otwartych wiadomości do mnie"); reszta systemu waliduje (`inbox-push.mjs:45`, hub `MAX_ID_LEN`). Akcja: guard `/^[a-f0-9-]{36}$/` + jeden test.
+- [ ] 🟡 [P3] **scripts/inbox/close.mjs:95** — defensywa bez scenariusza: `catch` w `isDirectRun` próbuje `pathToFileURL` po padzie `realpathSync` (bliźniaczy `migrate-pg-to-hub.mjs:170` ma `return false`), a `threadRows = []` (`:47`) jest zbędne — `pull()` weryfikuje `v:1` i zawsze zwraca `threadRows`. Akcja: `catch { return false; }` oraz `const { user, threadRows } = await client.pull();`.
+- [ ] 🟡 [P3] **scripts/inbox/close.mjs:279** — gdy hub odrzuci wszystkie kandydatury (`skipped`/`not_found`), wyjście `{thread_id, closed:0, archived:false}` nie ma pola `note` → skill raportuje „nic się nie stało" bez powodu, nieodróżnialnie od realnego błędu. Akcja: gdy `mine.length > 0` a `closed === 0`, dołóż `note` z liczbą odrzuconych i wynikami huba.
+- [ ] 🟡 [P3] **scripts/inbox/inbox-push.mjs:468** — współdzielony kod archiwum (`archivePath`, `renderArchiveThread`, `appendToArchive`) mieszka w entry-poincie script-joba; `close.mjs` importuje go ciągnąc guard entry-pointa i importy klienta. Akcja: wydziel `scripts/inbox/inbox-archive.mjs` (+ `inbox-archive.test.mjs`), oba moduły niech importują stamtąd.
+- [ ] 🟡 [P3] **setup.mjs:1104** — dwa mechanizmy na jeden cel (`env.PULS_HOME` w `settings.json` ~45 linii + 5 testów vs wskaźnik `~/.claude-cron-home`, który jest nadzbiorem) — ścieżka `settings.json` nie odblokowuje żadnego przypadku, a dokłada fail-fast na cudzym pliku. **Wymaga decyzji autora planu** (oba zapisy są jawnie w checkliście U4). Akcja (jeśli plan da się skorygować): zostaw sam `writePulsHomePointer`, usuń `mergeEnvIntoSettings`/`registerPulsHomeEnv` i 4 testy.
+- [ ] 🟡 [P3] **scripts/inbox/close.test.mjs:358** — `withEnv()` nadpisuje globalne `INBOX_ENV_FILE`/`INBOX_TODO_PATH`/`INBOX_SKRZYNKA_PATH`/`INBOX_ARCHIVE_DIR` i nigdy ich nie przywraca; kolejne testy dziedziczą wartości z poprzedniego case'u. Akcja: snapshot czterech kluczy w `withEnv` i przywrócenie w `t.after(...)`.
+- [ ] 🟡 [P3] **setup.test.mjs:284** — test wskaźnika porównuje treść po `.trim()`, więc nie przybija FORMATU, który parsuje czytelnik spoza repo (`env.mjs` w vaulcie); rozszerzenie wskaźnika o drugą linię przejdzie zielono, a skill `deleguj` cicho przestanie działać po re-instalacji. Akcja: `assert.equal(fs.readFileSync(pointer,'utf-8'), installDir + '\n')`.
+
+---
+
+## Operator checklist faza 2
+
+- [ ] Operator: wskaźnik `~/.claude-cron-home` nie istnieje na tej maszynie (`ls ~/.claude-cron-home` → brak), bo `persistPulsHome` biegnie dopiero przy uruchomieniu `setup.mjs`, a instalator po fazie 2 nie był odpalony — `PULS_HOME` jest wyłącznie w `<vault>/.claude/settings.json`, więc drugi tor R4 (procesy spoza sesji Claude Code) pozostaje nieczynny — Operator action: odpal interaktywnie `node setup.mjs` w katalogu instalacji, potem `cat ~/.claude-cron-home` i porównaj z faktyczną ścieżką instalacji; weryfikacja niewykonalna headless.
+- [ ] Operator: stara kopia `<vault>/.claude/skills/deleguj/scripts/close.mjs` (mtime 28.07) wciąż jest tą, którą realnie widzi vault, jeśli `PULS_HOME` nie jest ustawione — ścieżka U4+U5 pozostaje niezweryfikowana end-to-end — Operator action: po re-runie instalatora wykonaj **retest T8** wg szablonu z warunkiem 3 („nitka w archiwum"), a dopiero po zielonym T8 usuń kopię `close.mjs` z vaulta.
+- [ ] Operator: notka o walidacji w `naprawy-team-os-kontekst.md:100` mówi „853 pass / 1 fail (flake `lib/ask.test.js`)", a przy tym review `npm test` daje **854/854 pass, exit 0** — flake nie reprodukuje się — Operator action: popraw notkę w kontekście na aktualny wynik (checkboxy `Weryfikacja: npm test` w U4/U5 zostały już odznaczone w bookkeepingu tego review).
 
 ---
 

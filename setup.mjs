@@ -1097,14 +1097,20 @@ function readSettingsFileOrThrow(settingsFile) {
   }
 }
 
-// === I/O: PULS_HOME do sekcji env w {workspace}/.claude/settings.json ===
+// === I/O: PULS_HOME + CLAUDE_CRON_WORKSPACE do sekcji env w {workspace}/.claude/settings.json ===
 // Dzięki temu KAŻDA sesja Claude Code w tym workspace zna katalog instalacji Pulsa —
 // skille w vaulcie (deleguj) znajdą `data/inbox.env` bez ręcznego kroku usera.
-// Zwraca true gdy plik faktycznie zmieniony (re-run z tą samą wartością = false).
+// CLAUDE_CRON_WORKSPACE idzie tą samą drogą, bo skrypty inbox wyprowadzają z niego
+// ścieżki vaulta (Skrzynka, archiwum): proces mający PULS_HOME z tego pliku, ale bez
+// zmiennej z shell RC (sesja nie-loginowa, Windows przed relogiem), padał na loaderze.
+// Zwraca true gdy plik faktycznie zmieniony (re-run z tymi samymi wartościami = false).
 export function registerPulsHomeEnv(workspace, installDir) {
   const settingsFile = path.join(workspace, '.claude', 'settings.json');
   const existing = readSettingsFileOrThrow(settingsFile);
-  const { settings, changed } = mergeEnvIntoSettings(existing, 'PULS_HOME', installDir);
+  const withHome = mergeEnvIntoSettings(existing, 'PULS_HOME', installDir);
+  const withWorkspace = mergeEnvIntoSettings(withHome.settings, 'CLAUDE_CRON_WORKSPACE', workspace);
+  const settings = withWorkspace.settings;
+  const changed = withHome.changed || withWorkspace.changed;
   if (!changed) return false;
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf-8');
@@ -1124,17 +1130,15 @@ export function defaultPulsHomePointer(homeDir = os.homedir()) {
   return path.join(homeDir, '.claude-cron-home');
 }
 
-// === I/O shell: oba zapisy PULS_HOME (settings.json + wskaźnik) ===
-// Uszkodzony settings.json = fail-fast (jak przy hooku — nie nadpisujemy cudzego pliku).
-// Pad zapisu wskaźnika = warn: instalacja jest sprawna, traci tylko wygodę dla procesów
-// spoza tego workspace'u.
+// === I/O shell: oba zapisy PULS_HOME (wskaźnik + settings.json) ===
+// KOLEJNOŚĆ: najpierw wskaźnik `~/.claude-cron-home`, potem settings.json — oba
+// mechanizmy są niezależne, a settings.json jest tym, który potrafi paść (uszkodzony
+// JSON u usera). Zapis wskaźnika jako drugi znaczyłby, że cudzy zepsuty plik zabiera
+// userowi OBA sposoby zlokalizowania instalacji.
+// ŻADEN z padów nie przerywa setupu: to wygoda dla skilli w vaulcie, a nie warunek
+// działania schedulera — wcześniej wyjątek z registerPulsHomeEnv ubijał cały setup,
+// także u usera, który autostartu w ogóle nie chce.
 function persistPulsHome(workspace, installDir) {
-  const changed = registerPulsHomeEnv(workspace, installDir);
-  console.log(
-    changed
-      ? `[ok] PULS_HOME=${installDir} zapisane w ${path.join(workspace, '.claude', 'settings.json')}`
-      : '[ok] PULS_HOME już ustawione w settings.json workspace.',
-  );
   try {
     const pointer = writePulsHomePointer(installDir);
     console.log(`[ok] Wskaźnik instalacji: ${pointer}`);
@@ -1142,6 +1146,19 @@ function persistPulsHome(workspace, installDir) {
     console.log(
       `[warn] Nie udało się zapisać wskaźnika ~/.claude-cron-home (${error.message}) — `
       + 'skille poza tym workspace mogą nie znaleźć konfiguracji skrzynki.',
+    );
+  }
+  try {
+    const changed = registerPulsHomeEnv(workspace, installDir);
+    console.log(
+      changed
+        ? `[ok] PULS_HOME=${installDir} zapisane w ${path.join(workspace, '.claude', 'settings.json')}`
+        : '[ok] PULS_HOME już ustawione w settings.json workspace.',
+    );
+  } catch (error) {
+    console.log(
+      `[warn] Nie zapisałem PULS_HOME w settings.json workspace (${error.message}) — `
+      + 'skille w sesjach Claude Code z tego vaulta użyją wskaźnika ~/.claude-cron-home.',
     );
   }
 }

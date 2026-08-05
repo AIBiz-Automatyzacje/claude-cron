@@ -3079,6 +3079,48 @@ EOF
   fi
 }
 
+# --- Test 65: write_puls_home_pointer — wskaźnik instalacji jako user claude ---
+# Bez niego na VPS (jedynej maszynie z rolą „agent") nie powstaje ŻADEN wskaźnik
+# PULS_HOME — oba pisze setup.mjs, którego ta ścieżka nie uruchamia — więc komendy
+# skilla `deleguj` trafiają w guard „brak PULS_HOME”.
+test_write_puls_home_pointer() {
+  local snippet="$SANDBOX/t-pointer.sh" log="$SANDBOX/pointer.log" out
+  cat > "$snippet" <<EOF
+INSTALL_DIR="$SANDBOX/pu ls"
+CLAUDE_USER="claude"
+run_as_claude() { echo "\$1" >> "$log"; return 0; }
+write_puls_home_pointer
+EOF
+  out="$(run_snippet "$snippet")"
+  # Spacja w ścieżce ma być zacytowana przez %q (pu\ ls) — niecytowana rozjechałaby
+  # się na dwa argumenty printf i wskaźnik pokazywałby na obcy katalog.
+  if grep -q '\.claude-cron-home' "$log" \
+    && grep -q 'pu\\ ls' "$log" \
+    && [[ "$out" == *".claude-cron-home"* ]]; then
+    pass "write_puls_home_pointer: wskaźnik zapisany jako user claude (ścieżka ze spacją cytowana)"
+  else
+    problem "write_puls_home_pointer: brak zapisu wskaźnika (log: $(cat "$log" 2>/dev/null), out: $out)"
+  fi
+}
+
+# --- Test 66: write_puls_home_pointer — pad zapisu = warn, nie fail instalacji ---
+test_write_puls_home_pointer_failure() {
+  local snippet="$SANDBOX/t-pointer-fail.sh" out rc
+  cat > "$snippet" <<EOF
+INSTALL_DIR="$SANDBOX/pu ls"
+CLAUDE_USER="claude"
+run_as_claude() { return 1; }
+write_puls_home_pointer
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"Nie zapisałem wskaźnika"* ]]; then
+    pass "write_puls_home_pointer: pad zapisu → warn, instalacja leci dalej"
+  else
+    problem "write_puls_home_pointer: pad powinien być warn bez faila (rc=$rc, out: $out)"
+  fi
+}
+
 echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje), fazy 4 (blok 5 loginów), fazy 5 (Obsidian + unity systemd), fazy 6 (auto-update/weryfikacja/dowód/Funnel/podsumowanie) i fazy 7 (reset: potwierdzenie TAK, guardy ścieżek, idempotencja) =="
 test_syntax
 test_flags_port
@@ -3166,6 +3208,8 @@ test_configure_firewall_enables_inactive
 
 test_write_install_version
 test_write_install_version_without_git
+test_write_puls_home_pointer
+test_write_puls_home_pointer_failure
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

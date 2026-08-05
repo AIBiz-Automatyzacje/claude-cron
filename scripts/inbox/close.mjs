@@ -7,11 +7,15 @@
 // archiwum — wątek domknięty komendą znikał ze Skrzynki bez śladu w archiwum.
 //
 // Zamykamy wyłącznie wiadomości ZAADRESOWANE DO MNIE — hub odrzuca cudze jako
-// `skipped` i słusznie: moje wysłane taski ma domykać odbiorca checkboxem „Zrobione".
-// Efekt praktyczny: wątek znika z Otrzymanych, delegacja zostaje w Delegowanych.
+// `skipped` i słusznie: moje wysłane taski ma domykać odbiorca.
 //
-// Akcja `Zapoznane`, nie `Zrobione` — `Zrobione` na tasku wysyła nadawcy automatyczną
-// odpowiedź „Zrobione ✅", a `close` ma tylko sprzątać, nie generować ruchu.
+// Akcja zależy od TYPU wiadomości i to nie jest kosmetyka:
+//   - `task` → `Zrobione`. `Zapoznane` robi w hubie gołe `UPDATE status='done'` bez
+//     żadnej odpowiedzi, a widok „Delegowane" nadawcy filtruje `status != 'done'` —
+//     zdelegowane zadanie znikałoby delegującemu z listy BEZ jednej wiadomości zwrotnej
+//     (cicha utrata sygnału). `Zrobione` dokłada nadawcy reply „Zrobione ✅".
+//   - `query`/`reply` → `Zapoznane`. Nikt nie czeka na potwierdzenie wykonania, więc
+//     dodatkowy ruch w skrzynce drugiej strony byłby szumem.
 
 import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -19,6 +23,26 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { appendToArchive } from './inbox-push.mjs';
 import * as inboxClient from './inbox-client.mjs';
 import { loadEnv } from './env-loader.mjs';
+
+// `close` potrzebuje wyłącznie katalogu archiwum i credów huba, ale katalog archiwum
+// wyprowadzamy z workspace'u — a ten bywa NIEUSTAWIONY w procesie, który dostał tylko
+// PULS_HOME (sesja nie-loginowa, Windows przed relogiem, spawn z innego procesu).
+// Generyczny komunikat loadera namawia wtedy na wpisanie ścieżek do `.env` w vaultcie,
+// czyli dokładnie tam, gdzie sekretów trzymać nie wolno. Własny komunikat kieruje
+// do jedynej poprawnej naprawy: re-run instalatora + NOWA sesja.
+export const MISSING_WORKSPACE_MESSAGE =
+  'Brak CLAUDE_CRON_WORKSPACE — nie wiem, gdzie leży vault (a w nim Zasoby/inbox-archive). '
+  + 'Uruchom ponownie instalator Pulsa (ustawia tę zmienną razem z PULS_HOME) i otwórz NOWĄ '
+  + 'sesję: zmienne środowiskowe nie propagują się do już działających procesów.';
+
+async function loadInboxEnv() {
+  try {
+    await loadEnv();
+  } catch (error) {
+    if (!process.env.CLAUDE_CRON_WORKSPACE) throw new Error(MISSING_WORKSPACE_MESSAGE);
+    throw error;
+  }
+}
 
 export function parseArgs(argv) {
   const out = {};
@@ -36,7 +60,7 @@ export function parseArgs(argv) {
 // `appendToArchive` do katalogu z INBOX_ARCHIVE_DIR — szew hub↔plik ma być testowany
 // w jednym przebiegu, bo to jego brak przepuścił bug „close kasuje wątek bez archiwum".
 export async function main({ client = inboxClient, argv = process.argv } = {}) {
-  await loadEnv();
+  await loadInboxEnv();
   const args = parseArgs(argv);
   const threadId = args['thread-id'] || args.thread;
 
@@ -45,9 +69,8 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
   }
 
   const { user, threadRows = [] } = await client.pull();
-  const mine = threadRows.filter(
-    (r) => r.thread_id === threadId && r.to_user === user && r.status !== 'done'
-  );
+  const thread = threadRows.filter((r) => r.thread_id === threadId);
+  const mine = thread.filter((r) => r.to_user === user && r.status !== 'done');
 
   if (mine.length === 0) {
     // Powtórzone `close` (albo wątek cudzy) trafia tutaj — zero żądań `done`, zero
@@ -62,25 +85,25 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
     return out;
   }
 
-  // Sekwencyjnie, nie równolegle: hub ma rate limit per token, a wątki są krótkie.
-  let closed = 0;
-  let thread = null;
-  for (const row of mine) {
-    const res = await client.done({ id: row.id, action: 'Zapoznane' });
-    if (res.result === 'closed' || res.result === 'already_done') closed++;
-    // Hub dokłada pełną nitkę do odpowiedzi — bierzemy ostatnią (najpełniejszą).
-    if (res.thread) thread = res.thread;
-  }
-
+  // Archiwum PRZED domknięciem w hubie i ze SNAPSHOTU z `pull()` — kolejność jest tu
+  // odwracalnością, nie stylem. Zapis po pętli czynił pad dysku (Obsidian Sync, brak
+  // miejsca, read-only) NIEODWRACALNYM: wiadomości były już `done`, więc ponowne `close`
+  // szło ścieżką „brak otwartych wiadomości" i nitki nie dało się zarchiwizować niczym
+  // poza ręczną grzebaniną w bazie huba. Tak najgorszy przypadek to zbędny wpis
+  // w archiwum (przy padzie w połowie pętli), a nie zniknięty wątek bez kopii.
   // Archiwum RAZ na wątek, nie raz na wiadomość: `renderArchiveThread` renderuje CAŁĄ
   // nitkę, więc zapis per rekord dołożyłby tę samą treść tyle razy, ile mam wiadomości.
-  let archived = false;
-  if (thread) {
-    await appendToArchive(process.env.INBOX_ARCHIVE_DIR, thread, user);
-    archived = true;
+  await appendToArchive(process.env.INBOX_ARCHIVE_DIR, thread, user);
+
+  // Sekwencyjnie, nie równolegle: hub ma rate limit per token, a wątki są krótkie.
+  let closed = 0;
+  for (const row of mine) {
+    const action = row.type === 'task' ? 'Zrobione' : 'Zapoznane';
+    const res = await client.done({ id: row.id, action });
+    if (res.result === 'closed' || res.result === 'already_done') closed++;
   }
 
-  const out = { thread_id: threadId, closed, archived };
+  const out = { thread_id: threadId, closed, archived: true };
   console.log(JSON.stringify(out));
   return out;
 }

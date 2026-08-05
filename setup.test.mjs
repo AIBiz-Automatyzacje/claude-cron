@@ -260,6 +260,22 @@ test('registerPulsHomeEnv na re-runie nie dotyka pliku', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// Sam PULS_HOME nie wystarcza: skrypty inbox wyprowadzają ścieżki vaulta (Skrzynka,
+// Zasoby/inbox-archive) z CLAUDE_CRON_WORKSPACE, a ten trafiał WYŁĄCZNIE do shell RC /
+// rejestru — proces bez świeżej sesji przechodził guard PULS_HOME i padał na loaderze.
+test('registerPulsHomeEnv zapisuje też CLAUDE_CRON_WORKSPACE', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-home-ws-'));
+  const settingsFile = path.join(dir, '.claude', 'settings.json');
+
+  assert.equal(registerPulsHomeEnv(dir, '/opt/puls'), true);
+
+  const env = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')).env;
+  assert.equal(env.PULS_HOME, '/opt/puls');
+  assert.equal(env.CLAUDE_CRON_WORKSPACE, dir);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('registerPulsHomeEnv na uszkodzonym settings.json robi fail-fast i NIE tyka pliku', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-home-broken-'));
   const settingsFile = path.join(dir, '.claude', 'settings.json');
