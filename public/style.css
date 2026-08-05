@@ -150,6 +150,10 @@ body {
 .vps-addr { margin-top: -8px; font-size: 12.5px; }
 .vps-addr .stat-strong { font-family: 'JetBrains Mono', monospace; word-break: break-all; }
 .vps-addr-warn { color: var(--amber); font-weight: 600; }
+/* Atrybut `hidden` MUSI wygrać z `display: flex` z `.statbar`/`.stat` — reguła autora bije
+   UA-owe `[hidden]{display:none}`, więc bez tego pasek i ostrzeżenie o rozjeździe wisiałyby
+   ZAWSZE (fałszywy alarm w feature diagnostycznym). Precedens: `.modal-overlay[hidden]`. */
+.vps-addr[hidden], .vps-addr-warn[hidden] { display: none; }
 .health-bar {
   display: inline-flex;
   width: 72px; height: 8px;

@@ -16,7 +16,7 @@ const inboxSeed = require('./lib/inbox-seed');
 const inboxDb = require('./lib/inbox-db');
 const { isInboxHub } = require('./lib/inbox-hub');
 const { getInstallVersion } = require('./lib/version');
-const { describeEnvUsage, readPersistedEnv } = require('./lib/persisted-env');
+const { describeEnvUsage, readPersistedEnvCached } = require('./lib/persisted-env');
 const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
 const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
@@ -359,7 +359,9 @@ async function handleApi(req, res) {
       // do żyjących procesów; bez tego pola diagnoza kosztuje godzinę (R7).
       vps_url: describeEnvUsage({
         inUse: VPS_API_URL,
-        persisted: readPersistedEnv('CLAUDE_CRON_VPS_URL'),
+        // Odczyt CACHOWANY (TTL w lib/persisted-env): panel bije w /api/status co 3 s, a na
+        // Windowsie goły odczyt to spawn PowerShella blokujący pętlę zdarzeń.
+        persisted: readPersistedEnvCached('CLAUDE_CRON_VPS_URL'),
       }),
       current_run: currentRun,
       current_runs: currentRuns,

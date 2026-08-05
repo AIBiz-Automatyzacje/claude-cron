@@ -305,12 +305,12 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 - [x] Test: wartość ze spacjami i cudzysłowami → poprawnie odkodowana
 - [x] Test: `/api/status` — wartość z pamięci ≠ zapisana → flaga rozjazdu `true`
 - [x] Test: wartości równe → flaga `false`
-- [ ] Weryfikacja: `node --test lib/persisted-env.test.js` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości
-- [ ] Weryfikacja: `curl -s localhost:7777/api/status` zwraca oba pola adresu i flagę rozjazdu
+- [x] Weryfikacja: `node --test lib/persisted-env.test.js` przechodzi — 13/13 pass
+- [x] Weryfikacja: `npm test` przechodzi w całości — 918/918 pass
+- [ ] Weryfikacja: `curl -s localhost:7777/api/status` zwraca oba pola adresu i flagę rozjazdu (SKIP — daemon na 7777 biegnie z kodem sprzed Fazy 4 i nie zwraca `vps_url`; kontrakt potwierdzony na świeżej instancji: `{in_use, persisted, mismatch}`; patrz Operator checklist faza 4)
 
 **Operator checklist:**
-- [ ] **Sprawdzenie M1** wg szablonu (zmiana adresu bez restartu → ostrzeżenie; po restarcie znika)
+- [ ] **Sprawdzenie M1** wg szablonu (zmiana adresu bez restartu → ostrzeżenie; po restarcie znika) — wymaga operatora (checklist)
 
 ---
 
@@ -323,11 +323,34 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 - [x] Test: brak zapisanego adresu + pusty Enter → „tryb tylko lokalny", env nie zapisywany
 - [x] Test: podany nowy adres → nadpisuje stary
 - [x] Test: adres z białymi znakami / cudzysłowami → sanityzowany jak dziś (`buildVpsUrl`)
-- [ ] Weryfikacja: `node --test setup.test.mjs` przechodzi
-- [ ] Weryfikacja: `npm test` przechodzi w całości
+- [x] Weryfikacja: `node --test setup.test.mjs` przechodzi — 134/134 pass
+- [x] Weryfikacja: `npm test` przechodzi w całości — 918/918 pass
 
 **Operator checklist:**
-- [ ] **Sprawdzenie M3** wg szablonu
+- [ ] **Sprawdzenie M3** wg szablonu — wymaga operatora (checklist)
+
+---
+
+## Do poprawy po review fazy 4
+
+- [x] 🔴 [P1] **public/style.css:148** — atrybut `hidden` na nowym pasku jest bezskuteczny: element ma klasę `.statbar` (`display: flex`, style.css:124), a ostrzeżenie `.stat` (`display: flex`, style.css:137), więc reguła autora bije UA-owe `[hidden]{display:none}` (jedyny precedens override'u to `.modal-overlay[hidden]`, style.css:529). Skutek: `box.hidden = true` (`public/app.js:374`) NIE chowa paska — instalacja bez VPS-a widzi na stałe „Puls proxuje do: (brak)", a `hidden = info.mismatch !== true` (`public/app.js:382`) nie chowa ostrzeżenia, więc „⚠ Rozjazd — zmiana adresu wymaga restartu Pulsa" wisi zawsze, także przy `mismatch:false` — fałszywy alarm w feature, którego celem było zaufanie do diagnostyki. Fix: `.vps-addr[hidden], .vps-addr-warn[hidden] { display: none; }` w `public/style.css` (albo klasa `.hidden` z `!important`, style.css:43).
+- [x] 🟠 [P2] **server.js:360** — `/api/status` woła `readPersistedEnv('CLAUDE_CRON_VPS_URL')` SYNCHRONICZNIE przy KAŻDYM żądaniu, bez cache. Na Windows to `spawnSync('powershell', ...)` (`lib/persisted-env.js:245`) — pełny spawn procesu (~100–400 ms) blokujący jednowątkową pętlę zdarzeń serwera/schedulera; panel odpytuje co 3 s, więc serwer jest regularnie zamrażany (przesuwają się heartbeat, idle-timeouty executora, pętla drain). Endpoint nie ma autoryzacji ani rate limitu, a globalne `Access-Control-Allow-Origin: *` (server.js:760) + brak guardu XFF dla ruchu z przeglądarki oznacza, że dowolna odwiedzona strona może w pętli robić `fetch('http://localhost:7777/api/status')` = setki spawnów PowerShella na sekundę (DoS schedulera; na Uniksie 2× `readFileSync` RC per żądanie). Fix: buforuj utrwaloną wartość (TTL 15–30 s albo mtime pliku RC) i/lub czytaj asynchronicznie poza ścieżką żądania — wzorzec `notify-config.js` dotyczy TANIEGO odczytu ze state DB, nie spawnu procesu.
+- [x] 🟠 [P2] **lib/persisted-env.js:245** — `spawnSync('powershell', ['-NoProfile','-Command', script], { encoding: 'utf-8' })` bez `timeout` (i bez `maxBuffer`). Zawieszony PowerShell (skan AV, wysycony host, blokada polityki wykonania) blokuje wątek NA ZAWSZE — cały serwer (dashboard, webhooki, `/inbox/v1/*`, kolejka jobów) przestaje odpowiadać bez żadnego logu. Kontrakt „nigdy nie rzuca, nieczytelne źródło = null" nie obejmuje zawieszenia. Fix: `timeout: 3000` (+ `killSignal`), traktuj `result.signal`/`result.error` jak `null`, test „spawn zwraca error/timeout → null".
+- [x] 🟠 [P2] **setup.mjs:1394** — stan `kept` z `resolveVpsChoice` pomija nie tylko zapis do RC/rejestru, ale też ustawienie zmiennej w BIEŻĄCYM procesie (`persistEnvVar`, setup.mjs:849, robi oba naraz — ma to jawnie w komentarzu). Gdy `savedUrl` pochodzi z `readPersistedEnv`, a `process.env.CLAUDE_CRON_VPS_URL` w sesji instalatora jest puste (instalacja pod zsh, re-run w bashu lub nieinteraktywnie; Windows w starym terminalu), instalator pisze „[ok] VPS bez zmian: <adres>", a serwer startowany/wskrzeszany przez ten sam run dostaje env BEZ adresu → `/api/vps/*` 503 „brak env" i panel traci widok VPS. To dokładnie klasa błędu, którą Faza 4 miała zamknąć (R7/R11). Fix: w gałęzi `action === 'kept'` ustaw `process.env.CLAUDE_CRON_VPS_URL = vpsChoice.url` (bez zapisu do RC) przed spawnem/restartem serwera.
+- [x] 🟠 [P2] **lib/persisted-env.test.js:371** — scenariusze IU U9 „`/api/status`: wartość z pamięci ≠ zapisana → flaga rozjazdu" i „wartości równe → flaga `false`" są odhaczone, ale pokryte wyłącznie testami czystej funkcji `describeEnvUsage`; nic nie sprawdza, że `/api/status` faktycznie wozi pole `vps_url` w tym kształcie (Weryfikacja IU mówi wprost o `curl`). Szew server.js ↔ persisted-env ↔ public/app.js jest niepokryty, a repo ma precedens z tej samej serii (`server.runs.test.js:156` — test na żywym procesie dla pola `version` z Fazy 1); learned pattern: testy czystych funkcji obu stron przechodzą przy złamanym zachowaniu systemowym. Fix: test `GET /api/status` w `server.runs.test.js` asertujący `vps_url` z kluczami `in_use`/`persisted`/`mismatch`.
+- [ ] 🟡 [P3] **server.js:360** — nowe pole `vps_url` (adres węzła tailnetu ORAZ wartość odczytana z prywatnego `~/.zshrc`/rejestru) trafia do odpowiedzi serwowanej z globalnym `Access-Control-Allow-Origin: *` (server.js:760), bez guardu cross-origin dla GET-ów (`isCrossOriginRequest` tylko przy metodach mutujących, server.js:233/554) — dowolna odwiedzona strona odczyta adres wewnętrznego węzła i potwierdzi, że maszyna ma skonfigurowany VPS (klasa problemu z `docs/solutions/auth-issues/2026-07-24-...`). Fix: pomijaj `vps_url` gdy `isCrossOriginRequest(req)`, albo zawęź ACAO do własnego Hosta.
+- [ ] 🟡 [P3] **setup.mjs:528** — `resolveSavedVpsUrl` zwraca surowy string z RC/rejestru bez walidacji kształtu (brak sprawdzenia schematu http/https), a w ścieżce `action:'kept'` ląduje w `vpsUrl` i jest celem `pushNotifySettingsToVps` (setup.mjs:1456), czyli wysyłki tokenu Telegrama i webhooka Discorda plaintextem. Wcześniej adres w tej ścieżce zawsze przechodził przez `buildVpsUrl`. Fix: odrzucaj wartości niepasujące do `/^https?:\/\/[^\s]+$/` (→ null → prompt) + test na śmieć w RC.
+- [ ] 🟡 [P3] **lib/persisted-env.js:245** — spawn `powershell` po gołej nazwie rozstrzyganej przez PATH daemona: na Windowsie zapisywalny katalog wcześniej w PATH podstawia własny `powershell.exe`, uruchamiany przy każdym `/api/status`. `lib/claude-spawn.js` świadomie unika takich fallbacków. Fix: pełna ścieżka `path.join(process.env.SystemRoot || 'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe')` z fallbackiem `null`.
+- [ ] 🟡 [P3] **setup.mjs:1394** — pusty Enter przy zapisanym adresie zawsze daje `kept`, więc nie ma już ŻADNEJ ścieżki powrotu z trybu VPS do lokalnego; `resolveVpsChoice` nie zna stanu „wyczyść", a prompt tego nie sygnalizuje — user po likwidacji VPS zostaje z martwym adresem (m.in. `pushNotifySettingsToVps` strzela w nieistniejącą maszynę) i musi ręcznie edytować `~/.zshrc`/rejestr. Fix: sentinel (`-`/`brak`) → `{url:null, action:'none', persist:false}`, wymieniony w `buildVpsHostPrompt`, + test w `setup.test.mjs`.
+- [ ] 🟡 [P3] **lib/persisted-env.js:274** — `module.exports` wystawia `REAL_IO` i `decodeShellValue` bez konsumentów (REAL_IO jest domyślnym argumentem wewnątrz modułu, testy wstrzykują `makeIo`; `decodeShellValue` pokryty pośrednio). Niepotrzebnie powiększona publiczna powierzchnia nowego modułu. Fix: zostaw `readPersistedEnv`, `describeEnvUsage`, `parsePersistedExport`.
+- [ ] 🟡 [P3] **lib/persisted-env.js:193-201** — YAGNI w `decodeShellValue`: gałęzie dla apostrofu i gołego tokena obsługują linie, których jedyny producent (`upsertEnvLine` → `JSON.stringify`) nigdy nie wypisuje; brak testu i realnego wywołania. Fix: zostaw `JSON.parse` dla literału w cudzysłowach + `null`.
+- [ ] 🟡 [P3] **lib/persisted-env.js:221-225** — `resolveRcCandidates` ciągnie `io.shell()` (pole w `REAL_IO` i w atrapie testowej) tylko po to, by USTAWIĆ KOLEJNOŚĆ dwóch plików czytanych i tak obu; różnica widoczna wyłącznie gdy oba RC definiują tę samą zmienną różnie. Fix: stała lista `[~/.zshrc, ~/.bashrc]`, `shell` usunięty z `REAL_IO` i `makeIo`.
+- [ ] 🟡 [P3] **lib/persisted-env.test.js:86** — brak asercji dla GŁÓWNEGO scenariusza R7, dla którego pasek powstał: instalator zapisał adres, ale żyjący proces go nie ma (`in_use: ''`, `persisted: 'http://…'`). Obecne testy pokrywają dwie niepuste wartości i `persisted: null`. Fix: `describeEnvUsage({ inUse: '', persisted: 'http://100.64.0.1:7777' })` → `mismatch:true` — zamraża decyzję, że pusty adres w pamięci przy zapisanym w konfiguracji JEST rozjazdem.
+
+## Operator checklist faza 4
+
+- [ ] Operator: scenariusz [Manual] z planu (`docs/plans/2026-08-05-001-fix-team-os-naprawy-po-testach-plan.md:614`) — „zmiana adresu bez restartu → panel pokazuje ostrzeżenie; po restarcie znika" — oraz **Sprawdzenie M1** i **Sprawdzenie M3** z checklist U9/U10 wymagają realnego środowiska z działającym VPS-em i restartem daemona usera; nie do odtworzenia headless bez side-effectów na produkcyjnej instalacji — Operator action: po naprawie P1 (`public/style.css`) zrestartuj daemona, zmień `CLAUDE_CRON_VPS_URL` w `~/.zshrc` bez restartu → sprawdź ostrzeżenie o rozjeździe w panelu, potem zrestartuj Pulsa i potwierdź, że pasek znika; następnie wykonaj M1/M3 wg szablonu.
+- [ ] Operator: `curl -s localhost:7777/api/status` NIE zwraca pola `vps_url` — daemon na porcie 7777 biegnie z kodem sprzed Fazy 4 (uptime ~13 h, etykieta legacy `com.claude-cron.daemon`); kontrakt zweryfikowano na świeżo wystartowanej instancji (`{in_use:"", persisted:"http://100.122.215.61:7777", mismatch:true}`), więc to warunek środowiskowy, nie defekt kodu — Operator action: zrestartuj lokalnego daemona (`launchctl kickstart -k gui/$UID/com.claude-cron.daemon` albo restart z panelu) i powtórz `curl`, potem odznacz checkbox Weryfikacji w U9.
 
 ---
 

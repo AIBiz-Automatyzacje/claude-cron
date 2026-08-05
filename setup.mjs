@@ -1396,6 +1396,12 @@ async function main() {
       const vpsLoc = persistEnvVar('CLAUDE_CRON_VPS_URL', vpsUrl, 'Claude-Cron VPS connection');
       console.log(`[ok] VPS: ${vpsUrl} (zapisano w ${vpsLoc})`);
     } else if (vpsChoice.action === 'kept') {
+      // Bez zapisu do RC/rejestru (wartość już tam jest), ALE z ustawieniem w BIEŻĄCYM procesie —
+      // `savedUrl` mógł przyjść z `readPersistedEnv`, gdy `process.env` tej sesji jest puste
+      // (instalacja pod zsh a re-run w bashu, uruchomienie nieinteraktywne, stary terminal na
+      // Windowsie). Serwer spawnowany/wskrzeszany przez TEN run dziedziczy env instalatora, więc
+      // bez tej linii dostaje env BEZ adresu i `/api/vps/*` odpowiada 503 „brak env" (R7/R11).
+      process.env.CLAUDE_CRON_VPS_URL = vpsUrl;
       // Mowa o wartości ZAPISANEJ — żyjący serwer może mieć w pamięci starszą (env nie
       // propaguje się do działających procesów), dlatego nie obiecujemy tu nic o restarcie.
       console.log(`[ok] VPS bez zmian: ${vpsUrl}`);
