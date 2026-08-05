@@ -427,7 +427,7 @@ obejście operacyjne „domykać wyłącznie checkboxami".
 
 ### Faza 3 — Format Skrzynki i archiwum
 
-- [ ] **Unit 6: Frontmatter Skrzynki domergowuje się przy każdym pull**
+- [x] **Unit 6: Frontmatter Skrzynki domergowuje się przy każdym pull**
 
 **Cel:** zmiany szablonu docierają do istniejących plików; koniec z „na CAVE wygląda na zepsuty CSS".
 
@@ -468,7 +468,7 @@ reszta pliku nietknięta.
 
 ---
 
-- [ ] **Unit 7: Archiwum bez duplikatów — marker + podmiana bloku**
+- [x] **Unit 7: Archiwum bez duplikatów — marker + podmiana bloku**
 
 **Cel:** wątek domykany etapami występuje w pliku miesiąca dokładnie raz.
 
@@ -513,7 +513,7 @@ markerze regexem; `replaceBetweenMarkers` (`inbox-pull.mjs`) — podmiana fragme
 
 ---
 
-- [ ] **Unit 8: Job „Puls — kontrola spójności" + `/onboard --refresh-theme`**
+- [x] **Unit 8: Job „Puls — kontrola spójności" + `/onboard --refresh-theme`**
 
 **Cel:** rozjazd wyglądu i wersji przestaje być niewidzialny — system sam mówi człowiekowi,
 co jest nie tak, i podaje komendę naprawczą.

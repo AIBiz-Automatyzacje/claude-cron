@@ -247,3 +247,91 @@ w izolacji 30/30 pass (`node --test lib/ask.test.js`). Klasyfikacja: **flake cza
 pełnego suite'u**, nie defekt. Testy loadera w vaulcie: 4/4 pass (poza `npm test`).
 
 **Ostatnia aktualizacja:** 2026-08-05 (domknięcie Fazy 2)
+
+---
+
+## Review Fazy 2 (2026-08-05)
+
+**Severity gate: ⚠️ ZASTRZEŻENIA** — 0 × P1, **7 × P2**, 7 × P3, 3 findingi OPERATOR.
+Pełny raport: `docs/active/naprawy-team-os/review-faza-2.md`.
+
+**Kluczowe wnioski:**
+
+1. **`close` gubi delegację nadawcy** (P2, `close.mjs:69`) — `Zapoznane` na wiadomości typu `task`
+   robi `UPDATE ... status='done'` bez reply, a widok „Delegowane" filtruje `status != 'done'`.
+   Zadanie znika z listy delegującego bez sygnału — dokładnie ta klasa cichej straty, którą U5
+   miało likwidować. Komentarz `close.mjs:11` twierdzi odwrotnie.
+2. **Kolejność hub → archiwum jest nieodwracalna** (P2, `close.mjs:79`) — pad zapisu po udanych
+   `done` zostawia wątek domknięty i archiwum puste, a ponowny `close` trafia w `mine.length === 0`.
+   Nitka JEST już w pamięci (`threadRows` z `pull()`), więc naprawa to snapshot przed pętlą.
+3. **R4 spełnione tylko na laptopie** (P2, `install-vps.sh:1086`) — oba wskaźniki `PULS_HOME` pisze
+   wyłącznie `setup.mjs`, którego ścieżka VPS nie uruchamia; maszyna z rolą `agent` nie dostanie
+   żadnego. To ten sam dług co `data/version.json` z review Fazy 1.
+4. **Loader sekretu wciąż poza repo** (P2) — świadome odchylenie fazy okazuje się tym samym
+   wzorcem awarii, który U5 naprawiło dla `close.mjs`: `npm test` nie chroni kodu rozstrzygającego
+   o źródle `INBOX_TOKEN`.
+5. `persistPulsHome()` ubija cały setup na uszkodzonym `settings.json` (P2, `setup.mjs:1333`) —
+   wbrew własnemu komentarzowi i PRZED zapisem niezależnego wskaźnika.
+
+**Bookkeeping `Weryfikacja:`** — wszystkie 6 checkboxów fazy 2 odznaczone (4 × CLI, 2 × grep),
+zero FAIL. Korekta notki walidacyjnej: `npm test` daje **854/854 pass, exit 0** — flake
+`lib/ask.test.js` opisany wyżej **nie reprodukuje się** przy tym przebiegu.
+
+---
+
+## Faza 3 — Format Skrzynki i archiwum (2026-08-05)
+
+**U6 — frontmatter Skrzynki domergowuje się przy każdym pull**
+
+- `scripts/inbox/inbox-pull.mjs` dostał `mergeFrontmatter` — **merge, nie nadpisanie**: brakujące
+  klucze z `SKRZYNKA_TEMPLATE` (`cssclasses`, `tags`) dochodzą, wartości już obecne (także cudze,
+  ręcznie dopisane klucze) zostają nietknięte. Plik bez frontmattera dostaje cały blok z szablonu.
+- Kontrakt push↔pull (`%% inbox:items:start/end %%`, marker `%% id/thread %%`, checkboxy) nietknięty —
+  broni go test roundtrip na prawdziwym pliku tmp.
+
+**U7 — archiwum bez duplikatów: marker + podmiana bloku**
+
+- `renderArchiveThread` emituje `%% thread:<id> %%` (dotąd marker żył wyłącznie w renderze Skrzynki),
+  a `appendToArchive` wczytuje plik miesiąca i **podmienia** blok o tym `thread_id`, jeśli już jest.
+  Ponowna archiwizacja tego samego wątku daje jedną, nowszą kopię zamiast rosnącego łańcucha duplikatów.
+- Bloki sprzed zmiany (bez markera) są nierozpoznawalne z definicji — nowy zapis dokłada blok obok,
+  starego nie rusza. Czyszczenie historycznych duplikatów zostaje krokiem operatora.
+
+**U8 — job „Puls — kontrola spójności"**
+
+- Nowy `scripts/consistency-check.mjs` (+ testy): dwie kontrole, jeden mechanizm — snippet
+  `<vault>/.obsidian/snippets/skrzynka.css` kontra szablon w pluginie zespołowym oraz wersja
+  instalacji z U1 (`unknown` = instalacja nie wie, z czym pracuje).
+- Rozjazd = **zadanie w vaulcie** z `termin:` w frontmatterze i **komendą naprawczą w treści**.
+  Duplikat rozpoznawany po ukrytym znaczniku `%% puls:consistency-check %%`, nigdy po tytule
+  ani nazwie pliku — tytuł zmieni się przy pierwszym porządkowaniu Dashboardu.
+- Szablon motywu rozwiązywany z **zainstalowanego** pluginu (`installed_plugins.json`), nie ze skanu
+  cache — cache trzyma wiele wersji po hashu commita i „którakolwiek" porównywałaby vault z losową.
+
+### Decyzje i odchylenia (Faza 3)
+
+| Odchylenie | Powód |
+|---|---|
+| `updateSkrzynkaFile` wyeksportowana obok `mergeFrontmatter` (U6) | Test roundtrip ma być testem **szwu** render+merge+zapis na pliku tmp, nie testem kształtu czystej funkcji |
+| Istniejący test appendu (U7) dostał drugi `thread_id` + **wzmocnione** asercje (oba wątki obecne, kolejność zachowana) | Po zmianie dwa zapisy tego samego `thread_id` to podmiana, więc stary test nie testowałby już appendu. Zero osłabiania asercji |
+| `INBOX_TODO_PATH` dopisany do `ENV_KEYS` i czyszczony w `setupVault` (`inbox-push.main.test.mjs`) | `loadEnv` mutuje `process.env`, a dołożony test szwu woła `close.main`, który tej ścieżki używa |
+| Seed przez `templates/starter-jobs.json` + `lib/starter-jobs.js` (nie `inbox-seed.js`) | Opcja dopuszczona planem. Wymusiła dwie zmiany: script-joby pomijają sprawdzanie skilla (inaczej `missing_skill` dla `undefined`), a `loadStarterJobDefs` rozwiązuje względny `command` do absolutnego wobec katalogu instalacji — ścieżka absolutna w JSON byłaby przypięta do maszyny autora |
+| Job dostał `lock_group: 'dashboard'` (poza literą planu) | Pisze do `Zadania/Dashboard.md`, tego samego pliku, który w całości przepisuje „Team OS — inbox sync". Bez grupy równoległy run gubiłby jedną z wersji bez sygnału |
+| Zadanie tworzone w **dwóch** miejscach: plik w `Zadania/w_trakcie/` + wpis w sekcji „Dzisiaj" Dashboardu | `termin:` daje widoczność po najbliższej regeneracji, wpis w Dashboardzie — natychmiast. Brak sekcji lub brak pliku Dashboardu nie wywala joba |
+| Porównanie CSS normalizuje CRLF i końcowe białe znaki | Bez tego snippet skopiowany na Windowsie (CAVE) byłby wiecznym fałszywym rozjazdem |
+| Kontrola wersji sprawdza wyłącznie `revision === 'unknown'` | Porównanie z wersją zdalną z GitHuba to jawnie U11 (Faza 5) |
+| **Tryb `--refresh-theme` w `SKILL.md` pluginu NIE zrobiony** — przeniesiony do U12 (Faza 5) | Scope U8 zakazuje dotykania pluginu zespołowego, a U12 modyfikuje dokładnie ten plik. Nazwa trybu jest już stałą `THEME_FIX_COMMAND` i trafia do treści zadania. Ten sam powód dla kroku onboardingu „Obsidian zaktualizowany" (R15) |
+
+**Audyt error-handlingu (przed commitem):** zero `console.log` w kodzie produkcyjnym — logowanie
+`consistency-check` idzie przez wstrzykiwany `log` (default `console.log`), tak jak w pozostałych
+script-jobach. Poprawka: `catch` na `JSON.parse(installed_plugins.json)` zwracał `null` **cicho**,
+więc uszkodzony manifest raportowałby się jako „brak pluginu" i job przestałby pilnować motywu na
+zawsze — dołożony `console.error` z powodem. Drugi bezargumentowy `catch` (sonda `readdir` na
+`plugins/`) opisany komentarzem: brak podkatalogu to normalny stan, odpowiednik `ENOENT`.
+
+**Walidacja Fazy 3:** `npm test` → **895/895 pass, exit 0** (0 fail, 0 skipped).
+`node --test scripts/consistency-check.test.mjs` → 17/17 pass. Typecheck, linter i build w tym
+projekcie nie istnieją (czysty CommonJS + vanilla JS, `node:test` bez zależności) — nie ma czego
+uruchomić poza `npm test`.
+
+**Ostatnia aktualizacja:** 2026-08-05 (domknięcie Fazy 3)

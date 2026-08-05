@@ -5,7 +5,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { appendToArchive, extractInboxSection, renderArchiveThread, archivePath } from './inbox-push.mjs';
+import {
+  appendToArchive,
+  archivePath,
+  archiveThreadMarker,
+  extractInboxSection,
+  renderArchiveThread,
+  replaceArchiveThreadBlock,
+} from './inbox-push.mjs';
 
 const T0 = '2026-07-24T07:12:00.000Z';
 const THREAD = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -57,8 +64,13 @@ test('renderArchiveThread: cała nitka w jednym callout — nagłówek, obie wia
   assert.ok(out.includes('by @kacper_'));
 });
 
+test('renderArchiveThread: blok kończy się markerem wątku (po nim rozpoznajemy duplikat)', () => {
+  const out = renderArchiveThread([msg()], 'kacper');
+  assert.ok(out.endsWith(`> ${archiveThreadMarker(THREAD)}`));
+});
+
 // appendToArchive jest publiczna, bo używa jej też close.mjs (druga ścieżka domknięcia).
-test('appendToArchive: tworzy katalog i plik miesiąca z nagłówkiem, drugi zapis tylko dopisuje', async () => {
+test('appendToArchive: tworzy katalog i plik miesiąca z nagłówkiem, drugi WĄTEK dopisywany', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-'));
   const dir = path.join(tmp, 'Zasoby/inbox-archive');
 
@@ -68,13 +80,62 @@ test('appendToArchive: tworzy katalog i plik miesiąca z nagłówkiem, drugi zap
   assert.ok(first.startsWith('---\ntags: [archiwum, team-os]\n---'));
   assert.ok(first.includes('Baner na live sierpniowy'));
 
-  await appendToArchive(dir, [msg({ title: 'Druga nitka' })], 'kacper');
+  const other = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  await appendToArchive(dir, [msg({ thread_id: other, title: 'Druga nitka' })], 'kacper');
   const second = await fs.readFile(file, 'utf8');
   // Nagłówek pliku dokładany TYLKO przy tworzeniu — inaczej front-matter powtarzałby się.
   assert.equal(second.match(/tags: \[archiwum, team-os\]/g).length, 1);
+  assert.ok(second.includes('Baner na live sierpniowy'));
   assert.ok(second.includes('Druga nitka'));
+  // Dwa niezależne bloki, kolejność zapisu zachowana.
+  assert.ok(second.indexOf('Baner na live sierpniowy') < second.indexOf('Druga nitka'));
 
   await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('appendToArchive: powtórny zapis TEGO SAMEGO wątku podmienia blok — jedna kopia, treść nowsza', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-dup-'));
+  const dir = path.join(tmp, 'Zasoby/inbox-archive');
+  const file = archivePath(dir);
+
+  const task = msg();
+  await appendToArchive(dir, [task], 'kacper');
+
+  // Domknięcie etapami: druga runda zna JUŻ odpowiedź, więc nitka jest dłuższa.
+  const reply = msg({
+    id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', type: 'reply',
+    from_user: 'kacper', to_user: 'marcin',
+    title: 'Re: Baner na live sierpniowy', content: 'Zrobione ✅',
+  });
+  await appendToArchive(dir, [task, reply], 'kacper');
+
+  const out = await fs.readFile(file, 'utf8');
+  assert.equal((out.match(new RegExp(archiveThreadMarker(THREAD).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);
+  assert.equal((out.match(/Baner na live sierpniowy/g) || []).length, 1);
+  assert.ok(out.includes('Zrobione ✅'), 'nowsza wersja nitki wygrywa');
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('appendToArchive: wpis sprzed zmiany (bez markera) zostaje nietknięty, nowy dopisany', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-legacy-'));
+  const dir = path.join(tmp, 'Zasoby/inbox-archive');
+  const file = archivePath(dir);
+  await fs.mkdir(dir, { recursive: true });
+  const legacy = '---\ntags: [archiwum, team-os]\n---\n\n> [!note]- 📝 @marcin → @kacper\n> **Zadanie:** Stary wpis\n\n';
+  await fs.writeFile(file, legacy, 'utf8');
+
+  await appendToArchive(dir, [msg()], 'kacper');
+
+  const out = await fs.readFile(file, 'utf8');
+  assert.ok(out.startsWith(legacy), 'stary wpis bez markera nietknięty');
+  assert.ok(out.includes(archiveThreadMarker(THREAD)));
+});
+
+test('replaceArchiveThreadBlock: brak markera w treści = null (sygnał „dopisz na końcu")', () => {
+  assert.equal(replaceArchiveThreadBlock('> [!note]- coś\n', THREAD, 'x'), null);
+  // Brak thread_id (rekord bez wątku) też nie ma czego szukać.
+  assert.equal(replaceArchiveThreadBlock(`> ${archiveThreadMarker(THREAD)}\n`, null, 'x'), null);
 });
 
 test('appendToArchive: niezapisywalny katalog archiwum rzuca (error case)', async () => {

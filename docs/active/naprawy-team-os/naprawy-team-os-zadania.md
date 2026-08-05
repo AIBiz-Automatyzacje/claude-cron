@@ -202,13 +202,13 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U6 — Frontmatter Skrzynki domergowuje się przy każdym pull *(R12, nakład M, zależności: brak)*
 
-- [ ] Modyfikuj `scripts/inbox/inbox-pull.mjs` — merge brakujących kluczy z `SKRZYNKA_TEMPLATE:197` (`cssclasses`, `tags`) bez ruszania wartości już obecnych
-- [ ] Modyfikuj `scripts/inbox/inbox-pull.test.mjs`
-- [ ] Test: plik bez `cssclasses` → po pullu ma `cssclasses: [skrzynka]`
-- [ ] Test: plik z własnym kluczem w frontmatterze → klucz przetrwał
-- [ ] Test: plik z `cssclasses` o innej wartości → wartość **nie jest** nadpisana
-- [ ] Test: plik bez frontmattera → dostaje pełny blok z szablonu
-- [ ] Test: roundtrip push↔pull dalej przechodzi (regresja kontraktu markerów)
+- [x] Modyfikuj `scripts/inbox/inbox-pull.mjs` — merge brakujących kluczy z `SKRZYNKA_TEMPLATE:197` (`cssclasses`, `tags`) bez ruszania wartości już obecnych
+- [x] Modyfikuj `scripts/inbox/inbox-pull.test.mjs`
+- [x] Test: plik bez `cssclasses` → po pullu ma `cssclasses: [skrzynka]`
+- [x] Test: plik z własnym kluczem w frontmatterze → klucz przetrwał
+- [x] Test: plik z `cssclasses` o innej wartości → wartość **nie jest** nadpisana
+- [x] Test: plik bez frontmattera → dostaje pełny blok z szablonu
+- [x] Test: roundtrip push↔pull dalej przechodzi (regresja kontraktu markerów)
 - [ ] Weryfikacja: `node --test scripts/inbox/inbox-pull.test.mjs` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 
@@ -216,14 +216,14 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U7 — Archiwum bez duplikatów: marker + podmiana bloku *(R8, nakład M, zależności: U5)*
 
-- [ ] Modyfikuj `scripts/inbox/inbox-push.mjs` — `renderArchiveThread:74` emituje marker `%% thread:<id> %%` (**dziś go nie ma** — marker żyje wyłącznie w renderze Skrzynki)
-- [ ] Modyfikuj `scripts/inbox/inbox-push.mjs` — `appendToArchive:94`: wczytaj plik miesiąca, znajdź blok po `thread_id`, **podmień** jeśli jest, dopisz jeśli nie ma
-- [ ] Modyfikuj `scripts/inbox/inbox-push.test.mjs`
-- [ ] Test: pierwszy zapis wątku → jeden blok z markerem
-- [ ] Test: drugi zapis tego samego wątku (więcej wiadomości) → **dalej jeden blok**, treść nowsza
-- [ ] Test: drugi wątek → dwa niezależne bloki, kolejność zachowana
-- [ ] Test: plik z blokiem bez markera (sprzed zmiany) → nowy zapis dokłada blok, stary nietknięty
-- [ ] Test: plik miesiąca nie istnieje → tworzony z nagłówkiem, jak dziś
+- [x] Modyfikuj `scripts/inbox/inbox-push.mjs` — `renderArchiveThread:74` emituje marker `%% thread:<id> %%` (**dziś go nie ma** — marker żyje wyłącznie w renderze Skrzynki)
+- [x] Modyfikuj `scripts/inbox/inbox-push.mjs` — `appendToArchive:94`: wczytaj plik miesiąca, znajdź blok po `thread_id`, **podmień** jeśli jest, dopisz jeśli nie ma
+- [x] Modyfikuj `scripts/inbox/inbox-push.test.mjs`
+- [x] Test: pierwszy zapis wątku → jeden blok z markerem
+- [x] Test: drugi zapis tego samego wątku (więcej wiadomości) → **dalej jeden blok**, treść nowsza
+- [x] Test: drugi wątek → dwa niezależne bloki, kolejność zachowana
+- [x] Test: plik z blokiem bez markera (sprzed zmiany) → nowy zapis dokłada blok, stary nietknięty
+- [x] Test: plik miesiąca nie istnieje → tworzony z nagłówkiem, jak dziś
 - [ ] Weryfikacja: `node --test scripts/inbox/inbox-push.test.mjs` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 
@@ -234,17 +234,17 @@ Szablon rund testowych: `Zadania/projekty/personal-team-os/szablon-testow-team-o
 
 ### U8 — Job „Puls — kontrola spójności" + `/onboard --refresh-theme` *(R13, R15, nakład L, zależności: U1, U6)*
 
-- [ ] Stwórz `scripts/consistency-check.mjs` — dwie kontrole w jednym jobie: wersja kodu (z U1) i zgodność snippetu CSS z szablonem w pluginie
-- [ ] Stwórz `scripts/consistency-check.test.mjs`
-- [ ] Modyfikuj `lib/starter-jobs.js` / `templates/starter-jobs.json` — seed joba (`routine=1`, wzór z `lib/inbox-seed.js`: nigdy `updateJob`)
-- [ ] Implementuj wystawianie zadania: **komenda naprawcza w treści**, `termin:` w frontmatterze, rozpoznawanie „już wisi" po **ukrytym znaczniku**, nie po tytule
-- [ ] Modyfikuj `<aibiz-plugin>/plugins/aibiz/skills/onboard/SKILL.md` — tryb `--refresh-theme` (kopiuje snippety + włącza w Fragmentach CSS + dopisuje `cssclasses`)
-- [ ] Test: snippet zgodny i wersja aktualna → **brak zadania**
-- [ ] Test: snippet rozjechany → jedno zadanie, w treści komenda naprawcza, w frontmatterze `termin:`
-- [ ] Test: drugi przebieg przy niezmienionym rozjeździe → **brak drugiego zadania**
-- [ ] Test: zmieniony tytuł istniejącego zadania → rozpoznane po znaczniku, brak duplikatu
-- [ ] Test: rozjazd naprawiony → kolejny przebieg nie tworzy nic nowego
-- [ ] Test: brak szablonu w pluginie (Puls bez pluginu) → job kończy się cicho, bez błędu
+- [x] Stwórz `scripts/consistency-check.mjs` — dwie kontrole w jednym jobie: wersja kodu (z U1) i zgodność snippetu CSS z szablonem w pluginie
+- [x] Stwórz `scripts/consistency-check.test.mjs`
+- [x] Modyfikuj `lib/starter-jobs.js` / `templates/starter-jobs.json` — seed joba (`routine=1`, wzór z `lib/inbox-seed.js`: nigdy `updateJob`)
+- [x] Implementuj wystawianie zadania: **komenda naprawcza w treści**, `termin:` w frontmatterze, rozpoznawanie „już wisi" po **ukrytym znaczniku**, nie po tytule
+- [ ] Modyfikuj `<aibiz-plugin>/plugins/aibiz/skills/onboard/SKILL.md` — tryb `--refresh-theme` (kopiuje snippety + włącza w Fragmentach CSS + dopisuje `cssclasses`) — **przeniesione do U12 (Faza 5)**: ten sam plik pluginu zespołowego modyfikuje U12, a scope U8 zakazuje dotykania pluginu. Nazwa trybu jest już stałą `THEME_FIX_COMMAND` w `scripts/consistency-check.mjs` i trafia do treści zadania.
+- [x] Test: snippet zgodny i wersja aktualna → **brak zadania**
+- [x] Test: snippet rozjechany → jedno zadanie, w treści komenda naprawcza, w frontmatterze `termin:`
+- [x] Test: drugi przebieg przy niezmienionym rozjeździe → **brak drugiego zadania**
+- [x] Test: zmieniony tytuł istniejącego zadania → rozpoznane po znaczniku, brak duplikatu
+- [x] Test: rozjazd naprawiony → kolejny przebieg nie tworzy nic nowego
+- [x] Test: brak szablonu w pluginie (Puls bez pluginu) → job kończy się cicho, bez błędu
 - [ ] Weryfikacja: `node --test scripts/consistency-check.test.mjs` przechodzi
 - [ ] Weryfikacja: `npm test` przechodzi w całości
 
