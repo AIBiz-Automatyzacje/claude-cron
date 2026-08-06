@@ -118,7 +118,8 @@ test('close.mjs i inbox-push archiwizują ten sam wątek → dokładnie jeden bl
   const closeClient = {
     // Snapshot sprzed domknięcia: sam task, jeszcze otwarty.
     pull: async () => ({ v: 1, user: 'alicja', threadRows: [{ ...task, status: 'delivered' }] }),
-    done: async () => ({ v: 1, result: 'closed' }),
+    // Wątek startuje od `task`, więc prawdziwy hub odpowie 'replied', nie 'closed'.
+    done: async () => ({ v: 1, result: 'replied' }),
   };
   await closeMain({ client: closeClient, argv: ['node', 'close.mjs', '--thread-id', THREAD] });
   // Kontrola pośrednia: bez niej test przeszedłby też wtedy, gdyby `close` w ogóle

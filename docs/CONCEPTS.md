@@ -96,6 +96,15 @@ długich = `max(1, limit-1)`). Nie jest to slot „dla ważnych jobów", tylko g
 (inbox sync co minutę) nie czeka za kwadransowym. Przy limicie 1 rezerwy nie ma z czego zrobić.
 → [CLAUDE.md § `scheduler.js`](../CLAUDE.md)
 
+## Stan aktualizacji
+
+Czterowartościowy, **rozłączny** kontrakt panelu aktualizacji: `current` / `available` /
+`unknown` (nie znam rewizji lokalnej — instalacja bez `data/version.json`) / `check_failed`
+(pad API GitHuba). Kontrintuicyjne: „nie wiem" i „nie udało się sprawdzić" **nie mogą** zwijać się
+do „masz aktualne" — fałszywa zieleń uczy usera, że sygnał kłamie. Wersję lokalną czytamy z
+`data/version.json`, nie z gita (instalacja zipowa nie ma repozytorium).
+→ [CLAUDE.md § Architektura backendu](../CLAUDE.md)
+
 ## Wake
 
 Trigger runu dla joba przegapionego podczas downtime'u maszyny (sen Maca, restart). Kolejkowany po

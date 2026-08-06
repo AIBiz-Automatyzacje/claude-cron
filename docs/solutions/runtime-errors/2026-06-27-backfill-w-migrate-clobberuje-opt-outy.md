@@ -59,10 +59,10 @@ Dwie pułapki przy implementacji:
 
 ```bash
 # Czy backfill już się odpalił (flaga powinna istnieć po 1. starcie)
-sqlite3 data/cron.db "SELECT * FROM state WHERE key = 'wake_backfill_done';"
+sqlite3 data/claude-cron.db "SELECT * FROM state WHERE key = 'wake_backfill_done';"
 
 # Czy jakiś opt-out został clobberowany (po restarcie wszystko = 1 = podejrzane)
-sqlite3 data/cron.db "SELECT id, name, run_on_wake FROM jobs;"
+sqlite3 data/claude-cron.db "SELECT id, name, run_on_wake FROM jobs;"
 
 # Test regresji: dwa wywołania migrate() na tym samym połączeniu nie nadpisują ręcznego 0
 node --test lib/db.test.js
@@ -77,6 +77,7 @@ node --test lib/db.test.js
 ## Powiązane
 
 - `docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md` — inny przypadek cichej regresji w warstwie SQLite (granica doby/grupy bez błędu).
+- `docs/solutions/runtime-errors/2026-08-05-migracja-fail-fast-w-getdb-blokuje-wlasne-lekarstwo.md` — druga strona tej samej monety: skoro `migrate()` biegnie co boot w ścieżce otwarcia połączenia, to `throw` na stanie DANYCH ubija także kod naprawiający ten stan (tam za mało działania nie jest problemem — problemem jest za twarde zatrzymanie).
 
 ## Kontekst
 

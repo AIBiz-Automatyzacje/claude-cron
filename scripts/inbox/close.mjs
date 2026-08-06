@@ -100,7 +100,12 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
   for (const row of mine) {
     const action = row.type === 'task' ? 'Zrobione' : 'Zapoznane';
     const res = await client.done({ id: row.id, action });
-    if (res.result === 'closed' || res.result === 'already_done') closed++;
+    // Hub zwraca RÓŻNE wyniki dla domknięcia: 'replied' (task + Zrobione — dokłada
+    // automatyczne „Zrobione ✅" do nadawcy), 'closed' (Zapoznane) i 'already_done'
+    // (rekord już domknięty). Wszystkie trzy znaczą „ta wiadomość jest zamknięta" —
+    // liczenie samego 'closed' raportowało `closed: 0` przy poprawnie zamkniętych
+    // ZADANIACH, a atrapy zwracające 'closed' na każdą akcję trzymały testy na zielono.
+    if (res.result === 'closed' || res.result === 'replied' || res.result === 'already_done') closed++;
   }
 
   const out = { thread_id: threadId, closed, archived: true };

@@ -45,7 +45,11 @@ function fakeHub(rows) {
       if (!target) return { v: 1, result: 'not_found' };
       if (target.status === 'done') return { v: 1, result: 'already_done' };
       target.status = 'done';
-      return { v: 1, result: 'closed', thread: state.map((r) => ({ ...r })) };
+      // Wierność atrapy jest tu kontraktem, nie kosmetyką: prawdziwy hub (`markDone`
+      // w lib/inbox-db.js) zwraca 'replied' dla task+Zrobione i 'closed' dla Zapoznane.
+      // Atrapa zwracająca 'closed' na wszystko ukrywała błąd liczenia w close.mjs.
+      const result = action === 'Zrobione' ? 'replied' : 'closed';
+      return { v: 1, result, thread: state.map((r) => ({ ...r })) };
     },
   };
 }
@@ -147,6 +151,21 @@ test('close na query: akcja Zapoznane — nikt nie czeka na potwierdzenie wykona
   await main({ client: hub, argv: ['node', 'close.mjs', '--thread-id', THREAD] });
 
   assert.deepEqual(hub.calls.done, [{ id: MSG_ID, action: 'Zapoznane' }]);
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('close na task: hub odpowiada "replied", a raport MUSI liczyć to jako domknięte', async () => {
+  // Regresja: liczyliśmy wyłącznie 'closed', więc poprawnie zamknięte ZADANIE
+  // raportowało `closed: 0` — nieodróżnialnie od „nic się nie stało".
+  const tmp = await withEnv();
+  const hub = fakeHub([row({ type: 'task', title: 'Nagraj lekcję o n8n' })]);
+
+  const out = await main({ client: hub, argv: ['node', 'close.mjs', '--thread-id', THREAD] });
+
+  assert.deepEqual(hub.calls.done, [{ id: MSG_ID, action: 'Zrobione' }]);
+  assert.equal(out.closed, 1, 'task domknięty przez hub musi być policzony');
+  assert.equal(out.archived, true);
 
   await fs.rm(tmp, { recursive: true, force: true });
 });

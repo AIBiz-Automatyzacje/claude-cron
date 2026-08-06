@@ -457,6 +457,11 @@ async function pollUpdateProgress() {
   if (!updateWatch) return;
   try {
     const status = await fetch('/api/status').then(r => r.json());
+    // Guard PO awaicie, nie tylko przed: interwał tyka co 5 s, a w trakcie restartu
+    // serwera pojedynczy fetch trwa dłużej — więc kolejny tick wchodzi tu, zanim
+    // poprzedni skończy. Oba przeszły guard na wejściu, oba dobiegają do
+    // finishUpdateWatch, a drugie trafia już na `updateWatch === null`.
+    if (!updateWatch) return;
     const revision = status && status.version ? status.version.revision : '';
     if (revisionsMatch(revision, updateWatch.target)) {
       finishUpdateWatch(`Zaktualizowano do ${shortRevision(revision)}. Odśwież stronę, żeby wczytać nowy panel.`);
@@ -464,6 +469,9 @@ async function pollUpdateProgress() {
     }
   } catch { /* serwer w trakcie restartu — to spodziewane, czekamy dalej */ }
 
+  // Ta linia stoi POZA `try`, więc odczyt `updateWatch.startedAt` na null-u wypadłby
+  // jako nieobsłużona odrzucona obietnica, nie jako złapany błąd.
+  if (!updateWatch) return;
   if (Date.now() - updateWatch.startedAt > UPDATE_TIMEOUT_MS) {
     finishUpdateWatch('Aktualizacja nie powiodła się — Puls nie wrócił z nową wersją. Sprawdź logi albo uruchom instalator ręcznie.');
   }
@@ -474,6 +482,10 @@ async function pollUpdateProgress() {
 // o odświeżenie strony, a po niepowodzeniu skasowałaby komunikat o niepowodzeniu.
 // Status `done` jest widoczny (nie `current`) i bez przycisku (`can_update:false`).
 function finishUpdateWatch(message) {
+  // Idempotentne: dwa równoległe polle mogą dobiec tu obydwa (patrz guard po awaicie
+  // w pollUpdateProgress). Drugie wejście ma być no-opem, nie TypeError-em na
+  // `updateWatch.timer` — inaczej użytkownik widzi błąd mimo UDANEJ aktualizacji.
+  if (!updateWatch) return;
   clearInterval(updateWatch.timer);
   updateWatch = null;
   updateInfo = { ...(updateInfo || {}), status: 'done', can_update: false, message };
