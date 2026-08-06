@@ -226,6 +226,42 @@ test('4xx: 403 zły token → czytelny błąd, bez retry', async () => {
   assert.equal(calls.length, 1);
 });
 
+// Odpowiedź błędu z czytelnym ciałem — hub odsyła powód i podpowiedź, klient ma je pokazać.
+function errorResponse(status, rawBody) {
+  return { ok: false, status, text: async () => rawBody };
+}
+
+test('4xx: nieznany adresat → komunikat niesie powód I listę członków (nie samo „HTTP 400")', async () => {
+  // Regresja z retestu T11B: hub odsyłał {error, members}, a klient rzucał gołym kodem
+  // statusu — użytkownik musiał zgadywać, jaki nick jest poprawny.
+  mockFetch([{ response: errorResponse(400, JSON.stringify({ v: 1, error: 'unknown_recipient', members: ['kacper', 'Cave'] })) }]);
+  await assert.rejects(send({ to_user: 'cav', type: 'task', title: 'T' }), (err) => {
+    assert.match(err.message, /unknown_recipient/);
+    assert.match(err.message, /kacper, Cave/);
+    return true;
+  });
+});
+
+test('4xx: ciało nie-JSON (np. strona z proxy) trafia do komunikatu, przycięte', async () => {
+  mockFetch([{ response: errorResponse(413, 'x'.repeat(500)) }]);
+  await assert.rejects(pull(), (err) => {
+    assert.match(err.message, /413/);
+    assert.ok(err.message.length < 320, `komunikat nieprzycięty: ${err.message.length} znaków`);
+    return true;
+  });
+});
+
+test('4xx: pad odczytu ciała NIE psuje obsługi błędu — zostaje sam kod statusu', async () => {
+  // Odczyt ciała jest dodatkiem diagnostycznym; jego awaria nie może zamienić czytelnej
+  // odmowy w nieobsłużony wyjątek.
+  mockFetch([{ response: { ok: false, status: 403, text: async () => { throw new Error('strumień ucięty'); } } }]);
+  await assert.rejects(pull(), (err) => {
+    assert.ok(err instanceof InboxClientError);
+    assert.match(err.message, /403/);
+    return true;
+  });
+});
+
 // === Brak konfiguracji: czytelny błąd dla KAŻDEJ metody publicznej ===
 
 const methods = [

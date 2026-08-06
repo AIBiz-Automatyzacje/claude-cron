@@ -22,6 +22,9 @@ const REQUEST_TIMEOUT_MS = 15_000;
 // 1 próba + 1 retry = 2 (wymaganie: „1 retry na timeout/5xx"). Stosowane wyłącznie do
 // akcji idempotentnych — `send` przekazuje `retry:false` (patrz nagłówek modułu).
 const MAX_ATTEMPTS = 2;
+// Cap na surowe ciało błędu w komunikacie — proxy potrafi odesłać stronę HTML, a komunikat
+// ma zmieścić się w jednej linii logu/odpowiedzi skilla.
+const MAX_ERROR_BODY_LEN = 200;
 
 // Typowany błąd klienta — czytelny komunikat dla operatora zamiast kryptycznego fetch-error.
 export class InboxClientError extends Error {
@@ -97,8 +100,14 @@ async function attemptRequest({ url, action, method, body }) {
   }
 
   // 4xx — trwała odmowa (zły token, walidacja, rate limit). Retry nic nie da.
+  //
+  // Ciało odpowiedzi MUSI trafić do komunikatu: hub przy nieznanym adresacie odsyła
+  // `{error:'unknown_recipient', members:[…]}`, czyli gotową podpowiedź „chciałeś kogoś z tych".
+  // Gołe „HTTP 400" kazało człowiekowi zgadywać, jaki nick jest poprawny — sygnał porażki był,
+  // ale bez treści (T11B, 06.08). Odczyt ciała nie może wywrócić obsługi błędu, więc pad
+  // parsowania i puste ciało schodzą cicho do samego kodu statusu.
   if (!res.ok) {
-    throw new InboxClientError(`Hub Team OS odrzucił żądanie "${action}" (HTTP ${res.status}).`);
+    throw new InboxClientError(`Hub Team OS odrzucił żądanie "${action}" (HTTP ${res.status})${await describeErrorBody(res)}.`);
   }
 
   let data;
@@ -111,6 +120,33 @@ async function attemptRequest({ url, action, method, body }) {
   }
   assertVersion(data, action);
   return { data };
+}
+
+// Dopisek do komunikatu błędu 4xx złożony z ciała odpowiedzi huba. Zwraca pusty string,
+// gdy nie ma czego powiedzieć — wywołujący skleja go bezwarunkowo.
+// `members` rozwijamy do listy nicków, bo to jedyna informacja, która pozwala poprawić
+// literówkę bez zaglądania do dashboardu.
+async function describeErrorBody(res) {
+  let raw;
+  try {
+    raw = await res.text();
+  } catch {
+    return '';
+  }
+  if (!raw) return '';
+
+  try {
+    const body = JSON.parse(raw);
+    const parts = [];
+    if (body.error) parts.push(String(body.error));
+    if (Array.isArray(body.members) && body.members.length > 0) {
+      parts.push(`znani członkowie: ${body.members.join(', ')}`);
+    }
+    if (parts.length > 0) return ` — ${parts.join('; ')}`;
+  } catch {
+    // Nie-JSON (np. plain text z proxy) — pokaż surowo, przycięte.
+  }
+  return ` — ${raw.slice(0, MAX_ERROR_BODY_LEN)}`;
 }
 
 // Rdzeń: buduje URL, wykonuje próby z 1 retry na awarie retryowalne, zwraca sparsowany
