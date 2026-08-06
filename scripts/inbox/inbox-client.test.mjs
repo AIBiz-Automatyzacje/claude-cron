@@ -246,7 +246,30 @@ test('4xx: ciało nie-JSON (np. strona z proxy) trafia do komunikatu, przycięte
   mockFetch([{ response: errorResponse(413, 'x'.repeat(500)) }]);
   await assert.rejects(pull(), (err) => {
     assert.match(err.message, /413/);
-    assert.ok(err.message.length < 320, `komunikat nieprzycięty: ${err.message.length} znaków`);
+    // Dokładnie MAX_ERROR_BODY_LEN znaków ciała — nie mniej (nie pomijamy treści)
+    // i nie więcej (przycięcie działa). Sama długość komunikatu przeszłaby też wtedy,
+    // gdyby implementacja ciało całkowicie zignorowała.
+    assert.match(err.message, /— x{200}\.$/);
+    return true;
+  });
+});
+
+test('4xx: token z ciała odpowiedzi NIE wycieka do komunikatu', async () => {
+  // Proxy po drodze (404/502) rutynowo cytuje ścieżkę żądania, a token siedzi właśnie
+  // w ścieżce — surowy przedruk oddałby sekret do logu joba i odpowiedzi skilla.
+  mockFetch([{ response: errorResponse(404, `Cannot POST /inbox/v1/${TOKEN}/pull`) }]);
+  await assert.rejects(pull(), (err) => {
+    assert.ok(!err.message.includes(TOKEN), `token w komunikacie: ${err.message}`);
+    assert.match(err.message, /\*\*\*/);
+    return true;
+  });
+});
+
+test('5xx: komunikat po wyczerpaniu retry niesie powód z ciała, nie sam kod', async () => {
+  mockFetch([{ response: errorResponse(502, JSON.stringify({ v: 1, error: 'hub_offline' })) }]);
+  await assert.rejects(pull(), (err) => {
+    assert.match(err.message, /502/);
+    assert.match(err.message, /hub_offline/);
     return true;
   });
 });
