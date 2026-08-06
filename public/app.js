@@ -33,7 +33,7 @@ const { computeWeekOccurrences, startOfWeek } = RenderHelpers;
 const { overlapsMaintenanceWindow } = RenderHelpers;
 const { validateMemberName, memberRowData } = RenderHelpers;
 const { runningRunsFrom, activeRunRows, activeRunsSignature } = RenderHelpers;
-const { shortRevision, revisionsMatch, updateBarView } = RenderHelpers;
+const { shortRevision, revisionsMatch, updateBarView, sysbarView } = RenderHelpers;
 
 let zadaniaView = 'lista'; // 'lista' | 'kalendarz'
 
@@ -364,23 +364,29 @@ function renderKillBar(status) {
 // Pole `vps_url` może NIE ISTNIEĆ, gdy patrzymy przez proxy na starszą instancję VPS —
 // wtedy pasek po prostu znika, zamiast wywalić render całego statbara.
 function renderVpsAddr(status) {
-  const box = document.getElementById('vps-addr');
-  if (!box) return;
-  const info = status.vps_url || null;
-  const inUse = info && typeof info.in_use === 'string' ? info.in_use : '';
-  const saved = info && typeof info.persisted === 'string' ? info.persisted : '';
+  const bar = document.getElementById('sysbar');
+  if (!bar) return;
+  const view = sysbarView(status);
 
-  // Bez skonfigurowanego VPS-a (obie wartości puste) pasek nie ma co mówić.
-  if (!info || (!inUse && !saved)) {
-    box.hidden = true;
-    return;
-  }
+  document.getElementById('sysbar-version').textContent = view.versionText;
+  document.getElementById('sysbar-vps').hidden = view.vpsHidden;
+  document.getElementById('sysbar-vps-addr').textContent = view.vpsText;
+  document.getElementById('vps-addr-inuse').textContent = view.inUseText;
+  document.getElementById('vps-addr-saved').textContent = view.savedText;
+  document.getElementById('sysbar-installed').textContent = view.installedText;
+  document.getElementById('sysbar-source').textContent = view.sourceText;
+  document.getElementById('vps-addr-warn').hidden = view.warnHidden;
+}
 
-  box.hidden = false;
-  // „nie wiem" (null) rozróżnione od „pusty adres" — nieczytelne źródło nigdy nie udaje wartości.
-  document.getElementById('vps-addr-inuse').textContent = inUse || '(brak)';
-  document.getElementById('vps-addr-saved').textContent = saved || 'nie udało się odczytać';
-  document.getElementById('vps-addr-warn').hidden = info.mismatch !== true;
+// Rozwinięcie szczegółów. Stan trzymamy w atrybucie `aria-expanded` przycisku, nie w osobnej
+// zmiennej — polling co 3 s przerysowuje pasek, a druga kopia stanu rozjechałaby się z DOM-em.
+function toggleSysbar() {
+  const toggle = document.getElementById('sysbar-toggle');
+  const details = document.getElementById('sysbar-details');
+  if (!toggle || !details) return;
+  const open = toggle.getAttribute('aria-expanded') === 'true';
+  toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+  details.hidden = open;
 }
 
 // === Aktualizacja Pulsa (R10) ===
@@ -412,14 +418,15 @@ async function loadUpdateStatus() {
 }
 
 function renderUpdateBar() {
-  const bar = document.getElementById('update-bar');
-  if (!bar || !updateInfo) return;
+  const msg = document.getElementById('update-msg');
+  const btn = document.getElementById('update-btn');
+  if (!msg || !btn || !updateInfo) return;
   const view = updateBarView(updateInfo, updateWatch);
 
-  document.getElementById('update-local').textContent = view.localText;
-  document.getElementById('update-msg').textContent = view.message;
-  bar.hidden = view.hidden;
-  document.getElementById('update-btn').hidden = view.buttonHidden;
+  msg.textContent = view.message;
+  // Przycisk dotyczy ZAWSZE maszyny lokalnej (patrz komentarz nad UPDATE_POLL_MS), więc
+  // w widoku VPS-a znika: klik aktualizowałby inną maszynę, niż ta na ekranie.
+  btn.hidden = view.buttonHidden || currentEnv === 'vps';
 }
 
 async function startPulsUpdate() {

@@ -8,7 +8,7 @@ const {
   validateMemberName, memberRowData, MEMBER_NAME_MAX,
   isTabAvailable, resolveVisibleTab,
   runningRunsFrom, formatElapsed, activeRunRows, activeRunsSignature,
-  shortRevision, revisionsMatch, updateBarView,
+  shortRevision, revisionsMatch, updateBarView, sysbarView, hostOf,
 } = require('./render-helpers');
 
 const MAINTENANCE_WINDOW = { startHour: 2, startMin: 0, endHour: 2, endMin: 15 };
@@ -537,29 +537,26 @@ test('pollSignature: start drugiego równoległego runu zmienia podpis (R2)', ()
 
 // === Pasek aktualizacji (R10) ===
 
-test('updateBarView: „masz najnowszą" chowa pasek i przycisk', () => {
+test('updateBarView: „masz najnowszą" milczy — wersja stoi obok, zdanie o niej to szum', () => {
   const view = updateBarView({ status: 'current', can_update: false, local_revision: 'abcdef1234', message: 'Masz najnowszą wersję.' });
-  assert.equal(view.hidden, true);
+  assert.equal(view.message, '');
   assert.equal(view.buttonHidden, true);
-  assert.equal(view.localText, 'abcdef1');
 });
 
-test('updateBarView: dostępna nowa wersja pokazuje pasek i przycisk', () => {
+test('updateBarView: dostępna nowa wersja pokazuje komunikat i przycisk', () => {
   const view = updateBarView({ status: 'available', can_update: true, local_revision: 'abcdef1234', message: 'Dostępna nowa wersja (9876543).' });
-  assert.equal(view.hidden, false);
   assert.equal(view.buttonHidden, false);
   assert.match(view.message, /9876543/);
 });
 
-test('updateBarView: wersja `unknown` pokazuje „nieznana", pasek NIE znika', () => {
+test('updateBarView: „nie wiem" NIE jest wyciszane — to stan wymagający reakcji', () => {
   const view = updateBarView({ status: 'unknown', can_update: true, local_revision: 'unknown', message: 'Nie wiem…' });
-  assert.equal(view.hidden, false);
-  assert.equal(view.localText, 'nieznana');
+  assert.equal(view.message, 'Nie wiem…');
 });
 
 test('updateBarView: pad sprawdzenia jest widoczny i bez przycisku (panel nie wisi)', () => {
   const view = updateBarView({ status: 'check_failed', can_update: false, local_revision: 'abcdef1234', message: 'Nie udało się sprawdzić.' });
-  assert.equal(view.hidden, false);
+  assert.equal(view.message, 'Nie udało się sprawdzić.');
   assert.equal(view.buttonHidden, true);
 });
 
@@ -568,7 +565,55 @@ test('updateBarView: trwająca aktualizacja wygrywa ze starym stanem „dostępn
   const view = updateBarView(info, { message: 'Aktualizuję…' });
   assert.equal(view.message, 'Aktualizuję…');
   assert.equal(view.buttonHidden, true); // drugie kliknięcie w trakcie restartu = podwójna aktualizacja
-  assert.equal(view.hidden, false);
+});
+
+// === Pasek systemowy: wersja + adres VPS (R7 + R10) ===
+
+test('sysbarView: wersja widoczna także przy stanie „wszystko aktualne"', () => {
+  // Sedno zmiany: poprzedni pasek chował się przy `current`, a tabelę wersji w rundzie
+  // testowej wypełnia się DOKŁADNIE wtedy, gdy nie ma żadnego problemu.
+  const view = sysbarView({ version: { revision: 'abcdef1234567890', source: 'git', installed_at: '2026-08-06T07:33:54.825Z' } });
+  assert.equal(view.versionText, 'abcdef1');
+  assert.equal(view.sourceText, 'git');
+  assert.equal(view.installedText, '2026-08-06T07:33:54.825Z');
+});
+
+test('sysbarView: brak pliku wersji → „nieznana", nigdy pusty napis', () => {
+  assert.equal(sysbarView({}).versionText, 'nieznana');
+  assert.equal(sysbarView({ version: { revision: 'unknown' } }).versionText, 'nieznana');
+  assert.equal(sysbarView(null).versionText, 'nieznana');
+});
+
+test('sysbarView: nagłówek pokazuje SAM host, szczegóły pełne adresy', () => {
+  const view = sysbarView({
+    version: { revision: 'abcdef1234567890' },
+    vps_url: { in_use: 'http://100.122.215.61:7777', persisted: 'http://100.122.215.61:7777', mismatch: false },
+  });
+  assert.equal(view.vpsHidden, false);
+  assert.equal(view.vpsText, '100.122.215.61');
+  assert.equal(view.inUseText, 'http://100.122.215.61:7777');
+  assert.equal(view.warnHidden, true);
+});
+
+test('sysbarView: rozjazd adresu pokazuje ostrzeżenie (widoczne też po zwinięciu)', () => {
+  const view = sysbarView({ vps_url: { in_use: 'http://10.0.0.1:7777', persisted: 'http://10.0.0.2:7777', mismatch: true } });
+  assert.equal(view.warnHidden, false);
+});
+
+test('sysbarView: brak konfiguracji VPS chowa człon adresu, wersja zostaje', () => {
+  // Tak wygląda hub oglądany przez przełącznik: nie proxuje sam do siebie.
+  const view = sysbarView({ version: { revision: 'abcdef1234567890' }, vps_url: { in_use: '', persisted: null, mismatch: false } });
+  assert.equal(view.vpsHidden, true);
+  assert.equal(view.versionText, 'abcdef1');
+  assert.equal(view.savedText, 'nie udało się odczytać', 'null ≠ pusty adres — „nie wiem" nie udaje wartości');
+});
+
+test('hostOf: śmieć w konfiguracji nie wywraca renderu statbara', () => {
+  assert.equal(hostOf('http://1.2.3.4:7777'), '1.2.3.4');
+  assert.equal(hostOf('https://kacper.tail4f19b2.ts.net:8443/x'), 'kacper.tail4f19b2.ts.net');
+  assert.equal(hostOf('to nie jest url'), 'to nie jest url');
+  assert.equal(hostOf(''), '');
+  assert.equal(hostOf(null), '');
 });
 
 test('revisionsMatch: skrócona rewizja lokalna == pełna zdalna; krótszy prefiks nie liczy się', () => {

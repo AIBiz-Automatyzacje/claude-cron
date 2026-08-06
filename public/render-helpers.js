@@ -336,32 +336,57 @@
   // 2) przycisk pojawia się WYŁĄCZNIE przy `can_update === true` (fail-closed);
   // 3) chowamy pasek TYLKO przy `current` — „nie wiem" i „nie udało się sprawdzić"
   //    muszą być widoczne, bo cisza jest nieodróżnialna od „masz najnowszą".
+  // Pasek NIE ma już stanu „schowany": wersja jest widoczna zawsze (patrz komentarz przy
+  // #sysbar w index.html). Zostaje sam komunikat i przycisk.
+  //
+  // Przy stanie `current` komunikat jest PUSTY, nie „masz najnowszą" — skoro wersja stoi
+  // obok, zdanie o jej aktualności jest szumem. Pasek ma milczeć, gdy nie ma nic do zrobienia.
   function updateBarView(info, watch) {
     if (watch) {
-      return {
-        hidden: false,
-        buttonHidden: true,
-        localText: localVersionText(info),
-        message: watch.message || '',
-      };
+      return { buttonHidden: true, message: watch.message || '' };
     }
     const state = info || {};
     return {
-      hidden: state.status === 'current',
       buttonHidden: state.can_update !== true,
-      localText: localVersionText(state),
-      message: state.message || '',
+      message: state.status === 'current' ? '' : (state.message || ''),
     };
   }
 
-  function localVersionText(info) {
-    const revision = (info || {}).local_revision;
-    if (!revision || revision === 'unknown') return 'nieznana';
-    return shortRevision(revision);
+  // Widok paska systemowego dla JEDNEJ instancji — tej, na którą patrzy przełącznik
+  // środowiska. Wersja bierze się ze statusu oglądanej maszyny (nie z /api/update, które
+  // dotyczy zawsze lokalnej), bo tabela wersji w rundzie testowej wymaga odczytu z KAŻDEJ.
+  function sysbarView(status) {
+    const state = status || {};
+    const version = state.version || null;
+    const revision = version && typeof version.revision === 'string' ? version.revision : '';
+    const vps = state.vps_url || null;
+    const inUse = vps && typeof vps.in_use === 'string' ? vps.in_use : '';
+    const saved = vps && typeof vps.persisted === 'string' ? vps.persisted : '';
+
+    return {
+      versionText: !revision || revision === 'unknown' ? 'nieznana' : shortRevision(revision),
+      // Brak konfiguracji VPS (obie wartości puste) = nie ma o czym mówić w nagłówku.
+      vpsHidden: !inUse && !saved,
+      vpsText: hostOf(inUse || saved),
+      // „nie wiem" (null) rozróżnione od „pusty adres" — nieczytelne źródło nigdy nie udaje wartości.
+      inUseText: inUse || '(brak)',
+      savedText: saved || 'nie udało się odczytać',
+      installedText: version && version.installed_at ? version.installed_at : '—',
+      sourceText: version && version.source && version.source !== 'unknown' ? version.source : '—',
+      warnHidden: !(vps && vps.mismatch === true),
+    };
+  }
+
+  // Sam host do nagłówka — schemat i port to szczegół, który ma siedzieć w rozwinięciu.
+  // Bez `new URL`: wartość pochodzi z env użytkownika i bywa śmieciem, a rzucenie tutaj
+  // wywróciłoby render całego statbara.
+  function hostOf(url) {
+    const match = String(url || '').match(/^[a-z][a-z0-9+.-]*:\/\/([^/:?#]+)/i);
+    return match ? match[1] : String(url || '');
   }
 
   const api = {
-    shortRevision, revisionsMatch, updateBarView, REVISION_PREFIX,
+    shortRevision, revisionsMatch, updateBarView, sysbarView, hostOf, REVISION_PREFIX,
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
     parseCronForCalendar, computeWeekOccurrences, startOfWeek, formatHourMinute,
     overlapsMaintenanceWindow,
