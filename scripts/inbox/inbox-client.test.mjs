@@ -226,6 +226,65 @@ test('4xx: 403 zły token → czytelny błąd, bez retry', async () => {
   assert.equal(calls.length, 1);
 });
 
+// Odpowiedź błędu z czytelnym ciałem — hub odsyła powód i podpowiedź, klient ma je pokazać.
+function errorResponse(status, rawBody) {
+  return { ok: false, status, text: async () => rawBody };
+}
+
+test('4xx: nieznany adresat → komunikat niesie powód I listę członków (nie samo „HTTP 400")', async () => {
+  // Regresja z retestu T11B: hub odsyłał {error, members}, a klient rzucał gołym kodem
+  // statusu — użytkownik musiał zgadywać, jaki nick jest poprawny.
+  mockFetch([{ response: errorResponse(400, JSON.stringify({ v: 1, error: 'unknown_recipient', members: ['kacper', 'Cave'] })) }]);
+  await assert.rejects(send({ to_user: 'cav', type: 'task', title: 'T' }), (err) => {
+    assert.match(err.message, /unknown_recipient/);
+    assert.match(err.message, /kacper, Cave/);
+    return true;
+  });
+});
+
+test('4xx: ciało nie-JSON (np. strona z proxy) trafia do komunikatu, przycięte', async () => {
+  mockFetch([{ response: errorResponse(413, 'x'.repeat(500)) }]);
+  await assert.rejects(pull(), (err) => {
+    assert.match(err.message, /413/);
+    // Dokładnie MAX_ERROR_BODY_LEN znaków ciała — nie mniej (nie pomijamy treści)
+    // i nie więcej (przycięcie działa). Sama długość komunikatu przeszłaby też wtedy,
+    // gdyby implementacja ciało całkowicie zignorowała.
+    assert.match(err.message, /— x{200}\.$/);
+    return true;
+  });
+});
+
+test('4xx: token z ciała odpowiedzi NIE wycieka do komunikatu', async () => {
+  // Proxy po drodze (404/502) rutynowo cytuje ścieżkę żądania, a token siedzi właśnie
+  // w ścieżce — surowy przedruk oddałby sekret do logu joba i odpowiedzi skilla.
+  mockFetch([{ response: errorResponse(404, `Cannot POST /inbox/v1/${TOKEN}/pull`) }]);
+  await assert.rejects(pull(), (err) => {
+    assert.ok(!err.message.includes(TOKEN), `token w komunikacie: ${err.message}`);
+    assert.match(err.message, /\*\*\*/);
+    return true;
+  });
+});
+
+test('5xx: komunikat po wyczerpaniu retry niesie powód z ciała, nie sam kod', async () => {
+  mockFetch([{ response: errorResponse(502, JSON.stringify({ v: 1, error: 'hub_offline' })) }]);
+  await assert.rejects(pull(), (err) => {
+    assert.match(err.message, /502/);
+    assert.match(err.message, /hub_offline/);
+    return true;
+  });
+});
+
+test('4xx: pad odczytu ciała NIE psuje obsługi błędu — zostaje sam kod statusu', async () => {
+  // Odczyt ciała jest dodatkiem diagnostycznym; jego awaria nie może zamienić czytelnej
+  // odmowy w nieobsłużony wyjątek.
+  mockFetch([{ response: { ok: false, status: 403, text: async () => { throw new Error('strumień ucięty'); } } }]);
+  await assert.rejects(pull(), (err) => {
+    assert.ok(err instanceof InboxClientError);
+    assert.match(err.message, /403/);
+    return true;
+  });
+});
+
 // === Brak konfiguracji: czytelny błąd dla KAŻDEJ metody publicznej ===
 
 const methods = [

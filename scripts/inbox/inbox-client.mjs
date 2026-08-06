@@ -22,6 +22,9 @@ const REQUEST_TIMEOUT_MS = 15_000;
 // 1 próba + 1 retry = 2 (wymaganie: „1 retry na timeout/5xx"). Stosowane wyłącznie do
 // akcji idempotentnych — `send` przekazuje `retry:false` (patrz nagłówek modułu).
 const MAX_ATTEMPTS = 2;
+// Cap na surowe ciało błędu w komunikacie — proxy potrafi odesłać stronę HTML, a komunikat
+// ma zmieścić się w jednej linii logu/odpowiedzi skilla.
+const MAX_ERROR_BODY_LEN = 200;
 
 // Typowany błąd klienta — czytelny komunikat dla operatora zamiast kryptycznego fetch-error.
 export class InboxClientError extends Error {
@@ -79,7 +82,7 @@ async function fetchWithTimeout(url, { method, body }) {
 
 // Pojedyncza próba. Rozróżnia awarie RETRYOWALNE (timeout/sieć/5xx → {retryable, message})
 // od NIE-retryowalnych (4xx huba, nie-JSON, zła wersja → rzuca InboxClientError natychmiast).
-async function attemptRequest({ url, action, method, body }) {
+async function attemptRequest({ url, action, method, body, token }) {
   let res;
   try {
     res = await fetchWithTimeout(url, { method, body });
@@ -91,14 +94,24 @@ async function attemptRequest({ url, action, method, body }) {
     return { retryable: true, message };
   }
 
-  // 5xx — przejściowy błąd huba/Funnela, retry ma sens (API idempotentne).
-  if (res.status >= 500) {
-    return { retryable: true, message: `hub odpowiedział ${res.status}` };
-  }
-
-  // 4xx — trwała odmowa (zły token, walidacja, rate limit). Retry nic nie da.
+  // Ciało odpowiedzi MUSI trafić do komunikatu: hub przy nieznanym adresacie odsyła
+  // `{error:'unknown_recipient', members:[…]}`, czyli gotową podpowiedź „chciałeś kogoś z tych".
+  // Gołe „HTTP 400" kazało człowiekowi zgadywać, jaki nick jest poprawny — sygnał porażki był,
+  // ale bez treści (T11B, 06.08). Odczyt ciała nie może wywrócić obsługi błędu, więc pad
+  // parsowania i puste ciało schodzą cicho do samego kodu statusu.
+  //
+  // Opis budujemy PRZED rozgałęzieniem 5xx/4xx — powód odmowy jest tak samo potrzebny, gdy
+  // hub zwraca 502 (np. proxy Funnela mówiące, czego nie umie), a retry nic mu nie odbiera.
   if (!res.ok) {
-    throw new InboxClientError(`Hub Team OS odrzucił żądanie "${action}" (HTTP ${res.status}).`);
+    const details = await describeErrorBody(res, token);
+
+    // 5xx — przejściowy błąd huba/Funnela, retry ma sens (API idempotentne).
+    if (res.status >= 500) {
+      return { retryable: true, message: `hub odpowiedział ${res.status}${details}` };
+    }
+
+    // 4xx — trwała odmowa (zły token, walidacja, rate limit). Retry nic nie da.
+    throw new InboxClientError(`Hub Team OS odrzucił żądanie "${action}" (HTTP ${res.status})${details}.`);
   }
 
   let data;
@@ -113,6 +126,47 @@ async function attemptRequest({ url, action, method, body }) {
   return { data };
 }
 
+// Usuwa token z tekstu przeznaczonego dla człowieka. Świadomy bliźniak `redactToken`
+// z onboard.mjs — ten moduł jest self-contained (istnieje jego kopia w vaulcie), więc
+// import przez granicę pakietu jest droższy niż trzy linijki (Duplication > Complexity).
+function redactToken(text, token) {
+  return token ? String(text).split(token).join('***') : String(text);
+}
+
+// Dopisek do komunikatu błędu złożony z ciała odpowiedzi huba. Zwraca pusty string,
+// gdy nie ma czego powiedzieć — wywołujący skleja go bezwarunkowo.
+// `members` rozwijamy do listy nicków, bo to jedyna informacja, która pozwala poprawić
+// literówkę bez zaglądania do dashboardu.
+//
+// Ciało jest NIEZAUFANE: przy 404/502 nie odpowiada nasz hub, tylko proxy po drodze, a te
+// rutynowo cytują ścieżkę żądania — w której siedzi token (`/inbox/v1/:token/pull`). Bez
+// redakcji komunikat wysypałby sekret do logu joba i do odpowiedzi skilla.
+async function describeErrorBody(res, token) {
+  let raw;
+  try {
+    raw = await res.text();
+  } catch {
+    return '';
+  }
+  if (!raw) return '';
+
+  try {
+    const body = JSON.parse(raw);
+    const parts = [];
+    if (body.error) parts.push(String(body.error));
+    if (Array.isArray(body.members) && body.members.length > 0) {
+      parts.push(`znani członkowie: ${body.members.join(', ')}`);
+    }
+    // JSON bez znanych pól: nasz hub ZAWSZE odsyła `error` przy odmowie (lib/inbox-api.js),
+    // więc surowy dump cudzego JSON-a nic nie wnosi poza szumem.
+    return parts.length > 0 ? redactToken(` — ${parts.join('; ')}`, token) : '';
+  } catch {
+    // Nie-JSON (np. strona HTML z proxy) — pokaż surowo, przycięte. Redakcja PRZED
+    // przycięciem: cięcie w połowie tokenu zostawiłoby w komunikacie jego początek.
+    return ` — ${redactToken(raw, token).slice(0, MAX_ERROR_BODY_LEN)}`;
+  }
+}
+
 // Rdzeń: buduje URL, wykonuje próby z 1 retry na awarie retryowalne, zwraca sparsowany
 // obiekt odpowiedzi (z polem `v:1`). NIE dotyka granicy JSON `payload` — hub ją trzyma.
 // `retry:false` (dla nieidempotentnego `send`) wymusza pojedynczą próbę — po awarii
@@ -124,7 +178,7 @@ async function request(action, { method, body, retry = true } = {}) {
   const maxAttempts = retry ? MAX_ATTEMPTS : 1;
   let lastMessage = 'brak odpowiedzi';
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const result = await attemptRequest({ url, action, method, body });
+    const result = await attemptRequest({ url, action, method, body, token });
     if ('data' in result) return result.data;
     lastMessage = result.message;
   }
