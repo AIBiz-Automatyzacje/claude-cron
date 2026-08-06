@@ -50,21 +50,32 @@
       <div class="stat"><span class="stat-label">Uptime</span> <span class="stat-strong" id="stat-uptime">—</span></div>
     </div>
 
-    <!-- Adres VPS w DWÓCH wartościach (R7): używany przez proces vs zapisany w konfiguracji.
-         Ukryty, gdy VPS nie jest w ogóle skonfigurowany. -->
-    <div class="statbar vps-addr" id="vps-addr" hidden>
-      <div class="stat"><span class="stat-label">Puls proxuje do:</span> <span class="stat-strong" id="vps-addr-inuse">—</span></div>
-      <div class="stat"><span class="stat-label">w konfiguracji zapisane:</span> <span class="stat-strong" id="vps-addr-saved">—</span></div>
-      <div class="stat vps-addr-warn" id="vps-addr-warn" hidden>⚠ Rozjazd — zmiana adresu wymaga restartu Pulsa</div>
-    </div>
-
-    <!-- Pasek aktualizacji (R10): wersja zainstalowana + stan porównania z GitHubem.
-         Widoczny TYLKO gdy jest co powiedzieć (nowa wersja / „nie wiem" / pad sprawdzenia
-         / trwa aktualizacja) — „masz najnowszą" nie zasługuje na stały pasek. -->
-    <div class="statbar vps-addr" id="update-bar" hidden>
-      <div class="stat"><span class="stat-label">Wersja:</span> <span class="stat-strong" id="update-local">—</span></div>
-      <div class="stat" id="update-msg" role="status" aria-live="polite">—</div>
+    <!-- Pasek systemowy: wersja (R10) + adres VPS (R7) w JEDNYM miejscu.
+         Wersja jest widoczna ZAWSZE, także gdy wszystko jest aktualne — punkt 0.2 szablonu
+         rund testowych każe spisać wersje wszystkich maszyn PRZED testami, czyli dokładnie
+         wtedy, gdy nie ma żadnego problemu do zgłoszenia. Poprzedni układ chował wersję
+         przy stanie `current` i zostawiał człowieka z `curl`-em.
+         Diagnostyka (dwa adresy, data instalacji) siedzi w rozwinięciu — potrzebna raz na
+         kwartał, nie zasługuje na stałe miejsce nad listą zadań. Ostrzeżenie o rozjeździe
+         i komunikat aktualizacji zostają widoczne po zwinięciu: one wymagają reakcji. -->
+    <div class="statbar sysbar" id="sysbar">
+      <button type="button" class="sysbar-toggle" id="sysbar-toggle"
+              aria-expanded="false" aria-controls="sysbar-details" onclick="toggleSysbar()">
+        <span class="stat-label">Wersja</span>
+        <span class="stat-strong" id="sysbar-version">—</span>
+        <span class="sysbar-vps" id="sysbar-vps" hidden>· <span class="stat-label">VPS</span> <span class="stat-strong" id="sysbar-vps-addr">—</span></span>
+        <span class="sysbar-caret" id="sysbar-caret" aria-hidden="true">⌄</span>
+      </button>
+      <span class="stat sysbar-warn" id="vps-addr-warn" hidden>⚠ Rozjazd adresu — zmiana wymaga restartu Pulsa</span>
+      <span class="stat sysbar-msg" id="update-msg" role="status" aria-live="polite"></span>
       <button class="btn btn-primary" id="update-btn" onclick="startPulsUpdate()" hidden>⬇ Zaktualizuj Pulsa</button>
+
+      <div class="sysbar-details" id="sysbar-details" hidden>
+        <div class="stat"><span class="stat-label">Puls proxuje do:</span> <span class="stat-strong" id="vps-addr-inuse">—</span></div>
+        <div class="stat"><span class="stat-label">w konfiguracji zapisane:</span> <span class="stat-strong" id="vps-addr-saved">—</span></div>
+        <div class="stat"><span class="stat-label">Zainstalowano:</span> <span class="stat-strong" id="sysbar-installed">—</span></div>
+        <div class="stat"><span class="stat-label">Źródło:</span> <span class="stat-strong" id="sysbar-source">—</span></div>
+      </div>
     </div>
 
     <!-- ── Sekcje ── -->
