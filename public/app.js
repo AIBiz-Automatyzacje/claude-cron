@@ -467,7 +467,13 @@ async function pollUpdateProgress() {
       finishUpdateWatch(`Zaktualizowano do ${shortRevision(revision)}. Odśwież stronę, żeby wczytać nowy panel.`);
       return;
     }
-  } catch { /* serwer w trakcie restartu — to spodziewane, czekamy dalej */ }
+  } catch (err) {
+    // Pad fetcha w trakcie restartu jest SPODZIEWANY, więc nie alarmujemy użytkownika —
+    // ale nie znika bez śladu: `debug` zostawia powód w konsoli, żeby diagnoza „czemu
+    // aktualizacja nie doszła" nie zaczynała się od zera. Cichy `catch {}` gubił tu
+    // również błędy niezwiązane z restartem.
+    console.debug('[update] próba odpytania /api/status nieudana (serwer wstaje?):', err);
+  }
 
   // Ta linia stoi POZA `try`, więc odczyt `updateWatch.startedAt` na null-u wypadłby
   // jako nieobsłużona odrzucona obietnica, nie jako złapany błąd.
