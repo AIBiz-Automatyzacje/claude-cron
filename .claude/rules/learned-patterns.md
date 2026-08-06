@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 17 -->
+<!-- rule-count: 18 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -54,3 +54,6 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **Próg wykrywający lukę między okresowymi śladami życia > okres, nigdy równy — a mock timers to ukryją**: Timery libuv gwarantują tylko „nie wcześniej niż", więc luka między tyknięciami `setInterval(period)` to ZAWSZE `period + kilka ms` — próg `gap > period` bierze KAŻDE normalne tyknięcie za wybudzenie/awarię (u nas: karencja 45 s co minutę, cała kolejka spowolniona, log zalany fałszywym alarmem). Przenosząc stałą progową między modułami sprawdź okres tickowania po nowej stronie (60 s przy ticku 5 s ≠ 60 s przy ticku 60 s) i licz próg jako `okres + definicja zdarzenia`; znacznik pisany co N s jest dodatkowo przestarzały o 0–N s, więc ta granulacja wchodzi do progu. `t.mock.timers.tick(period)` daje gap DOKŁADNIE równy progowi — wartość nieosiągalną w produkcji — więc test jest zielony przy złamanym zachowaniu; dokładaj jawny jitter (`setTime(now + 2)`). I wykrywaj zdarzenie globalne (pobudka maszyny) na ścieżce, która po nim faktycznie biegnie, nie tylko w jednym callbacku timera — po pobudce kolejność zaległych timerów nie jest twoja.
   Source: docs/solutions/runtime-errors/2026-07-30-prog-detekcji-snu-rowny-okresowi-heartbeatu.md
+
+- **Fail-fast w migracji jest poprawny dla SCHEMATU, ale nie dla DANYCH — rzut z `migrate()` blokuje własne lekarstwo**: `migrate()` biegnie w leniwym `getDb()` przy KAŻDEJ operacji, więc `throw` na stanie danych (kolizja nazw blokująca `COLLATE NOCASE`) daje 500 na wszystkim — także na endpointach, którymi user ten stan naprawia (`listMembers`/`revokeMember`), i zostawia jako jedyne wyjście ręczny `sqlite3` na produkcji. Przed każdym `throw` w migracji pytaj: „czy naprawa tego stanu jest osiągalna przez kod, który ten rzut właśnie zabił?" — jeśli tak, degraduj (zostaw schemat legacy) + `warn` z WYKONYWALNYM komunikatem dla człowieka (nazwy, skutek, dwie drogi wyjścia, warunek domknięcia), a niezmiennik bezpieczeństwa utrzymuj w warstwie logiki (`resolveRecipient` → `ambiguous_recipient`), nie w kolacji/constraincie. Catch wąski i typowany (tylko ten jeden `code`), guard idempotencji z FAKTYCZNEGO DDL (`sqlite_master.sql` — `PRAGMA table_info` nie zna kolacji), a test na PRAWDZIWEJ ścieżce `getDb()`, nie na samej `migrate()`.
+  Source: docs/solutions/runtime-errors/2026-08-05-migracja-fail-fast-w-getdb-blokuje-wlasne-lekarstwo.md

@@ -1,0 +1,142 @@
+{
+  "wersja": 1,
+  "zadanie": "naprawy-team-os",
+  "fazy": [
+    {
+      "numer": 1,
+      "nazwa": "Widoczność i hub",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": [],
+      "metryki": {
+        "liczniki": {
+          "p1": 0,
+          "p2": 5,
+          "p3": 12,
+          "operator": 7
+        },
+        "przebieg": {
+          "pominieci": [
+            "typescript",
+            "e2e"
+          ],
+          "znalezione": 38,
+          "poDedupJs": 38,
+          "poDedupSem": 27,
+          "weryfikowane": 12,
+          "obalone": 2
+        }
+      }
+    },
+    {
+      "numer": 2,
+      "nazwa": "Granica repo ↔ vault",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": [],
+      "metryki": {
+        "liczniki": {
+          "p1": 0,
+          "p2": 7,
+          "p3": 7,
+          "operator": 3
+        },
+        "przebieg": {
+          "pominieci": [
+            "typescript"
+          ],
+          "znalezione": 40,
+          "poDedupJs": 40,
+          "poDedupSem": 21,
+          "weryfikowane": 11,
+          "obalone": 4
+        }
+      }
+    },
+    {
+      "numer": 3,
+      "nazwa": "Format Skrzynki i archiwum",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": [],
+      "metryki": {
+        "liczniki": {
+          "p1": 1,
+          "p2": 2,
+          "p3": 21,
+          "operator": 2
+        },
+        "przebieg": {
+          "pominieci": [
+            "typescript"
+          ],
+          "znalezione": 43,
+          "poDedupJs": 43,
+          "poDedupSem": 27,
+          "weryfikowane": 10,
+          "obalone": 1
+        }
+      }
+    },
+    {
+      "numer": 4,
+      "nazwa": "Konfiguracja VPS",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": [],
+      "metryki": {
+        "liczniki": {
+          "p1": 1,
+          "p2": 4,
+          "p3": 8,
+          "operator": 2
+        },
+        "przebieg": {
+          "pominieci": [
+            "typescript"
+          ],
+          "znalezione": 33,
+          "poDedupJs": 33,
+          "poDedupSem": 16,
+          "weryfikowane": 8,
+          "obalone": 2
+        }
+      }
+    },
+    {
+      "numer": 5,
+      "nazwa": "Aktualizacja i dystrybucja",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": [],
+      "metryki": {
+        "liczniki": {
+          "p1": 3,
+          "p2": 5,
+          "p3": 14,
+          "operator": 9
+        },
+        "przebieg": {
+          "pominieci": [
+            "typescript"
+          ],
+          "znalezione": 59,
+          "poDedupJs": 59,
+          "poDedupSem": 33,
+          "weryfikowane": 18,
+          "obalone": 2
+        }
+      }
+    }
+  ],
+  "zakonczenie": {
+    "walidacja": "done",
+    "complete": "done",
+    "compound": "done"
+  }
+}

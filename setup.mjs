@@ -33,6 +33,13 @@ export { parseInviteCode, upsertDotenvLine };
 
 const require = createRequire(import.meta.url);
 
+// Odczyt UTRWALONEJ wartości env (RC shellu / rejestr Windows) — most ESM→CJS przez
+// createRequire, którego ten plik i tak używa. Jedna implementacja parsera z `/api/status`
+// (lib/persisted-env.js): duplikat rozjechałby się z formatem zapisu `upsertEnvLine`.
+// Moduł jest bez efektów ubocznych (fs/os/path/child_process), więc require na górze
+// nie ciągnie node:sqlite ani niczego, co wymaga gotowego środowiska.
+const { readPersistedEnv } = require('./lib/persisted-env');
+
 // Pinowana wersja portable Node — MUSI być spójna z install.sh / install.ps1.
 export const NODE_VERSION = '22.17.0';
 
@@ -243,6 +250,24 @@ export function removeHookFromSettings(existing) {
   return { settings, removed: true };
 }
 
+// === Pure helper: idempotentny merge zmiennej do sekcji env w settings.json ===
+// Lustro mergeHookIntoSettings dla drugiej sekcji tego samego pliku. `changed=false`
+// gdy klucz ma już DOKŁADNIE tę wartość — re-run instalatora nie przepisuje pliku.
+// Cudzych kluczy (permissions, hooks, inne env) NIE ruszamy: to plik usera, nie nasz.
+export function mergeEnvIntoSettings(existing, key, value) {
+  const settings = existing && typeof existing === 'object' ? { ...existing } : {};
+  const env = settings.env && typeof settings.env === 'object' ? { ...settings.env } : {};
+
+  if (env[key] === value) {
+    settings.env = env;
+    return { settings, changed: false };
+  }
+
+  env[key] = value;
+  settings.env = env;
+  return { settings, changed: true };
+}
+
 // === Pure helper: źródło hooka autostartu z absolutną ścieżką node + flagą ===
 // Port wypalany razem z resztą: hook żyje w sesji Claude Code, której env pochodzi
 // sprzed instalacji (zmiana env nie propaguje się do żyjących procesów — docs/solutions
@@ -309,6 +334,10 @@ export function detectPortableNodeBin(execPath, platform, repoDir, arch) {
 // Zwraca nową treść pliku. Gdy linia `export VAR=...` już istnieje — podmienia ją
 // (idempotentny re-run nie duplikuje). Gdy nie ma — dopisuje na końcu z komentarzem.
 // Lustro logiki ze starego setup.sh (grep -q + sed | echo >>).
+// UWAGA: format tej linii CZYTA `lib/persisted-env.js` (`parsePersistedExport`) — panel
+// pokazuje adres zapisany obok adresu w użyciu. To świadoma druga implementacja (ten plik
+// jest ESM, server.js CommonJS — synchroniczny import nie przejdzie), więc zmiana formatu
+// zapisu MUSI trafić tam. Precedens: `INBOX_CODE_PREFIX` w server.js vs scripts/inbox/invite.mjs.
 export function upsertEnvLine(rcContent, varName, value, comment) {
   const content = typeof rcContent === 'string' ? rcContent : '';
   const exportLine = `export ${varName}=${JSON.stringify(value)}`;
@@ -332,6 +361,47 @@ export function buildVpsUrl(host, port) {
   }
   const resolvedPort = String(port || '').trim() || '7777';
   return `http://${trimmedHost}:${resolvedPort}`;
+}
+
+// === Pure helper: który adres VPS jest „zapisany" dla potrzeb podpowiedzi ===
+// Pierwszeństwo ma wartość UTRWALONA (RC shellu / rejestr Windows), bo to ją zobaczy
+// następny proces; `process.env` bieżącej sesji bywa nieświeże (udokumentowana pułapka:
+// docs/solutions/deployment-issues/2026-07-07-stale-env-vps-url-hook-respawn-serwera.md).
+// Brak obu → null („nie ma adresu"), co dopiero uprawnia komunikat o trybie lokalnym.
+export function resolveSavedVpsUrl({ persisted, inUse } = {}) {
+  const saved = typeof persisted === 'string' ? persisted.trim() : '';
+  if (saved) return saved;
+  const current = typeof inUse === 'string' ? inUse.trim() : '';
+  return current || null;
+}
+
+// === Pure helper: treść pytania o host VPS ===
+// Z zapisanym adresem podpowiadamy go w nawiasach — pusty Enter (czyli także instalacja
+// nieinteraktywna pod `curl|bash`, gdzie readline dostaje EOF) ZACHOWUJE konfigurację.
+export function buildVpsHostPrompt(savedUrl) {
+  const saved = typeof savedUrl === 'string' ? savedUrl.trim() : '';
+  return saved
+    ? `Tailscale IP VPS-a [Enter = bez zmian: ${saved}]: `
+    : 'Tailscale IP VPS-a (puste = tryb tylko lokalny): ';
+}
+
+// === Pure helper: odpowiedzi o VPS → decyzja (adres + czy zapisywać env + komunikat) ===
+// Trzy rozłączne stany:
+//  - pusty host przy zapisanym adresie → 'kept': nic nie nadpisujemy, „bez zmian";
+//  - pusty host bez zapisanego adresu → 'none': dopiero TU „tryb tylko lokalny";
+//  - podany host → 'set': nowy adres nadpisuje stary (sanityzacja jak dziś, buildVpsUrl).
+// `persist` mówi callerowi, czy w ogóle dotykać env — przepisywanie tej samej wartości
+// byłoby zbędnym zapisem do RC i myliłoby komunikatem o „zapisaniu" tego, co już było.
+export function resolveVpsChoice({ savedUrl, hostInput, portInput } = {}) {
+  const saved = typeof savedUrl === 'string' ? savedUrl.trim() : '';
+  const url = buildVpsUrl(hostInput, portInput);
+
+  if (!url) {
+    return saved
+      ? { url: saved, action: 'kept', persist: false }
+      : { url: null, action: 'none', persist: false };
+  }
+  return { url, action: 'set', persist: true };
 }
 
 // === Pure helper: odpowiedzi setupu → payload state powiadomień ===
@@ -754,6 +824,8 @@ function psSingleQuote(value) {
 }
 
 // Pure: komenda ustawienia User-scoped env var na Windows (rejestr HKCU\Environment).
+// Lustro odczytu: `lib/persisted-env.js` woła `[Environment]::GetEnvironmentVariable(..., 'User')`
+// z tym samym scope — zmiana scope'u tutaj musi trafić tam (panel porównuje obie wartości).
 // Widoczna w NOWYCH procesach bez `source`. Pojedyncze cudzysłowy: backslashe ścieżek
 // (C:\Users\...) zostają dosłowne, inaczej niż przy JSON/double-quote.
 export function buildSetUserEnvCommand(varName, value) {
@@ -1060,28 +1132,140 @@ function installPulsSkill() {
   }
 }
 
+// === I/O: odczyt {workspace}/.claude/settings.json z fail-fast na uszkodzonym JSON ===
+// Wydzielone, bo do tego pliku piszą DWIE rzeczy (hook autostartu i env.PULS_HOME) —
+// jedna definicja „co znaczy uszkodzony plik" zamiast dwóch, które mogą się rozjechać.
+function readSettingsFileOrThrow(settingsFile) {
+  if (!fs.existsSync(settingsFile)) return {};
+  const raw = fs.readFileSync(settingsFile, 'utf-8');
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    // Fail-fast: NIE nadpisujemy uszkodzonego settings.json — zniszczyłoby to
+    // permissions/inne hooki/env usera. Każemy userowi naprawić ręcznie.
+    throw new Error(
+      `Plik ${settingsFile} jest niepoprawnym JSON-em (${error.message}). ` +
+        'Setup NIE nadpisze go, by nie utracić Twoich permissions/hooków/env. ' +
+        'Napraw plik ręcznie (albo usuń go, jeśli nie zawiera nic ważnego) i uruchom setup ponownie.',
+    );
+  }
+}
+
+// === I/O: PULS_HOME + CLAUDE_CRON_WORKSPACE do sekcji env w {workspace}/.claude/settings.json ===
+// Dzięki temu KAŻDA sesja Claude Code w tym workspace zna katalog instalacji Pulsa —
+// skille w vaulcie (deleguj) znajdą `data/inbox.env` bez ręcznego kroku usera.
+// CLAUDE_CRON_WORKSPACE idzie tą samą drogą, bo skrypty inbox wyprowadzają z niego
+// ścieżki vaulta (Skrzynka, archiwum): proces mający PULS_HOME z tego pliku, ale bez
+// zmiennej z shell RC (sesja nie-loginowa, Windows przed relogiem), padał na loaderze.
+// Zwraca true gdy plik faktycznie zmieniony (re-run z tymi samymi wartościami = false).
+export function registerPulsHomeEnv(workspace, installDir) {
+  const settingsFile = path.join(workspace, '.claude', 'settings.json');
+  const existing = readSettingsFileOrThrow(settingsFile);
+  const withHome = mergeEnvIntoSettings(existing, 'PULS_HOME', installDir);
+  const withWorkspace = mergeEnvIntoSettings(withHome.settings, 'CLAUDE_CRON_WORKSPACE', workspace);
+  const settings = withWorkspace.settings;
+  const changed = withHome.changed || withWorkspace.changed;
+  if (!changed) return false;
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf-8');
+  return true;
+}
+
+// === I/O: wskaźnik ~/.claude-cron-home z FAKTYCZNYM katalogiem instalacji ===
+// settings.json ratuje tylko sesje w jednym workspace; wskaźnik o stałej nazwie działa
+// dla każdego procesu (konwencja: ~/.claude-cron-oauth-token). Zgadywanie
+// `$HOME/claude-cron` odpada — katalog instalacji to wolne wejście usera.
+export function writePulsHomePointer(installDir, pointerFile = defaultPulsHomePointer()) {
+  fs.writeFileSync(pointerFile, `${installDir}\n`, 'utf-8');
+  return pointerFile;
+}
+
+export function defaultPulsHomePointer(homeDir = os.homedir()) {
+  return path.join(homeDir, '.claude-cron-home');
+}
+
+// === I/O shell: oba zapisy PULS_HOME (wskaźnik + settings.json) ===
+// KOLEJNOŚĆ: najpierw wskaźnik `~/.claude-cron-home`, potem settings.json — oba
+// mechanizmy są niezależne, a settings.json jest tym, który potrafi paść (uszkodzony
+// JSON u usera). Zapis wskaźnika jako drugi znaczyłby, że cudzy zepsuty plik zabiera
+// userowi OBA sposoby zlokalizowania instalacji.
+// ŻADEN z padów nie przerywa setupu: to wygoda dla skilli w vaulcie, a nie warunek
+// działania schedulera — wcześniej wyjątek z registerPulsHomeEnv ubijał cały setup,
+// także u usera, który autostartu w ogóle nie chce.
+function persistPulsHome(workspace, installDir) {
+  try {
+    const pointer = writePulsHomePointer(installDir);
+    console.log(`[ok] Wskaźnik instalacji: ${pointer}`);
+  } catch (error) {
+    console.log(
+      `[warn] Nie udało się zapisać wskaźnika ~/.claude-cron-home (${error.message}) — `
+      + 'skille poza tym workspace mogą nie znaleźć konfiguracji skrzynki.',
+    );
+  }
+  try {
+    const changed = registerPulsHomeEnv(workspace, installDir);
+    console.log(
+      changed
+        ? `[ok] PULS_HOME=${installDir} zapisane w ${path.join(workspace, '.claude', 'settings.json')}`
+        : '[ok] PULS_HOME już ustawione w settings.json workspace.',
+    );
+  } catch (error) {
+    console.log(
+      `[warn] Nie zapisałem PULS_HOME w settings.json workspace (${error.message}) — `
+      + 'skille w sesjach Claude Code z tego vaulta użyją wskaźnika ~/.claude-cron-home.',
+    );
+  }
+}
+
 function registerHook(workspace, hookFile, nodeBin) {
   const settingsFile = path.join(workspace, '.claude', 'settings.json');
-  let existing = {};
-  if (fs.existsSync(settingsFile)) {
-    const raw = fs.readFileSync(settingsFile, 'utf-8');
-    try {
-      existing = JSON.parse(raw);
-    } catch (error) {
-      // Fail-fast: NIE nadpisujemy uszkodzonego settings.json — zniszczyłoby to
-      // permissions/inne hooki/env usera. Każemy userowi naprawić ręcznie.
-      throw new Error(
-        `Plik ${settingsFile} jest niepoprawnym JSON-em (${error.message}). ` +
-          'Setup NIE nadpisze go, by nie utracić Twoich permissions/hooków/env. ' +
-          'Napraw plik ręcznie (albo usuń go, jeśli nie zawiera nic ważnego) i uruchom setup ponownie.',
-      );
-    }
-  }
+  const existing = readSettingsFileOrThrow(settingsFile);
   const command = `${JSON.stringify(nodeBin)} ${JSON.stringify(hookFile)}`;
   const { settings, added } = mergeHookIntoSettings(existing, command);
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf-8');
   return added;
+}
+
+// === Wersja instalacji: pure rozstrzygnięcie źródła rewizji ===
+// Priorytet: to, co podał instalator (tarball/zip pobrany po skrócie commita), przed
+// `git rev-parse` — instalacja bootstrapowa nie ma repozytorium git, a lokalny klon
+// ma. Brak obu = `unknown`: wersja nieznana nigdy nie może wywrócić instalacji.
+export function resolveInstallVersionInput(env = {}, gitRevision = '') {
+  const envRevision = String(env.CLAUDE_CRON_INSTALL_REVISION ?? '').trim();
+  const envSource = String(env.CLAUDE_CRON_INSTALL_SOURCE ?? '').trim();
+  if (envRevision) return { revision: envRevision, source: envSource || 'installer' };
+
+  const gitRev = String(gitRevision ?? '').trim();
+  if (gitRev) return { revision: gitRev, source: envSource || 'git' };
+
+  return { revision: 'unknown', source: envSource || 'unknown' };
+}
+
+// === I/O shell: zapis data/version.json ===
+// MUSI biec PO swapie katalogów instalatora — i biegnie, bo setup.mjs jest odpalany
+// dopiero z docelowego katalogu instalacji. `data/` jest na allowliście stanowej, więc
+// plik przeżyje kolejny re-run (i zostanie nadpisany świeżą rewizją).
+// Pad zapisu = warn, nigdy przerwanie setupu: brak wersji to utrudniona diagnostyka,
+// nie zepsuta instalacja.
+function persistInstallVersion() {
+  const gitRevision = readGitRevision(REPO_DIR);
+  const { revision, source } = resolveInstallVersionInput(process.env, gitRevision);
+  try {
+    const { writeVersionFile } = require('./lib/version');
+    const written = writeVersionFile({ revision, source });
+    console.log(`[ok] Wersja instalacji: ${written.revision} (${written.source})`);
+  } catch (err) {
+    console.warn(`[warn] Nie zapisałem wersji instalacji: ${err.message}`);
+  }
+}
+
+// Rewizja z gita — tylko dla instalacji z klona (dev). Brak gita / brak repo = pusty
+// string, NIE błąd: to normalny stan instalacji bootstrapowej.
+function readGitRevision(repoDir) {
+  const res = spawnSync('git', ['-C', repoDir, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' });
+  if (res.error || res.status !== 0) return '';
+  return String(res.stdout || '').trim();
 }
 
 // === I/O shell: zapis roli maszyny do state lokalnej DB (wzorzec persistNotifySettings) ===
@@ -1138,6 +1322,10 @@ async function main() {
   }
   console.log('[ok] Claude Code znaleziony w PATH.');
 
+  // Wersja PRZED pytaniami: gdy setup padnie w połowie, na dysku i tak zostaje ślad,
+  // z jakim kodem maszyna pracuje (fundament diagnostyki i rund testowych).
+  persistInstallVersion();
+
   const nodeBin = detectPortableNodeBin(process.execPath, process.platform, REPO_DIR, process.arch);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
@@ -1193,12 +1381,30 @@ async function main() {
     const portLoc = persistEnvVar('CLAUDE_CRON_PORT', String(dashboardPort), 'Claude-Cron dashboard port');
     console.log(`[ok] Port dashboardu: ${dashboardPort} (zapisano w ${portLoc})`);
 
-    const vpsHost = await ask(rl, 'Tailscale IP VPS-a (puste = tryb tylko lokalny): ');
+    // Re-run instalatora podpowiada ZAPISANY adres VPS (jak port i workspace wyżej) —
+    // bez tego pusty Enter kasował konfigurację i setup twierdził „tryb tylko lokalny"
+    // mimo działającego VPS-a. Utrwaloną wartość czytamy tym samym modułem co /api/status.
+    const savedVpsUrl = resolveSavedVpsUrl({
+      persisted: readPersistedEnv('CLAUDE_CRON_VPS_URL'),
+      inUse: process.env.CLAUDE_CRON_VPS_URL,
+    });
+    const vpsHost = await ask(rl, buildVpsHostPrompt(savedVpsUrl));
     const vpsPort = vpsHost ? await ask(rl, 'Port VPS [7777]: ', '7777') : '7777';
-    vpsUrl = buildVpsUrl(vpsHost, vpsPort);
-    if (vpsUrl) {
+    const vpsChoice = resolveVpsChoice({ savedUrl: savedVpsUrl, hostInput: vpsHost, portInput: vpsPort });
+    vpsUrl = vpsChoice.url;
+    if (vpsChoice.persist) {
       const vpsLoc = persistEnvVar('CLAUDE_CRON_VPS_URL', vpsUrl, 'Claude-Cron VPS connection');
       console.log(`[ok] VPS: ${vpsUrl} (zapisano w ${vpsLoc})`);
+    } else if (vpsChoice.action === 'kept') {
+      // Bez zapisu do RC/rejestru (wartość już tam jest), ALE z ustawieniem w BIEŻĄCYM procesie —
+      // `savedUrl` mógł przyjść z `readPersistedEnv`, gdy `process.env` tej sesji jest puste
+      // (instalacja pod zsh a re-run w bashu, uruchomienie nieinteraktywne, stary terminal na
+      // Windowsie). Serwer spawnowany/wskrzeszany przez TEN run dziedziczy env instalatora, więc
+      // bez tej linii dostaje env BEZ adresu i `/api/vps/*` odpowiada 503 „brak env" (R7/R11).
+      process.env.CLAUDE_CRON_VPS_URL = vpsUrl;
+      // Mowa o wartości ZAPISANEJ — żyjący serwer może mieć w pamięci starszą (env nie
+      // propaguje się do działających procesów), dlatego nie obiecujemy tu nic o restarcie.
+      console.log(`[ok] VPS bez zmian: ${vpsUrl}`);
     } else {
       console.log('[info] Tryb tylko lokalny — joby działają gdy komputer nie śpi.');
     }
@@ -1210,6 +1416,11 @@ async function main() {
     // Powiadomienia idą do state DB (nie env) — zmiana z dashboardu działa bez restartu,
     // a env DISCORD_WEBHOOK_URL/TELEGRAM_* pozostaje fallbackiem dla starych instalacji (R3).
     notifyPayload = buildNotificationSettingsPayload(await askNotificationSettings(rl));
+
+    // Wskaźnik katalogu instalacji — BEZWARUNKOWO (niezależnie od autostartu): to on
+    // pozwala skillom w vaulcie znaleźć data/inbox.env bez ręcznego kroku usera. Pad
+    // zapisu = warn, nigdy przerwanie setupu — instalacja jest sprawna także bez niego.
+    persistPulsHome(workspace, REPO_DIR);
 
     const installHook = (await ask(rl, 'Zainstalować autostart? [T/n]: ', 'T')).toLowerCase();
     if (installHook === 't') {

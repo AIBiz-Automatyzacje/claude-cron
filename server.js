@@ -15,6 +15,9 @@ const keepAwake = require('./lib/keep-awake');
 const inboxSeed = require('./lib/inbox-seed');
 const inboxDb = require('./lib/inbox-db');
 const { isInboxHub } = require('./lib/inbox-hub');
+const { getInstallVersion } = require('./lib/version');
+const updater = require('./lib/updater');
+const { describeEnvUsage, readPersistedEnvCached } = require('./lib/persisted-env');
 const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
 const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
@@ -326,6 +329,27 @@ async function handleApi(req, res) {
     }
   }
 
+  // GET /api/update — stan aktualizacji (lokalna rewizja vs czoło gałęzi na GitHubie).
+  // PRYWATNY jak cały dashboard (za guardem XFF). Odpowiedź NIGDY nie udaje „aktualne":
+  // brak znanej wersji i pad API GitHuba mają własne, rozłączne statusy.
+  if (method === 'GET' && urlPath === '/api/update') {
+    const out = await updater.handleUpdateRequest({ method: 'GET' });
+    return json(res, out.body, out.status);
+  }
+
+  // POST /api/update — uruchomienie aktualizacji. Mutujące, więc objęte wspólnym guardem
+  // cross-origin z góry handleApi: to zdalne pobranie kodu z GitHuba + restart daemona,
+  // czyli najgroźniejszy endpoint w całym API (guard XFF sam by tego nie złapał).
+  // Rewizję bierzemy ze ŚWIEŻEGO sprawdzenia, nie z body — klient nie decyduje, co się instaluje.
+  // Ciało żądania świadomie NIE jest czytane: cała decyzja („czy jest co instalować"
+  // i „jaka rewizja") powstaje po stronie serwera. Drugi klik przy trwającej
+  // aktualizacji dostaje 409 z serwerowej flagi — blokada w przeglądarce znika po
+  // odświeżeniu strony, a dwa równoległe instalatory podmieniałyby katalog z bazą naraz.
+  if (method === 'POST' && urlPath === '/api/update') {
+    const out = await updater.handleUpdateRequest({ method: 'POST' });
+    return json(res, out.body, out.status);
+  }
+
   // GET /api/status
   if (method === 'GET' && urlPath === '/api/status') {
     // Równoległość (R2): pełna lista biegnących runów. `current_run` zostaje jako pierwszy
@@ -347,6 +371,20 @@ async function handleApi(req, res) {
       // maszynie potrafią stać DWIE instalacje. Bez tego pola setup.mjs nie odróżnia
       // własnego re-runu od cudzej instancji na tym samym porcie i adoptuje obcy proces.
       repo_dir: __dirname,
+      // Wersja zainstalowanego kodu (rewizja + data pobrania + źródło). Czytana z pliku
+      // pisanego przez instalator, nie z gita — instalacja zipowa/tarballowa nie ma repo.
+      // Odczyt nie rzuca: brak pliku (stara instalacja) daje `unknown`, /api/status żyje dalej.
+      version: getInstallVersion(),
+      // Adres VPS w DWÓCH wartościach: ta w pamięci procesu (config.js czyta env RAZ przy
+      // require) i ta utrwalona przez instalator (odczyt w CZASIE ŻĄDANIA — wzorzec
+      // notify-config.js). Rozjazd = serwer proxuje pod stary adres, bo env nie propaguje się
+      // do żyjących procesów; bez tego pola diagnoza kosztuje godzinę (R7).
+      vps_url: describeEnvUsage({
+        inUse: VPS_API_URL,
+        // Odczyt CACHOWANY (TTL w lib/persisted-env): panel bije w /api/status co 3 s, a na
+        // Windowsie goły odczyt to spawn PowerShella blokujący pętlę zdarzeń.
+        persisted: readPersistedEnvCached('CLAUDE_CRON_VPS_URL'),
+      }),
       current_run: currentRun,
       current_runs: currentRuns,
       queue_length: queued.length,

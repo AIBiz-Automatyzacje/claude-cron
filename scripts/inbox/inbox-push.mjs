@@ -69,6 +69,29 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleString('pl-PL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+// Marker tożsamości wątku w archiwum — jedno źródło prawdy dla renderu i podmiany.
+// Osobny od markera Skrzynki (`%% id:<id> thread:<id> %%`): tam identyfikuje KOTWICĘ
+// (konkretną wiadomość do odhaczenia), tu — cały zarchiwizowany wątek.
+export function archiveThreadMarker(threadId) {
+  return `%% thread:${threadId} %%`;
+}
+
+// Treść wiadomości pochodzi od INNEGO członka przez hub — to wejście niezaufane, a renderujemy
+// je dosłownie do tego samego pliku, w którym `%% thread:<id> %%` decyduje o granicach bloku.
+// Rozbijamy więc `%%` zerowej szerokości spacją: dla człowieka wygląda tak samo, dla parsera
+// archiwum przestaje być markerem (podszycie się pod cudzy wątek = skasowanie cudzej nitki).
+function neutralizeMarkers(text) {
+  // U+200B budowany z kodu, nie wklejony do źródła: niewidzialny znak w pliku źródłowym
+  // jest pułapką dla każdego, kto go później czyta lub edytuje.
+  const zeroWidth = String.fromCharCode(0x200b);
+  return text.replaceAll('%%', `%${zeroWidth}%`);
+}
+
+function threadIdOf(thread) {
+  const root = thread[0] || {};
+  return root.thread_id || root.id || null;
+}
+
 // Archiwizuje CAŁĄ nitkę wątku w jednym callout (nie pojedynczą wiadomość) —
 // zamknięty wątek ma być czytelny bez sięgania do bazy.
 export function renderArchiveThread(thread, closedBy) {
@@ -76,7 +99,7 @@ export function renderArchiveThread(thread, closedBy) {
   const emoji = TYPE_EMOJI[root.type] || '📨';
   const label = TYPE_LABEL[root.type] || 'Wiadomość';
   const messages = thread.map(m => {
-    const body = (m.content || '').split('\n');
+    const body = neutralizeMarkers(m.content || '').split('\n');
     const head = `> - **@${m.from_user}** · ${fmtTime(m.created_at)} — ${body[0] || ''}`;
     const cont = body.slice(1).map(l => `>   ${l}`);
     return [head, ...cont].join('\n');
@@ -88,20 +111,72 @@ export function renderArchiveThread(thread, closedBy) {
     messages,
     '>',
     `> _archived ${fmtTime(new Date().toISOString())} by @${closedBy}_`,
+    // Marker na końcu bloku (ukryty w preview Obsidiana) — po nim `appendToArchive`
+    // rozpoznaje, że ten wątek już jest w pliku miesiąca, i PODMIENIA blok zamiast
+    // dokładać drugi. Bez markera wątek domykany etapami (część wiadomości teraz,
+    // reszta później) występował w archiwum tyle razy, ile było domknięć.
+    `> ${archiveThreadMarker(threadIdOf(thread))}`,
   ].join('\n');
 }
 
-async function appendToArchive(archiveDir, thread, closedBy) {
+// Podmienia w treści archiwum blok wątku oznaczony markerem. Zwraca nową treść albo
+// `null`, gdy wątku w pliku nie ma (wpisy sprzed wprowadzenia markera są bez niego —
+// zostają nietknięte, a nowy zapis ląduje na końcu).
+// Granice bloku wyznacza ciągłość linii calloutu (`>`), tak jak w parserze Skrzynki:
+// render nie zna swojej pozycji w pliku, więc szukamy jej dopiero przy zapisie.
+export function replaceArchiveThreadBlock(content, threadId, block) {
+  if (!threadId) return null;
+  const marker = `> ${archiveThreadMarker(threadId)}`;
+  const lines = content.split('\n');
+  // RÓWNOŚĆ całej linii, nie `includes`: marker rozpoznajemy tylko w linii, którą sami
+  // wyrenderowaliśmy. Substring trafiałby też w marker zacytowany WEWNĄTRZ treści
+  // wiadomości (wejście od innego członka) — podmiana rozjechałaby się na obcy blok
+  // i skasowała cudzą, zarchiwizowaną nitkę. Druga warstwa: `neutralizeMarkers`.
+  const hit = lines.findIndex((line) => line.trim() === marker);
+  if (hit === -1) return null;
+
+  let start = hit;
+  while (start > 0 && lines[start - 1].startsWith('>')) start--;
+  let end = hit;
+  while (end + 1 < lines.length && lines[end + 1].startsWith('>')) end++;
+
+  return [...lines.slice(0, start), ...block.split('\n'), ...lines.slice(end + 1)].join('\n');
+}
+
+// Eksportowana, bo domknięcie wątku ma DWIE ścieżki (checkbox w Skrzynce → ten plik,
+// komenda `close` skilla deleguj → close.mjs) i obie muszą zapisywać archiwum tym samym
+// kodem. Druga kopia w vaulcie cicho rozjechała się z tą i gubiła nitkę.
+// Zapis jest UPSERTEM po wątku, nie gołym appendem: wątek domykany etapami (albo raz
+// checkboxem, raz komendą `close`) trafiał tu wielokrotnie z CORAZ dłuższą nitką, a plik
+// miesiąca puchł od niemal identycznych kopii tej samej rozmowy. Nowsza wersja wygrywa —
+// domknięcie dokłada wiadomości, nigdy ich nie usuwa.
+export async function appendToArchive(archiveDir, thread, closedBy) {
   await fs.mkdir(archiveDir, { recursive: true });
   const file = archivePath(archiveDir);
-  let header = '';
+  const block = renderArchiveThread(thread, closedBy);
+
+  // Świeży odczyt z dysku PRZED decyzją: ten sam plik pisze druga ścieżka domykania
+  // (close.mjs) i Obsidian Sync — stan z pamięci procesu nie jest tu żadnym dowodem.
+  let existing = null;
   try {
-    await fs.access(file);
-  } catch {
-    const ym = path.basename(file, '.md');
-    header = `---\ntags: [archiwum, team-os]\n---\n\n# 📁 Archiwum Skrzynki — ${ym}\n\n`;
+    existing = await fs.readFile(file, 'utf8');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
   }
-  await fs.appendFile(file, header + renderArchiveThread(thread, closedBy) + '\n\n', 'utf8');
+
+  if (existing === null) {
+    const ym = path.basename(file, '.md');
+    const header = `---\ntags: [archiwum, team-os]\n---\n\n# 📁 Archiwum Skrzynki — ${ym}\n\n`;
+    await fs.writeFile(file, header + block + '\n\n', 'utf8');
+    return;
+  }
+
+  const replaced = replaceArchiveThreadBlock(existing, threadIdOf(thread), block);
+  if (replaced !== null) {
+    await fs.writeFile(file, replaced, 'utf8');
+    return;
+  }
+  await fs.appendFile(file, block + '\n\n', 'utf8');
 }
 
 // Stopka archiwum „archived by @X" = odbiorca zamykanej wiadomości (kotwica ma to_user=me).

@@ -149,6 +149,51 @@ after(() => {
   if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+// Szew server.js ↔ lib/version: testy jednostkowe obu stron przechodzą, gdy pole `version`
+// zniknie z odpowiedzi endpointu (learned pattern: „testy czystych funkcji obu stron
+// przechodzą przy złamanym zachowaniu systemowym"). Tu asertujemy PUBLICZNY kontrakt
+// /api/status na żywym procesie serwera.
+test('GET /api/status: pole version niesie rewizję i datę instalacji z lib/version', async () => {
+  const status = await getStatus();
+
+  assert.ok(status.version, 'brak pola version w /api/status');
+  assert.equal(typeof status.version.revision, 'string');
+  assert.ok('installed_at' in status.version, 'brak klucza installed_at w version');
+  assert.equal(typeof status.version.source, 'string');
+
+  // Serwer musi oddawać DOKŁADNIE to, co wylicza lib/version (ten sam DATA_DIR — spawnujemy
+  // serwer z tego repo). Bez pliku wersji kontrakt to jawne 'unknown', nie brak pola.
+  const expected = require('./lib/version').getInstallVersion();
+  assert.deepEqual(status.version, expected);
+  if (!fs.existsSync(require('./lib/version').VERSION_FILE)) {
+    assert.equal(status.version.revision, 'unknown');
+  }
+});
+
+// Szew server.js ↔ lib/persisted-env ↔ public/app.js: testy czystej funkcji `describeEnvUsage`
+// przechodzą także wtedy, gdy pole `vps_url` w ogóle nie trafi do odpowiedzi endpointu albo
+// zmieni kształt kluczy (ten sam learned pattern co przy `version` wyżej). Front czyta
+// DOKŁADNIE `in_use`/`persisted`/`mismatch` (renderVpsAddr), więc kontrakt asertujemy na
+// żywym procesie serwera.
+test('GET /api/status: pole vps_url niesie adres w użyciu, zapisany i flagę rozjazdu', async () => {
+  const status = await getStatus();
+
+  assert.ok(status.vps_url, 'brak pola vps_url w /api/status');
+  assert.equal(typeof status.vps_url.in_use, 'string');
+  assert.ok('persisted' in status.vps_url, 'brak klucza persisted w vps_url');
+  // „nie wiem" (null) musi być rozróżnione od pustego adresu — nigdy undefined ani inny typ.
+  assert.ok(status.vps_url.persisted === null || typeof status.vps_url.persisted === 'string');
+  assert.equal(typeof status.vps_url.mismatch, 'boolean');
+
+  // Rozjazd wolno zgłosić WYŁĄCZNIE, gdy utrwalona wartość jest znana i różna od tej w pamięci —
+  // brak odczytu to „nie wiem", nie oskarżenie (front pokazuje wtedy ostrzeżenie na stałe).
+  const { describeEnvUsage } = require('./lib/persisted-env');
+  assert.deepEqual(
+    status.vps_url,
+    describeEnvUsage({ inUse: status.vps_url.in_use, persisted: status.vps_url.persisted }),
+  );
+});
+
 test('GET /api/status: current_runs to tablica obu aktywnych runów, current_run = pierwszy', async (t) => {
   t.after(killAllRunning);
 

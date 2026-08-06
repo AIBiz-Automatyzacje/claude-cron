@@ -1,8 +1,12 @@
 // Testy renderingu Skrzynki (redesign 07.2026) + roundtrip z parserem inbox-push:
 // wyrenderowany callout po odhaczeniu MUSI być parsowalny (kontrakt id/thread/checkbox).
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderThreadCallout, renderDelegatedCallout, SKRZYNKA_TEMPLATE } from './inbox-pull.mjs';
+import { mergeFrontmatter, renderDelegatedCallout, renderThreadCallout, SKRZYNKA_TEMPLATE, updateSkrzynkaFile } from './inbox-pull.mjs';
 import { parseCheckedCallouts } from './inbox-push.mjs';
 
 const T0 = '2026-07-24T07:12:00.000Z';
@@ -97,4 +101,87 @@ test('delegowane: karta per delegacja (fold + tytuł + adresat), pill czasu, sta
   assert.ok(out.includes('> Potrzebuję baner 1920x1080.')); // treść wysłanej wiadomości w karcie
   assert.ok(out.includes(`%% thread:${THREAD} %%`));
   assert.ok(out.includes(`%% thread:${ID_B} %%`)); // fallback na id gdy brak thread_id
+});
+
+// ──────── frontmatter merge (R12) ────────
+// Zmiana szablonu ma docierać do plików utworzonych wcześniej, ale bez deptania
+// tego, co user dopisał sam.
+const BODY_BEZ_FM = `# 📬 Skrzynka
+
+## 📥 Otrzymane
+
+*0 nowych*
+
+%% inbox:items:start %%
+%% inbox:items:end %%
+
+## 📤 Wysłane — czekają na odpowiedź
+
+*0 w toku*
+
+%% delegated:items:start %%
+%% delegated:items:end %%
+`;
+
+function withFrontmatter(fm) {
+  return `---\n${fm}\n---\n${BODY_BEZ_FM}`;
+}
+
+test('merge frontmattera: brakujący cssclasses wraca z szablonu', () => {
+  const out = mergeFrontmatter(withFrontmatter('status: w_trakcie\ntags: [skrzynka]'));
+  assert.ok(out.includes('cssclasses: [skrzynka]'));
+  assert.ok(out.includes('status: w_trakcie'));
+  assert.ok(out.includes(BODY_BEZ_FM)); // treść pod frontmatterem nietknięta
+});
+
+test('merge frontmattera: własny klucz usera przetrwał', () => {
+  const out = mergeFrontmatter(withFrontmatter('status: w_trakcie\nmoj_klucz: wartosc usera'));
+  assert.ok(out.includes('moj_klucz: wartosc usera'));
+  assert.ok(out.includes('cssclasses: [skrzynka]'));
+});
+
+test('merge frontmattera: istniejąca wartość NIE jest nadpisywana szablonem', () => {
+  const out = mergeFrontmatter(withFrontmatter('cssclasses: [moje, wlasne]\ntermin: 2026-01-01'));
+  assert.ok(out.includes('cssclasses: [moje, wlasne]'));
+  assert.ok(!out.includes('cssclasses: [skrzynka]'));
+  assert.ok(!out.includes('termin: 2099-12-31'));
+  assert.ok(out.includes('status: w_trakcie')); // brakujące klucze dołożone
+});
+
+test('merge frontmattera: plik bez frontmattera dostaje pełny blok z szablonu', () => {
+  const out = mergeFrontmatter(BODY_BEZ_FM);
+  assert.ok(out.startsWith('---\n'));
+  for (const line of ['status: w_trakcie', 'priorytet: normalne', 'termin: 2099-12-31', 'tags: [skrzynka, personal-team-os]', 'cssclasses: [skrzynka]']) {
+    assert.ok(out.includes(line), `brak ${line}`);
+  }
+  assert.ok(out.endsWith(BODY_BEZ_FM));
+});
+
+test('merge frontmattera: komplet kluczy = plik bit w bit ten sam (brak fałszywego zapisu)', () => {
+  const raw = SKRZYNKA_TEMPLATE;
+  assert.equal(mergeFrontmatter(raw), raw);
+});
+
+test('szew: updateSkrzynkaFile domergowuje frontmatter i nie rusza markerów', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'skrzynka-'));
+  const file = path.join(dir, 'Skrzynka.md');
+  await fs.writeFile(file, withFrontmatter('status: w_trakcie\nmoj_klucz: zostaje'), 'utf8');
+
+  const m = msg();
+  await updateSkrzynkaFile(file, [m], [m], [], 'kacper');
+
+  // decyzja na ŚWIEŻYM odczycie z dysku, nie na obiekcie z pamięci
+  const after = await fs.readFile(file, 'utf8');
+  assert.ok(after.includes('cssclasses: [skrzynka]'));
+  assert.ok(after.includes('moj_klucz: zostaje'));
+  assert.ok(after.includes('%% inbox:items:start %%'));
+  assert.ok(after.includes('%% delegated:items:end %%'));
+  assert.match(after, /^\*1 nowa\*$/m);
+
+  // kontrakt push↔pull: odhaczony checkbox z ZAPISANEGO pliku parsuje się w inbox-push
+  const parsed = parseCheckedCallouts(after.replace('> - [ ] Zrobione', '> - [x] Zrobione'));
+  assert.equal(parsed.length, 1);
+  assert.deepEqual(parsed[0], { id: ID_A, thread_id: THREAD, action: 'Zrobione' });
+
+  await fs.rm(dir, { recursive: true, force: true });
 });

@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { main } from './inbox-push.mjs';
+import { main as closeMain } from './close.mjs';
 
 const T0 = '2026-07-24T07:12:00.000Z';
 const T1 = '2026-07-24T08:12:00.000Z';
@@ -17,7 +18,9 @@ const ID_TASK = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ID_REPLY = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const THREAD = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
-const ENV_KEYS = ['CLAUDE_CRON_WORKSPACE', 'INBOX_ENV_FILE', 'INBOX_SKRZYNKA_PATH', 'INBOX_ARCHIVE_DIR', 'INBOX_USER'];
+// INBOX_TODO_PATH na liście, bo loadEnv MUTUJE process.env — bez przywrócenia kolejny
+// test dziedziczyłby ścieżkę do skasowanego katalogu tymczasowego.
+const ENV_KEYS = ['CLAUDE_CRON_WORKSPACE', 'INBOX_ENV_FILE', 'INBOX_SKRZYNKA_PATH', 'INBOX_TODO_PATH', 'INBOX_ARCHIVE_DIR', 'INBOX_USER'];
 
 // Skrzynka z jednym odhaczonym taskiem [x] Zrobione (kontrakt marker id/thread + checkbox).
 const SKRZYNKA_CHECKED = `# Skrzynka
@@ -58,6 +61,7 @@ function setupVault(t, skrzynkaContent) {
   process.env.INBOX_SKRZYNKA_PATH = skrzynka;
   process.env.INBOX_ARCHIVE_DIR = archiveDir;
   delete process.env.INBOX_ENV_FILE;
+  delete process.env.INBOX_TODO_PATH;
   return { base, skrzynka, archiveDir };
 }
 
@@ -100,6 +104,36 @@ test('powtórzone done (hub: already_done) nie duplikuje archiwum ani reply', as
   assert.equal((archive.match(/Zrobione ✅/g) || []).length, 1);
   // closedBy wyprowadzone z nitki huba (kotwica.to_user), nie z env.
   assert.ok(archive.includes('by @alicja'));
+});
+
+// SZEW dwóch ścieżek domknięcia (komenda `close` + checkbox w Skrzynce). Testy czystych
+// funkcji obu stron przechodziły przy złamanym zachowaniu systemowym: każda ścieżka pisała
+// poprawny blok, a wątek domknięty etapami lądował w pliku miesiąca DWA razy.
+test('close.mjs i inbox-push archiwizują ten sam wątek → dokładnie jeden blok w pliku miesiąca', async (t) => {
+  const { base, archiveDir } = setupVault(t, SKRZYNKA_CHECKED);
+  // Sekret spoza vaulta nieistotny (hub zamockowany), ale nie chcemy czytać prawdziwego.
+  process.env.INBOX_ENV_FILE = path.join(base, 'brak-inbox.env');
+
+  const [task, reply] = REPLIED_THREAD;
+  const closeClient = {
+    // Snapshot sprzed domknięcia: sam task, jeszcze otwarty.
+    pull: async () => ({ v: 1, user: 'alicja', threadRows: [{ ...task, status: 'delivered' }] }),
+    // Wątek startuje od `task`, więc prawdziwy hub odpowie 'replied', nie 'closed'.
+    done: async () => ({ v: 1, result: 'replied' }),
+  };
+  await closeMain({ client: closeClient, argv: ['node', 'close.mjs', '--thread-id', THREAD] });
+  // Kontrola pośrednia: bez niej test przeszedłby też wtedy, gdyby `close` w ogóle
+  // nie zapisał archiwum (jeden blok „z braku drugiego" to nie jest ta gwarancja).
+  assert.ok(readArchive(archiveDir).includes(`%% thread:${THREAD} %%`), 'close zapisał blok wątku');
+
+  // Druga ścieżka: hub zwraca tę samą nitkę, już z odpowiedzią.
+  await main({ client: { done: async () => ({ v: 1, result: 'replied', thread: REPLIED_THREAD }) } });
+
+  const archive = readArchive(archiveDir);
+  assert.equal((archive.match(new RegExp(`%% thread:${THREAD} %%`, 'g')) || []).length, 1);
+  assert.equal((archive.match(/\*\*Zadanie:\*\* Baner na live/g) || []).length, 1);
+  // Nowsza wersja nitki wygrywa — domknięcie dokłada wiadomości, nie usuwa ich.
+  assert.ok(archive.includes(reply.content));
 });
 
 test('done zwraca not_found/skipped → brak archiwizacji (error case)', async (t) => {

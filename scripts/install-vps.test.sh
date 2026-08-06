@@ -3027,6 +3027,100 @@ EOF
   fi
 }
 
+# --- Test 63: write_install_version — rewizja z gita trafia do data/version.json ---
+# Bez tego kroku hub (jedyna maszyna 24/7) raportuje w /api/status wersję 'unknown',
+# bo setup.mjs — jedyny inny autor tego pliku — na ścieżce VPS nie biegnie.
+test_write_install_version() {
+  local snippet="$SANDBOX/t-version.sh" log="$SANDBOX/version.log" out
+  cat > "$snippet" <<EOF
+INSTALL_DIR="$SANDBOX/pu ls"
+# Stub granicy "wykonaj jako user claude": zapisuje komendę i udaje git/node.
+run_as_claude() {
+  echo "\$1" >> "$log"
+  case "\$1" in
+    *"git rev-parse"*) echo "deadbee" ;;
+  esac
+  return 0
+}
+write_install_version
+EOF
+  out="$(run_snippet "$snippet")"
+  if grep -q 'git rev-parse --short HEAD' "$log" \
+    && grep -q 'CLAUDE_CRON_INSTALL_REVISION=deadbee' "$log" \
+    && grep -q 'writeVersionFile' "$log" \
+    && [[ "$out" == *"deadbee"* ]]; then
+    pass "write_install_version: rewizja z gita zapisana przez lib/version.writeVersionFile"
+  else
+    problem "write_install_version: brak zapisu wersji (log: $(cat "$log" 2>/dev/null), out: $out)"
+  fi
+}
+
+# --- Test 64: write_install_version — brak rewizji = warn, ZERO zapisu i zero faila ---
+# Metadane wersji nie mogą przerwać zweryfikowanej instalacji (kontrakt warn-nie-fail).
+test_write_install_version_without_git() {
+  local snippet="$SANDBOX/t-version-nogit.sh" log="$SANDBOX/version-nogit.log" out rc
+  cat > "$snippet" <<EOF
+INSTALL_DIR="$SANDBOX/pu ls"
+run_as_claude() {
+  echo "\$1" >> "$log"
+  case "\$1" in
+    *"git rev-parse"*) return 1 ;;
+  esac
+  return 0
+}
+write_install_version
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && ! grep -q 'writeVersionFile' "$log" && [[ "$out" == *"unknown"* ]]; then
+    pass "write_install_version: brak rewizji → warn o 'unknown', bez zapisu i bez faila"
+  else
+    problem "write_install_version: zły wariant bez gita (rc=$rc, log: $(cat "$log" 2>/dev/null), out: $out)"
+  fi
+}
+
+# --- Test 65: write_puls_home_pointer — wskaźnik instalacji jako user claude ---
+# Bez niego na VPS (jedynej maszynie z rolą „agent") nie powstaje ŻADEN wskaźnik
+# PULS_HOME — oba pisze setup.mjs, którego ta ścieżka nie uruchamia — więc komendy
+# skilla `deleguj` trafiają w guard „brak PULS_HOME”.
+test_write_puls_home_pointer() {
+  local snippet="$SANDBOX/t-pointer.sh" log="$SANDBOX/pointer.log" out
+  cat > "$snippet" <<EOF
+INSTALL_DIR="$SANDBOX/pu ls"
+CLAUDE_USER="claude"
+run_as_claude() { echo "\$1" >> "$log"; return 0; }
+write_puls_home_pointer
+EOF
+  out="$(run_snippet "$snippet")"
+  # Spacja w ścieżce ma być zacytowana przez %q (pu\ ls) — niecytowana rozjechałaby
+  # się na dwa argumenty printf i wskaźnik pokazywałby na obcy katalog.
+  if grep -q '\.claude-cron-home' "$log" \
+    && grep -q 'pu\\ ls' "$log" \
+    && [[ "$out" == *".claude-cron-home"* ]]; then
+    pass "write_puls_home_pointer: wskaźnik zapisany jako user claude (ścieżka ze spacją cytowana)"
+  else
+    problem "write_puls_home_pointer: brak zapisu wskaźnika (log: $(cat "$log" 2>/dev/null), out: $out)"
+  fi
+}
+
+# --- Test 66: write_puls_home_pointer — pad zapisu = warn, nie fail instalacji ---
+test_write_puls_home_pointer_failure() {
+  local snippet="$SANDBOX/t-pointer-fail.sh" out rc
+  cat > "$snippet" <<EOF
+INSTALL_DIR="$SANDBOX/pu ls"
+CLAUDE_USER="claude"
+run_as_claude() { return 1; }
+write_puls_home_pointer
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"Nie zapisałem wskaźnika"* ]]; then
+    pass "write_puls_home_pointer: pad zapisu → warn, instalacja leci dalej"
+  else
+    problem "write_puls_home_pointer: pad powinien być warn bez faila (rc=$rc, out: $out)"
+  fi
+}
+
 echo "== install-vps.sh — testy szkieletu (flagi/tty/login/rollback), fazy 2 (preflight/guardy/pytania), fazy 3 (narzędzia/sekwencja/instalacje), fazy 4 (blok 5 loginów), fazy 5 (Obsidian + unity systemd), fazy 6 (auto-update/weryfikacja/dowód/Funnel/podsumowanie) i fazy 7 (reset: potwierdzenie TAK, guardy ścieżek, idempotencja) =="
 test_syntax
 test_flags_port
@@ -3111,6 +3205,11 @@ test_disable_funnel
 test_on_err_empty_stack_message
 test_setup_apt_lock_wait
 test_configure_firewall_enables_inactive
+
+test_write_install_version
+test_write_install_version_without_git
+test_write_puls_home_pointer
+test_write_puls_home_pointer_failure
 
 echo ""
 echo "Wynik: ${PASS} PASS / $((PASS + FAIL)) total"

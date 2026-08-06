@@ -8,6 +8,7 @@ const {
   validateMemberName, memberRowData, MEMBER_NAME_MAX,
   isTabAvailable, resolveVisibleTab,
   runningRunsFrom, formatElapsed, activeRunRows, activeRunsSignature,
+  shortRevision, revisionsMatch, updateBarView,
 } = require('./render-helpers');
 
 const MAINTENANCE_WINDOW = { startHour: 2, startMin: 0, endHour: 2, endMin: 15 };
@@ -532,4 +533,53 @@ test('pollSignature: start drugiego równoległego runu zmienia podpis (R2)', ()
   const one = pollSignature(runs, { ...base, current_runs: [{ id: 1 }] });
   const two = pollSignature(runs, { ...base, current_runs: [{ id: 1 }, { id: 2 }] });
   assert.notEqual(one, two, 'drugi biegnący run MUSI wpływać na podpis historii');
+});
+
+// === Pasek aktualizacji (R10) ===
+
+test('updateBarView: „masz najnowszą" chowa pasek i przycisk', () => {
+  const view = updateBarView({ status: 'current', can_update: false, local_revision: 'abcdef1234', message: 'Masz najnowszą wersję.' });
+  assert.equal(view.hidden, true);
+  assert.equal(view.buttonHidden, true);
+  assert.equal(view.localText, 'abcdef1');
+});
+
+test('updateBarView: dostępna nowa wersja pokazuje pasek i przycisk', () => {
+  const view = updateBarView({ status: 'available', can_update: true, local_revision: 'abcdef1234', message: 'Dostępna nowa wersja (9876543).' });
+  assert.equal(view.hidden, false);
+  assert.equal(view.buttonHidden, false);
+  assert.match(view.message, /9876543/);
+});
+
+test('updateBarView: wersja `unknown` pokazuje „nieznana", pasek NIE znika', () => {
+  const view = updateBarView({ status: 'unknown', can_update: true, local_revision: 'unknown', message: 'Nie wiem…' });
+  assert.equal(view.hidden, false);
+  assert.equal(view.localText, 'nieznana');
+});
+
+test('updateBarView: pad sprawdzenia jest widoczny i bez przycisku (panel nie wisi)', () => {
+  const view = updateBarView({ status: 'check_failed', can_update: false, local_revision: 'abcdef1234', message: 'Nie udało się sprawdzić.' });
+  assert.equal(view.hidden, false);
+  assert.equal(view.buttonHidden, true);
+});
+
+test('updateBarView: trwająca aktualizacja wygrywa ze starym stanem „dostępna nowa wersja"', () => {
+  const info = { status: 'available', can_update: true, local_revision: 'abcdef1234', message: 'Dostępna nowa wersja.' };
+  const view = updateBarView(info, { message: 'Aktualizuję…' });
+  assert.equal(view.message, 'Aktualizuję…');
+  assert.equal(view.buttonHidden, true); // drugie kliknięcie w trakcie restartu = podwójna aktualizacja
+  assert.equal(view.hidden, false);
+});
+
+test('revisionsMatch: skrócona rewizja lokalna == pełna zdalna; krótszy prefiks nie liczy się', () => {
+  assert.equal(revisionsMatch('abcdef1', 'abcdef1234567890'), true);
+  assert.equal(revisionsMatch('abcdef1234567890', 'abcdef1234567890'), true);
+  assert.equal(revisionsMatch('abcdef', 'abcdef1234567890'), false);
+  assert.equal(revisionsMatch('abcdef1', 'ffffff1234567890'), false);
+  assert.equal(revisionsMatch('', 'abcdef1234567890'), false);
+});
+
+test('shortRevision: brak rewizji nie wywraca renderu', () => {
+  assert.equal(shortRevision(undefined), '');
+  assert.equal(shortRevision('abcdef1234'), 'abcdef1');
 });

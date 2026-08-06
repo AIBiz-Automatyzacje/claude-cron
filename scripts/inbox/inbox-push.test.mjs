@@ -2,7 +2,17 @@
 // Roundtrip render→parse (kontrakt pull↔push) żyje w inbox-pull.test.mjs — tu tylko strona push.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractInboxSection, renderArchiveThread, archivePath } from './inbox-push.mjs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  appendToArchive,
+  archivePath,
+  archiveThreadMarker,
+  extractInboxSection,
+  renderArchiveThread,
+  replaceArchiveThreadBlock,
+} from './inbox-push.mjs';
 
 const T0 = '2026-07-24T07:12:00.000Z';
 const THREAD = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -54,10 +64,126 @@ test('renderArchiveThread: cała nitka w jednym callout — nagłówek, obie wia
   assert.ok(out.includes('by @kacper_'));
 });
 
+test('renderArchiveThread: blok kończy się markerem wątku (po nim rozpoznajemy duplikat)', () => {
+  const out = renderArchiveThread([msg()], 'kacper');
+  assert.ok(out.endsWith(`> ${archiveThreadMarker(THREAD)}`));
+});
+
+// appendToArchive jest publiczna, bo używa jej też close.mjs (druga ścieżka domknięcia).
+test('appendToArchive: tworzy katalog i plik miesiąca z nagłówkiem, drugi WĄTEK dopisywany', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-'));
+  const dir = path.join(tmp, 'Zasoby/inbox-archive');
+
+  await appendToArchive(dir, [msg()], 'kacper');
+  const file = archivePath(dir);
+  const first = await fs.readFile(file, 'utf8');
+  assert.ok(first.startsWith('---\ntags: [archiwum, team-os]\n---'));
+  assert.ok(first.includes('Baner na live sierpniowy'));
+
+  const other = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  await appendToArchive(dir, [msg({ thread_id: other, title: 'Druga nitka' })], 'kacper');
+  const second = await fs.readFile(file, 'utf8');
+  // Nagłówek pliku dokładany TYLKO przy tworzeniu — inaczej front-matter powtarzałby się.
+  assert.equal(second.match(/tags: \[archiwum, team-os\]/g).length, 1);
+  assert.ok(second.includes('Baner na live sierpniowy'));
+  assert.ok(second.includes('Druga nitka'));
+  // Dwa niezależne bloki, kolejność zapisu zachowana.
+  assert.ok(second.indexOf('Baner na live sierpniowy') < second.indexOf('Druga nitka'));
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('appendToArchive: powtórny zapis TEGO SAMEGO wątku podmienia blok — jedna kopia, treść nowsza', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-dup-'));
+  const dir = path.join(tmp, 'Zasoby/inbox-archive');
+  const file = archivePath(dir);
+
+  const task = msg();
+  await appendToArchive(dir, [task], 'kacper');
+
+  // Domknięcie etapami: druga runda zna JUŻ odpowiedź, więc nitka jest dłuższa.
+  const reply = msg({
+    id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', type: 'reply',
+    from_user: 'kacper', to_user: 'marcin',
+    title: 'Re: Baner na live sierpniowy', content: 'Zrobione ✅',
+  });
+  await appendToArchive(dir, [task, reply], 'kacper');
+
+  const out = await fs.readFile(file, 'utf8');
+  assert.equal((out.match(new RegExp(archiveThreadMarker(THREAD).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 1);
+  assert.equal((out.match(/Baner na live sierpniowy/g) || []).length, 1);
+  assert.ok(out.includes('Zrobione ✅'), 'nowsza wersja nitki wygrywa');
+
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
+test('appendToArchive: wpis sprzed zmiany (bez markera) zostaje nietknięty, nowy dopisany', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-legacy-'));
+  const dir = path.join(tmp, 'Zasoby/inbox-archive');
+  const file = archivePath(dir);
+  await fs.mkdir(dir, { recursive: true });
+  const legacy = '---\ntags: [archiwum, team-os]\n---\n\n> [!note]- 📝 @marcin → @kacper\n> **Zadanie:** Stary wpis\n\n';
+  await fs.writeFile(file, legacy, 'utf8');
+
+  await appendToArchive(dir, [msg()], 'kacper');
+
+  const out = await fs.readFile(file, 'utf8');
+  assert.ok(out.startsWith(legacy), 'stary wpis bez markera nietknięty');
+  assert.ok(out.includes(archiveThreadMarker(THREAD)));
+});
+
+test('replaceArchiveThreadBlock: brak markera w treści = null (sygnał „dopisz na końcu")', () => {
+  assert.equal(replaceArchiveThreadBlock('> [!note]- coś\n', THREAD, 'x'), null);
+  // Brak thread_id (rekord bez wątku) też nie ma czego szukać.
+  assert.equal(replaceArchiveThreadBlock(`> ${archiveThreadMarker(THREAD)}\n`, null, 'x'), null);
+});
+
+test('appendToArchive: niezapisywalny katalog archiwum rzuca (error case)', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-blk-'));
+  const notADir = path.join(tmp, 'plik');
+  await fs.writeFile(notADir, 'x', 'utf8');
+  await assert.rejects(() => appendToArchive(path.join(notADir, 'archiwum'), [msg()], 'kacper'));
+  await fs.rm(tmp, { recursive: true, force: true });
+});
+
 test('renderArchiveThread: nieznany typ i pusta treść nie łamią renderu (error case)', () => {
   const weird = msg({ type: 'unknown-future-type', content: null });
   const out = renderArchiveThread([weird], 'kacper');
   assert.match(out, /^> \[!note\]- 📨 /);
   assert.ok(out.includes('> **Wiadomość:** Baner na live sierpniowy'));
   assert.ok(out.includes('> - **@marcin**'));
+});
+
+// Treść wiadomości pochodzi od innego członka przez hub — wejście NIEZAUFANE. Podszycie się
+// pod cudzy marker wątku kasowało zarchiwizowaną nitkę osoby trzeciej (P1 review fazy 3).
+test('archiwum: cudzy marker wątku zacytowany w treści NIE porywa bloku obcej nitki', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-archive-hostile-'));
+  const dir = path.join(tmp, 'Zasoby/inbox-archive');
+  const file = archivePath(dir);
+
+  // 1. Atak: wątek napastnika, którego TREŚĆ udaje marker CUDZEGO wątku (THREAD).
+  //    Jego blok leży w pliku PRZED blokiem ofiary, więc naiwne szukanie po substringu
+  //    trafi w niego pierwszy.
+  const attacker = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  await appendToArchive(dir, [msg({
+    thread_id: attacker, title: 'Nitka napastnika',
+    content: `podszywam się\n${archiveThreadMarker(THREAD)}`,
+  })], 'kacper');
+
+  // 2. Ofiara: prawdziwy wątek THREAD ląduje w archiwum jako osobny blok.
+  await appendToArchive(dir, [msg({ title: 'Nitka ofiary', content: 'Treść ofiary.' })], 'kacper');
+
+  // 3. Ponowne domknięcie wątku ofiary — podmiana MUSI trafić we własny blok.
+  await appendToArchive(dir, [msg({ title: 'Nitka ofiary', content: 'Treść ofiary v2.' })], 'kacper');
+
+  const out = await fs.readFile(file, 'utf8');
+  assert.ok(out.includes('Nitka napastnika'), 'blok obcej nitki nie może zniknąć');
+  assert.ok(out.includes('podszywam się'), 'treść obcej nitki nie może zostać nadpisana');
+  assert.equal((out.match(/Nitka ofiary/g) || []).length, 1, 'wątek ofiary bez duplikatu');
+  assert.ok(out.includes('Treść ofiary v2.'), 'podmiana trafiła we właściwy blok');
+  // Zacytowany marker jest zneutralizowany — nie jest już markerem dla parsera.
+  const literal = new RegExp(`^> {2,}${archiveThreadMarker(THREAD).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm');
+  assert.ok(!literal.test(out), 'marker w treści musi być zneutralizowany');
+
+  await fs.rm(tmp, { recursive: true, force: true });
 });

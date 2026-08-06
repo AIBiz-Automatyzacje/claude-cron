@@ -312,7 +312,56 @@
     return isTabAvailable(tab, state) ? tab : DEFAULT_TAB;
   }
 
+  // === Pasek aktualizacji (R10) ===
+
+  // Rewizja lokalna bywa SKRÓCONA (`git rev-parse --short` przy instalacji z klona),
+  // zdalna jest zawsze pełna. Parytet z revisionsMatch/MIN_REVISION_PREFIX w lib/updater.js.
+  const REVISION_PREFIX = 7;
+
+  function shortRevision(revision) {
+    return typeof revision === 'string' ? revision.slice(0, REVISION_PREFIX) : '';
+  }
+
+  function revisionsMatch(a, b) {
+    if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
+    const shorter = a.length < b.length ? a : b;
+    const longer = a.length < b.length ? b : a;
+    if (shorter.length < REVISION_PREFIX) return false;
+    return longer.startsWith(shorter);
+  }
+
+  // Czysta decyzja, co pokazuje pasek aktualizacji. Reguły, których nie wolno złamać:
+  // 1) trwająca aktualizacja WYGRYWA z wynikiem sprawdzenia (stary stan „dostępna nowa
+  //    wersja" zapraszałby do drugiego kliknięcia w trakcie restartu serwera);
+  // 2) przycisk pojawia się WYŁĄCZNIE przy `can_update === true` (fail-closed);
+  // 3) chowamy pasek TYLKO przy `current` — „nie wiem" i „nie udało się sprawdzić"
+  //    muszą być widoczne, bo cisza jest nieodróżnialna od „masz najnowszą".
+  function updateBarView(info, watch) {
+    if (watch) {
+      return {
+        hidden: false,
+        buttonHidden: true,
+        localText: localVersionText(info),
+        message: watch.message || '',
+      };
+    }
+    const state = info || {};
+    return {
+      hidden: state.status === 'current',
+      buttonHidden: state.can_update !== true,
+      localText: localVersionText(state),
+      message: state.message || '',
+    };
+  }
+
+  function localVersionText(info) {
+    const revision = (info || {}).local_revision;
+    if (!revision || revision === 'unknown') return 'nieznana';
+    return shortRevision(revision);
+  }
+
   const api = {
+    shortRevision, revisionsMatch, updateBarView, REVISION_PREFIX,
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
     parseCronForCalendar, computeWeekOccurrences, startOfWeek, formatHourMinute,
     overlapsMaintenanceWindow,

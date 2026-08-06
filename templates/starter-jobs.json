@@ -36,6 +36,19 @@
     "telegram_notify": 0
   },
   {
+    "name": "Puls — kontrola spójności",
+    "job_type": "script",
+    "command": "scripts/consistency-check.mjs",
+    "cron_expr": "0 9 * * *",
+    "timeout_ms": 60000,
+    "enabled": 1,
+    "run_on_wake": 1,
+    "routine": 1,
+    "lock_group": "dashboard",
+    "discord_notify": 0,
+    "telegram_notify": 1
+  },
+  {
     "name": "Poszukiwanie nowych skillów",
     "skill_name": "skill-scout",
     "cron_expr": "0 9 * * 5",

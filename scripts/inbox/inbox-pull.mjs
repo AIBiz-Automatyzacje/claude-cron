@@ -219,6 +219,50 @@ cssclasses: [skrzynka]
 %% delegated:items:end %%
 `;
 
+// ──────── frontmatter merge ────────
+// Renderer podmienia tylko treść między markerami, więc zmiany SZABLONU (np. dodane
+// `cssclasses: [skrzynka]`, od którego zależy cały CSS karty) nigdy nie docierały do plików
+// utworzonych wcześniej — na jednej maszynie Skrzynka wyglądała poprawnie, na drugiej
+// „na zepsutym CSS". Dlatego przy każdym pullu domergowujemy BRAKUJĄCE klucze z szablonu.
+//
+// Merge, nie nadpisanie: ludzie dopisują do frontmattera własne klucze i zmieniają wartości
+// (własna lista cssclasses, inny status/termin). Klucz już obecny zostaje nietknięty —
+// warunek, nie preferencja.
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
+
+// Dzieli ciało frontmattera na wpisy najwyższego poziomu. Linie kontynuacji (wcięcia,
+// pozycje listy blokowej `- x`) doklejają się do ostatniego klucza — dzięki temu
+// wartości wielolinijkowe przenoszą się z szablonu w całości.
+function splitTopLevelEntries(body) {
+  const entries = [];
+  for (const line of body.split(/\r?\n/)) {
+    const m = /^([A-Za-z0-9_.-]+)\s*:/.exec(line);
+    if (m) entries.push({ key: m[1], lines: [line] });
+    else if (entries.length) entries[entries.length - 1].lines.push(line);
+  }
+  return entries;
+}
+
+export function mergeFrontmatter(raw, template = SKRZYNKA_TEMPLATE) {
+  const tpl = FRONTMATTER_RE.exec(template);
+  if (!tpl) return raw;
+
+  const found = FRONTMATTER_RE.exec(raw);
+  if (!found) {
+    // Otwarcie `---` bez domknięcia to nie „brak frontmattera", tylko plik, którego
+    // struktury nie rozumiemy — nie zgadujemy, zostawiamy nietknięty.
+    if (/^---\r?\n/.test(raw)) return raw;
+    return `---\n${tpl[1]}\n---\n${raw}`;
+  }
+
+  const existingKeys = new Set(splitTopLevelEntries(found[1]).map(e => e.key));
+  const missing = splitTopLevelEntries(tpl[1]).filter(e => !existingKeys.has(e.key));
+  if (!missing.length) return raw;
+
+  const mergedBody = `${found[1].replace(/\s+$/, '')}\n${missing.map(e => e.lines.join('\n')).join('\n')}`;
+  return `---\n${mergedBody}\n---${found[2]}${raw.slice(found[0].length)}`;
+}
+
 async function ensureSkrzynkaFile(filePath) {
   try {
     return await fs.readFile(filePath, 'utf8');
@@ -231,7 +275,8 @@ async function ensureSkrzynkaFile(filePath) {
   }
 }
 
-async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedItems, me) {
+// eksportowane dla testu szwu (render + merge frontmattera + zapis na prawdziwym pliku)
+export async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedItems, me) {
   const raw = await ensureSkrzynkaFile(filePath);
   const inboxCallouts = buildThreadCallouts(threadRows, activeForMe, me);
   const inboxCount = activeForMe.length;
@@ -244,7 +289,7 @@ async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedIt
     ? renderDelegatedCallout(delegatedItems)
     : '> [!inbox-ok] 🌿 Nic nie wisi na innych.';
 
-  let updated = replaceBetweenMarkers(raw, '%% inbox:items:start %%', '%% inbox:items:end %%', inboxBody);
+  let updated = replaceBetweenMarkers(mergeFrontmatter(raw), '%% inbox:items:start %%', '%% inbox:items:end %%', inboxBody);
   updated = replaceBetweenMarkers(updated, '%% delegated:items:start %%', '%% delegated:items:end %%', delegatedBody);
   updated = updated.replace(/^\*\d+ now[a-z]+\*$/m, `*${inboxCount} ${inboxCount === 1 ? 'nowa' : 'nowych'}*`);
   updated = updated.replace(/^\*\d+ w toku\*$/m, `*${delegatedCount} w toku*`);

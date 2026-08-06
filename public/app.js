@@ -33,6 +33,7 @@ const { computeWeekOccurrences, startOfWeek } = RenderHelpers;
 const { overlapsMaintenanceWindow } = RenderHelpers;
 const { validateMemberName, memberRowData } = RenderHelpers;
 const { runningRunsFrom, activeRunRows, activeRunsSignature } = RenderHelpers;
+const { shortRevision, revisionsMatch, updateBarView } = RenderHelpers;
 
 let zadaniaView = 'lista'; // 'lista' | 'kalendarz'
 
@@ -323,6 +324,7 @@ async function loadStatus() {
     const status = await API.get('/api/status');
     lastStatus = status;
     renderStatbar(status);
+    renderVpsAddr(status);
     renderKillBar(status);
   } catch { /* silent — statbar degraduje cicho */ }
 }
@@ -355,6 +357,150 @@ function renderKillBar(status) {
     const durEl = document.getElementById(`kill-dur-${r.id}`);
     if (durEl) durEl.textContent = r.elapsed;
   }
+}
+
+// Pasek adresu VPS (R7): adres w użyciu przez proces vs adres zapisany w konfiguracji.
+// Rozjazd = env zmienione po instalacji, ale proces trzyma starą wartość → „wymaga restartu".
+// Pole `vps_url` może NIE ISTNIEĆ, gdy patrzymy przez proxy na starszą instancję VPS —
+// wtedy pasek po prostu znika, zamiast wywalić render całego statbara.
+function renderVpsAddr(status) {
+  const box = document.getElementById('vps-addr');
+  if (!box) return;
+  const info = status.vps_url || null;
+  const inUse = info && typeof info.in_use === 'string' ? info.in_use : '';
+  const saved = info && typeof info.persisted === 'string' ? info.persisted : '';
+
+  // Bez skonfigurowanego VPS-a (obie wartości puste) pasek nie ma co mówić.
+  if (!info || (!inUse && !saved)) {
+    box.hidden = true;
+    return;
+  }
+
+  box.hidden = false;
+  // „nie wiem" (null) rozróżnione od „pusty adres" — nieczytelne źródło nigdy nie udaje wartości.
+  document.getElementById('vps-addr-inuse').textContent = inUse || '(brak)';
+  document.getElementById('vps-addr-saved').textContent = saved || 'nie udało się odczytać';
+  document.getElementById('vps-addr-warn').hidden = info.mismatch !== true;
+}
+
+// === Aktualizacja Pulsa (R10) ===
+// Pasek dotyczy ZAWSZE instancji lokalnej — dlatego gołe `fetch`, nie API.get
+// (to drugie przepisuje ścieżkę na /api/vps/* przy przełączniku środowiska, a klik
+// „Zaktualizuj" w widoku VPS-a aktualizowałby cudzą maszynę bez ostrzeżenia).
+const UPDATE_POLL_MS = 5000;
+// Po tym czasie mówimy WPROST, że się nie udało. Cisza po kliknięciu jest gorsza niż błąd:
+// aktualizacja podmienia kod i restartuje daemona, więc „nic się nie dzieje" wygląda
+// identycznie jak „padło w połowie".
+const UPDATE_TIMEOUT_MS = 6 * 60 * 1000;
+
+let updateInfo = null; // ostatnia odpowiedź GET /api/update
+let updateWatch = null; // { target, startedAt, timer } — trwa aktualizacja
+
+async function loadUpdateStatus() {
+  try {
+    updateInfo = await fetch('/api/update').then(r => r.json());
+  } catch {
+    // Pad zapytania to TEŻ „nie udało się sprawdzić" — nigdy cicha zieleń.
+    updateInfo = {
+      status: 'check_failed',
+      can_update: false,
+      local_revision: 'unknown',
+      message: 'Nie udało się sprawdzić aktualizacji (brak połączenia z Pulsem).',
+    };
+  }
+  renderUpdateBar();
+}
+
+function renderUpdateBar() {
+  const bar = document.getElementById('update-bar');
+  if (!bar || !updateInfo) return;
+  const view = updateBarView(updateInfo, updateWatch);
+
+  document.getElementById('update-local').textContent = view.localText;
+  document.getElementById('update-msg').textContent = view.message;
+  bar.hidden = view.hidden;
+  document.getElementById('update-btn').hidden = view.buttonHidden;
+}
+
+async function startPulsUpdate() {
+  if (updateWatch) return;
+  if (!confirm('Zaktualizować Pulsa do najnowszej wersji? Serwer zostanie na chwilę zatrzymany.')) return;
+
+  const btn = document.getElementById('update-btn');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/update', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const body = await res.json();
+    if (!res.ok || body.started !== true) {
+      updateInfo = { ...(updateInfo || {}), ...body, message: body.error || body.message || 'Nie udało się uruchomić aktualizacji.' };
+      renderUpdateBar();
+      return;
+    }
+    updateWatch = {
+      target: body.revision || '',
+      startedAt: Date.now(),
+      message: `Aktualizuję do ${shortRevision(body.revision)} — czekam, aż Puls wróci…`,
+      timer: setInterval(pollUpdateProgress, UPDATE_POLL_MS),
+    };
+    renderUpdateBar();
+  } catch (err) {
+    updateInfo = { ...(updateInfo || {}), can_update: true, message: `Nie udało się uruchomić aktualizacji: ${err.message}` };
+    renderUpdateBar();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Odpytujemy AŻ wróci nowa wersja. Pad fetcha to normalny stan (serwer właśnie wstaje),
+// więc milczy; dopiero przekroczenie UPDATE_TIMEOUT_MS mówi wprost o niepowodzeniu.
+async function pollUpdateProgress() {
+  if (!updateWatch) return;
+
+  // `try` obejmuje WYŁĄCZNIE odpytanie API. Szerszy blok klasyfikowałby błąd
+  // `revisionsMatch`/`finishUpdateWatch` jako pad sieci i chował go w logu debug —
+  // czyli realny bug w panelu wyglądałby jak spodziewany restart serwera.
+  let status = null;
+  try {
+    status = await fetch('/api/status').then(r => r.json());
+  } catch (err) {
+    // Pad fetcha w trakcie restartu jest SPODZIEWANY, więc nie alarmujemy użytkownika —
+    // ale nie znika bez śladu: `debug` zostawia powód w konsoli, żeby diagnoza „czemu
+    // aktualizacja nie doszła" nie zaczynała się od zera.
+    console.debug('[update] próba odpytania /api/status nieudana (serwer wstaje?):', err);
+  }
+
+  // Guard PO awaicie, nie tylko przed: interwał tyka co 5 s, a w trakcie restartu
+  // serwera pojedynczy fetch trwa dłużej — więc kolejny tick wchodzi tu, zanim poprzedni
+  // skończy. Oba przeszły guard na wejściu i oba dobiegłyby do finishUpdateWatch,
+  // a drugie trafiłoby już na `updateWatch === null`.
+  if (!updateWatch) return;
+
+  if (status) {
+    const revision = status.version ? status.version.revision : '';
+    if (revisionsMatch(revision, updateWatch.target)) {
+      finishUpdateWatch(`Zaktualizowano do ${shortRevision(revision)}. Odśwież stronę, żeby wczytać nowy panel.`);
+      return;
+    }
+  }
+
+  if (Date.now() - updateWatch.startedAt > UPDATE_TIMEOUT_MS) {
+    finishUpdateWatch('Aktualizacja nie powiodła się — Puls nie wrócił z nową wersją. Sprawdź logi albo uruchom instalator ręcznie.');
+  }
+}
+
+// Koniec czekania — sukces ALBO timeout. Świadomie NIE odpytujemy ponownie /api/update:
+// po sukcesie odpowiedź brzmiałaby „masz najnowszą" i pasek by zniknął razem z prośbą
+// o odświeżenie strony, a po niepowodzeniu skasowałaby komunikat o niepowodzeniu.
+// Status `done` jest widoczny (nie `current`) i bez przycisku (`can_update:false`).
+function finishUpdateWatch(message) {
+  // Idempotentne: dwa równoległe polle mogą dobiec tu obydwa (patrz guard po awaicie
+  // w pollUpdateProgress). Drugie wejście ma być no-opem, nie TypeError-em na
+  // `updateWatch.timer` — inaczej użytkownik widzi błąd mimo UDANEJ aktualizacji.
+  if (!updateWatch) return;
+  clearInterval(updateWatch.timer);
+  updateWatch = null;
+  updateInfo = { ...(updateInfo || {}), status: 'done', can_update: false, message };
+  renderUpdateBar();
 }
 
 // Statbar: Następne / Aktywne / Dziś+health / Kolejka / Uptime.
@@ -1620,6 +1766,9 @@ async function init() {
   await loadJobs();
   loadStatus();
   loadRuns();
+  // Sprawdzenie aktualizacji RAZ przy starcie panelu (nie w poll co 3 s) — publiczne API
+  // GitHuba ma limit 60 żądań/h na IP, a odpowiedź zmienia się w skali dni, nie sekund.
+  loadUpdateStatus();
 
   // Schedule preview updates
   document.getElementById('form-time').addEventListener('change', updateSchedulePreview);
