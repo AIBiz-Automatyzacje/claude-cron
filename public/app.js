@@ -455,29 +455,34 @@ async function startPulsUpdate() {
 // więc milczy; dopiero przekroczenie UPDATE_TIMEOUT_MS mówi wprost o niepowodzeniu.
 async function pollUpdateProgress() {
   if (!updateWatch) return;
+
+  // `try` obejmuje WYŁĄCZNIE odpytanie API. Szerszy blok klasyfikowałby błąd
+  // `revisionsMatch`/`finishUpdateWatch` jako pad sieci i chował go w logu debug —
+  // czyli realny bug w panelu wyglądałby jak spodziewany restart serwera.
+  let status = null;
   try {
-    const status = await fetch('/api/status').then(r => r.json());
-    // Guard PO awaicie, nie tylko przed: interwał tyka co 5 s, a w trakcie restartu
-    // serwera pojedynczy fetch trwa dłużej — więc kolejny tick wchodzi tu, zanim
-    // poprzedni skończy. Oba przeszły guard na wejściu, oba dobiegają do
-    // finishUpdateWatch, a drugie trafia już na `updateWatch === null`.
-    if (!updateWatch) return;
-    const revision = status && status.version ? status.version.revision : '';
+    status = await fetch('/api/status').then(r => r.json());
+  } catch (err) {
+    // Pad fetcha w trakcie restartu jest SPODZIEWANY, więc nie alarmujemy użytkownika —
+    // ale nie znika bez śladu: `debug` zostawia powód w konsoli, żeby diagnoza „czemu
+    // aktualizacja nie doszła" nie zaczynała się od zera.
+    console.debug('[update] próba odpytania /api/status nieudana (serwer wstaje?):', err);
+  }
+
+  // Guard PO awaicie, nie tylko przed: interwał tyka co 5 s, a w trakcie restartu
+  // serwera pojedynczy fetch trwa dłużej — więc kolejny tick wchodzi tu, zanim poprzedni
+  // skończy. Oba przeszły guard na wejściu i oba dobiegłyby do finishUpdateWatch,
+  // a drugie trafiłoby już na `updateWatch === null`.
+  if (!updateWatch) return;
+
+  if (status) {
+    const revision = status.version ? status.version.revision : '';
     if (revisionsMatch(revision, updateWatch.target)) {
       finishUpdateWatch(`Zaktualizowano do ${shortRevision(revision)}. Odśwież stronę, żeby wczytać nowy panel.`);
       return;
     }
-  } catch (err) {
-    // Pad fetcha w trakcie restartu jest SPODZIEWANY, więc nie alarmujemy użytkownika —
-    // ale nie znika bez śladu: `debug` zostawia powód w konsoli, żeby diagnoza „czemu
-    // aktualizacja nie doszła" nie zaczynała się od zera. Cichy `catch {}` gubił tu
-    // również błędy niezwiązane z restartem.
-    console.debug('[update] próba odpytania /api/status nieudana (serwer wstaje?):', err);
   }
 
-  // Ta linia stoi POZA `try`, więc odczyt `updateWatch.startedAt` na null-u wypadłby
-  // jako nieobsłużona odrzucona obietnica, nie jako złapany błąd.
-  if (!updateWatch) return;
   if (Date.now() - updateWatch.startedAt > UPDATE_TIMEOUT_MS) {
     finishUpdateWatch('Aktualizacja nie powiodła się — Puls nie wrócił z nową wersją. Sprawdź logi albo uruchom instalator ręcznie.');
   }
