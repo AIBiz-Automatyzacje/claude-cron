@@ -296,7 +296,11 @@ function normalizeSectionHeadings(raw) {
 
 // eksportowane dla testu szwu (render + merge frontmattera + zapis na prawdziwym pliku)
 export async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedItems, me) {
-  const raw = normalizeSectionHeadings(await ensureSkrzynkaFile(filePath));
+  // `original` = treść z DYSKU — to z nią porównuje writeIfChanged. Porównanie z już
+  // znormalizowanym `raw` zjadało zapis, gdy jedyną różnicą był nagłówek (pusta skrzynka,
+  // liczniki bez zmian → normalizacja nigdy nie trafiała do pliku).
+  const original = await ensureSkrzynkaFile(filePath);
+  const raw = normalizeSectionHeadings(original);
   const inboxCallouts = buildThreadCallouts(threadRows, activeForMe, me);
   const inboxCount = activeForMe.length;
   const delegatedCount = delegatedItems.length;
@@ -313,7 +317,7 @@ export async function updateSkrzynkaFile(filePath, threadRows, activeForMe, dele
   updated = updated.replace(/^\*\d+ now[a-z]+\*$/m, `*${inboxCount} ${inboxCount === 1 ? 'nowa' : 'nowych'}*`);
   updated = updated.replace(/^\*\d+ w toku\*$/m, `*${delegatedCount} w toku*`);
 
-  await writeIfChanged(filePath, raw, updated);
+  await writeIfChanged(filePath, original, updated);
 }
 
 // Zapis TYLKO przy realnej zmianie treści.

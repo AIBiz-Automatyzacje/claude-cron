@@ -162,6 +162,25 @@ test('merge frontmattera: komplet kluczy = plik bit w bit ten sam (brak fałszyw
   assert.equal(mergeFrontmatter(raw), raw);
 });
 
+test('szew: normalizacja nagłówka zapisuje się TAKŻE gdy to jedyna zmiana (pusta skrzynka)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'skrzynka-'));
+  const file = path.join(dir, 'Skrzynka.md');
+
+  // Ustabilizuj plik pierwszym przebiegiem na pustej skrzynce…
+  await fs.writeFile(file, SKRZYNKA_TEMPLATE, 'utf8');
+  await updateSkrzynkaFile(file, [], [], [], 'kacper');
+  const stable = await fs.readFile(file, 'utf8');
+
+  // …po czym cofnij WYŁĄCZNIE nagłówek do starej formy (stan plików sprzed zmiany szablonu).
+  await fs.writeFile(file, stable.replace('## 📤 Wysłane', '## 📤 Wysłane — czekają na odpowiedź'), 'utf8');
+  await updateSkrzynkaFile(file, [], [], [], 'kacper');
+
+  // Pułapka: `writeIfChanged` porównywał z treścią JUŻ znormalizowaną w pamięci,
+  // więc różnica „tylko nagłówek" wyglądała jak brak zmian i nie trafiała na dysk.
+  const after = await fs.readFile(file, 'utf8');
+  assert.ok(!after.includes('czekają na odpowiedź'), 'nagłówek znormalizowany mimo braku innych zmian');
+});
+
 test('szew: updateSkrzynkaFile domergowuje frontmatter i nie rusza markerów', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'skrzynka-'));
   const file = path.join(dir, 'Skrzynka.md');
