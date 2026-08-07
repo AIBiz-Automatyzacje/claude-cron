@@ -6,7 +6,7 @@ import path from 'node:path';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeFrontmatter, renderDelegatedCallout, renderThreadCallout, SKRZYNKA_TEMPLATE, updateSkrzynkaFile } from './inbox-pull.mjs';
+import { mergeFrontmatter, replaceBetweenMarkers, renderDelegatedCallout, renderThreadCallout, SKRZYNKA_TEMPLATE, updateSkrzynkaFile } from './inbox-pull.mjs';
 import { parseCheckedCallouts } from './inbox-push.mjs';
 
 const T0 = '2026-07-24T07:12:00.000Z';
@@ -184,4 +184,20 @@ test('szew: updateSkrzynkaFile domergowuje frontmatter i nie rusza markerów', a
   assert.deepEqual(parsed[0], { id: ID_A, thread_id: THREAD, action: 'Zrobione' });
 
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+test('replaceBetweenMarkers: zdublowany marker = głośny fail, nie pisanie w pierwszy blok', () => {
+  // Incydent 06.08: tekstowy merge Obsidian Sync zdublował sekcję z markerami — pull pisał
+  // w PIERWSZY blok i zagnieżdżał treść coraz głębiej przy każdym runie, cementując uszkodzenie.
+  const zdrowy = 'a\n%% s %%\nstare\n%% e %%\nb';
+  assert.equal(
+    replaceBetweenMarkers(zdrowy, '%% s %%', '%% e %%', 'nowe'),
+    'a\n%% s %%\nnowe\n%% e %%\nb',
+  );
+
+  const podwojnyStart = 'a\n%% s %%\nx\n%% e %%\nb\n%% s %%\ny';
+  assert.throws(() => replaceBetweenMarkers(podwojnyStart, '%% s %%', '%% e %%', 'nowe'), /Zdublowany marker/);
+
+  const podwojnyEnd = 'a\n%% s %%\nx\n%% e %%\nb\n%% e %%';
+  assert.throws(() => replaceBetweenMarkers(podwojnyEnd, '%% s %%', '%% e %%', 'nowe'), /Zdublowany marker/);
 });

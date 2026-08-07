@@ -149,11 +149,22 @@ function archiveLink() {
 }
 
 // ──────── generic marker replace ────────
-function replaceBetweenMarkers(source, startMarker, endMarker, newContent) {
+export function replaceBetweenMarkers(source, startMarker, endMarker, newContent) {
   const startIdx = source.indexOf(startMarker);
   const endIdx = source.indexOf(endMarker);
   if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
     throw new Error(`Markers not found: ${startMarker} / ${endMarker}`);
+  }
+  // Zdublowany marker = plik USZKODZONY (najczęściej: tekstowy merge Obsidian Sync po
+  // wyścigu dwóch maszyn — incydent 06.08 na hubie). Pisanie w pierwszy blok zagnieżdżałoby
+  // treść coraz głębiej przy KAŻDYM pullu i cementowało uszkodzenie na zawsze — głośny fail
+  // zostawia plik człowiekowi do ręcznej naprawy, a job sync zgłasza błąd zamiast udawać sukces.
+  if (source.indexOf(startMarker, startIdx + startMarker.length) !== -1
+    || source.indexOf(endMarker, endIdx + endMarker.length) !== -1) {
+    throw new Error(
+      `Zdublowany marker ${startMarker} / ${endMarker} — plik wygląda na uszkodzony ` +
+        '(np. konflikt Obsidian Sync). Napraw go ręcznie: zostaw JEDNĄ parę markerów, resztę usuń.'
+    );
   }
   const before = source.slice(0, startIdx + startMarker.length);
   const after = source.slice(endIdx);

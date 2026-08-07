@@ -1432,15 +1432,13 @@ async function main() {
       warnIfHookPortStale(workspace, dashboardPort);
     }
 
-    // Pytanie zbiorcze o podstawowe taski — sam seed dopiero PO smoke-teście DB
+    // Podstawowe taski idą BEZ pytania (decyzja 07.08): to część produktu, nie opcja —
+    // daemon i tak doseeduje je przy starcie (seedStarterJobsAtBoot), więc pytanie tutaj
+    // dawało tylko iluzję wyboru. Świadome skasowanie taska po instalacji JEST respektowane
+    // (sentinel per task w state — skasowany nie wraca). Sam seed dopiero PO smoke-teście DB
     // (za blokiem try/finally), bo baza jest otwierana najwcześniej przy smoke-teście.
-    const starterAnswer = (
-      await ask(rl, 'Dodać zestaw podstawowych tasków (memory update, reflect, skill scout)? [T/n]: ', 'T')
-    ).toLowerCase();
-    wantStarterJobs = starterAnswer === 't';
-    if (!wantStarterJobs) {
-      console.log('[info] Pominięto podstawowe taski.');
-    }
+    wantStarterJobs = true;
+    console.log('[info] Zestaw podstawowych tasków zostanie dodany automatycznie (pomijane: już istniejące i bez zainstalowanego skilla).');
 
     const reloadHint =
       process.platform === 'win32'

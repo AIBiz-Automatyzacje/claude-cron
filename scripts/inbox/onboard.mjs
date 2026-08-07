@@ -123,19 +123,19 @@ function getRoleFromState() {
 }
 
 // === Pure helper: nota o ZMIANIE roli maszyny między instalacjami ===
-// Seed jobów skrzynki NIGDY nie robi UPDATE (lib/inbox-seed: „naprawianie" istniejącego joba
-// clobberowałoby ręczne wyłączenia usera), więc po zmianie roli przy ponownym uruchomieniu
-// instalatora job z POPRZEDNIEJ roli zostaje włączony, a obok powstaje job nowej roli —
-// maszyna robi jedno i drugie naraz, a role mają się wykluczać. Rekoncyliacja musi być
-// świadomą decyzją człowieka (job bywa wyłączony ręcznie), więc mówimy mu o tym wprost.
+// Od 07.08 daemon EGZEKWUJE wyłączność ról przy każdym boocie (lib/inbox-seed:
+// enforceRoleExclusivity — pokłosie incydentu 06.08, gdy sync włączony na hubie-agencie
+// uszkodził Skrzynkę pod Obsidian Sync): job poprzedniej roli zostanie automatycznie
+// wyłączony przy najbliższym starcie daemona. Mówimy o tym userowi, żeby wyłączony job
+// w panelu nie wyglądał jak awaria — i żeby nie włączał go z powrotem ręcznie.
 // Pusty string = brak zmiany albo brak wcześniejszej roli w dziedzinie (pierwsza instalacja).
 export function describeRoleChange(previousRole, role) {
   if (!isValidRole(previousRole) || previousRole === role) return '';
   const staleJob = previousRole === ROLE_AGENT ? ASSISTANT_JOB_NAME : JOB_NAME;
-  return ` [warn] Rola tej maszyny zmieniła się (${previousRole} → ${role}), a job „${staleJob}"`
-    + ' z poprzedniej instalacji ZOSTAJE włączony — instalator nigdy nie modyfikuje istniejących'
-    + ' jobów. Wyłącz go w dashboardzie Pulsa (widok Zadania), inaczej maszyna będzie jednocześnie'
-    + ' renderować Skrzynkę i auto-odpowiadać.';
+  return ` [info] Rola tej maszyny zmieniła się (${previousRole} → ${role}) — job „${staleJob}"`
+    + ' z poprzedniej roli zostanie automatycznie WYŁĄCZONY przy starcie daemona (role się'
+    + ' wykluczają: sync tylko na maszynie człowieka, auto-reply tylko na VPS). W panelu'
+    + ' zostanie widoczny jako wyłączony — nie włączaj go z powrotem.';
 }
 
 function describeGuardRefusal(guard) {
