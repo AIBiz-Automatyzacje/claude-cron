@@ -354,6 +354,19 @@ function Stop-PulsProcesses {
 
     $procs = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
         Where-Object { Test-PulsProcessPath -CommandLine $_.CommandLine -Prefix $prefix })
+
+    # Druga siatka: node.exe wlasciciel portu dashboardu. Filtr po linii komend jest SLEPY
+    # na daemona odpalonego recznie (`Set-Location <dir>; node server.js` - w linii komend
+    # jest tylko "node server.js", bez sciezki) - 07.08 taki daemon przezyl Stop i instalator
+    # padl na Move-Item w POLOWIE przenoszenia data\. Ubijamy wylacznie procesy node.exe
+    # (cudza aplikacja na tym porcie to nie nasza sprawa - ja zatrzyma guard nizej).
+    $port = Get-PulsDashboardPort
+    foreach ($ownerPid in (Get-PortListenerPids -Port $port)) {
+        if ($procs | Where-Object { $_.ProcessId -eq $ownerPid }) { continue }
+        $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid" -ErrorAction SilentlyContinue
+        if ($owner -and $owner.Name -eq 'node.exe') { $procs += $owner }
+    }
+
     if ($procs.Count -eq 0) { return }
 
     foreach ($p in $procs) {
@@ -362,6 +375,28 @@ function Stop-PulsProcesses {
     }
     # Windows zwalnia uchwyty asynchronicznie po zabiciu procesu.
     Start-Sleep -Seconds 2
+}
+
+# Port dashboardu tej instalacji - z env User-scope/procesu, default 7777 (lib/config.js).
+function Get-PulsDashboardPort {
+    $raw = $env:CLAUDE_CRON_PORT
+    if (-not $raw) { $raw = [Environment]::GetEnvironmentVariable("CLAUDE_CRON_PORT", "User") }
+    $port = 0
+    if ([int]::TryParse("$raw", [ref]$port) -and $port -gt 0 -and $port -lt 65536) { return $port }
+    return 7777
+}
+
+# PID-y procesow nasluchujacych na porcie. Pusta lista takze przy braku
+# Get-NetTCPConnection (stare PS/Windows) - wtedy zachowanie jak przed ta poprawka.
+function Get-PortListenerPids {
+    param([Parameter(Mandatory = $true)][int] $Port)
+    try {
+        return @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+            Select-Object -ExpandProperty OwningProcess -Unique)
+    }
+    catch {
+        return @()
+    }
 }
 
 # Atomowy(-ish) swap: swieze repo -> $InstallDir, stare -> kosz w tmp.
@@ -383,6 +418,16 @@ function Install-FreshRepo {
     if (Test-Path -LiteralPath $InstallDir) {
         # PRZED jakimkolwiek ruchem na plikach - inaczej Move-Item padnie na zablokowanej bazie.
         Stop-PulsProcesses -Dir $InstallDir
+        # Fail-fast PRZED ruszeniem data\: jesli port dashboardu wciaz ma wlasciciela,
+        # jakis proces przezyl Stop (cudza aplikacja, niedobity daemon) i Move-Item padnie
+        # W POLOWIE przenoszenia - czesc plikow zostalaby w katalogu tymczasowym (incydent
+        # 07.08). Lepiej przerwac z niedotknietymi danymi i czytelna instrukcja.
+        $busyPort = Get-PulsDashboardPort
+        $survivors = Get-PortListenerPids -Port $busyPort
+        if ($survivors.Count -gt 0) {
+            throw ("Port $busyPort wciaz jest zajety (PID: $($survivors -join ', ')) mimo proby zatrzymania Pulsa. " +
+                "Dane w $InstallDir sa NIETKNIETE. Zamknij proces trzymajacy port i uruchom instalator ponownie.")
+        }
         Move-PreservedDirs -OldDir $InstallDir -FreshDir $FreshDir
         # Stara instalacja idzie do kosza w tmp (sprzatane przez finally).
         $trash = Join-Path $TmpDir "old-install"

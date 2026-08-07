@@ -869,6 +869,20 @@ inboxSeed.seedInboxSyncJob({ onJobCreated: () => scheduler.rescheduleAll() }).th
   if (jobName) console.log(`[seed] Utworzono job "${jobName}" (inbox skonfigurowany, joba brakowało)`);
 });
 
+// Starter-taski przy KAŻDYM boocie (decyzja 07.08: „aktualizacje i instalacje pilnują
+// podstawowych tasków") — aktualizacja pullem/przyciskiem nie odpala setup.mjs, więc nowe
+// szablony docierały tylko do świeżych instalacji. Sentinel per task = skasowany przez
+// usera nie wraca; rola `agent` (VPS) pomijana w środku. Seed nie może ubić startu daemona.
+try {
+  const { seedStarterJobsAtBoot } = require('./lib/starter-jobs');
+  const starter = seedStarterJobsAtBoot({ onJobCreated: () => scheduler.rescheduleAll() });
+  if (starter.added.length > 0) {
+    console.log(`[seed] Dodano starter-taski: ${starter.added.join(', ')}`);
+  }
+} catch (err) {
+  console.error(`[seed] Seed starter-tasków przy boocie padł: ${err.message}`);
+}
+
 // Adres huba skrzynki czytany RAZ przy starcie — rozstrzyga `is_inbox_hub` w /api/env.
 // Nie przez `loadEnv()`, bo ten mutuje `process.env`, a script-joby dziedziczą env daemona
 // (ta sama pułapka, przed którą broni się snapshot w inbox-seed). Fire-and-forget: gdy pliku

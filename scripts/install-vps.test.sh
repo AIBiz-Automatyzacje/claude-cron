@@ -1624,6 +1624,8 @@ bash() { echo "BASH:$1" >> "$LOG"; }
 eval "$SU_INNER"
 line_op="$(build_cron_cmd "$VG" "$ID" "$ID/scripts/cron-node-guard.sh" "$ID/update.log" 1)"
 case "$line_op" in *"ult-git"*) echo "OP_HAS_VG" >> "$LOG" ;; esac
+# Zapis wersji po pullu (fix 07.08): goly pull zostawial /api/status z `unknown`
+case "$line" in *"writeVersionFile"*) echo "VERSION_WRITE_OK" >> "$LOG" ;; esac
 EOF
   out="$(run_snippet "$snippet")"
   if grep -q "PREFIX_OK" "$log" 2>/dev/null \
@@ -1632,6 +1634,7 @@ EOF
     && [ "$(grep -c '^GIT:pull' "$log")" = "2" ] \
     && grep -q "BASH:$id/scripts/cron-node-guard.sh" "$log" \
     && grep -q "SC:restart claude-cron" "$log" \
+    && grep -q "VERSION_WRITE_OK" "$log" \
     && ! grep -q "OP_HAS_VG" "$log"; then
     pass "build_cron_cmd: 02:00 + ścieżki ze spacją jako jeden argument; --only-puls bez segmentu vault-git"
   else

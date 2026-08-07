@@ -1793,7 +1793,13 @@ build_cron_cmd() {
   if [ "$only_puls" != 1 ]; then
     inner="cd $(printf '%q' "$vault_git") && git pull && "
   fi
-  inner+="cd $(printf '%q' "$install_dir") && git pull && bash $(printf '%q' "$guard_script")"
+  # Po pullu OBOWIĄZKOWY zapis data/version.json — plik piszą instalatory, a goły pull
+  # go nie dotyka, więc /api/status raportował `unknown` mimo świeżego kodu, a job
+  # „Puls — kontrola spójności" wystawiał NIEUSUWALNE zadanie o rozjeździe wersji
+  # (obserwowane na hubie 06.08). Rewizja env-em, nie interpolacją — jak updater na macOS
+  # (lib/updater.js buildMacUpdateCommand). Pad zapisu nie blokuje aktualizacji: wersja
+  # to metadana, `|| true` zostawia ślad w logu crona i leci dalej.
+  inner+="cd $(printf '%q' "$install_dir") && git pull && { CLAUDE_CRON_INSTALL_REVISION=\$(git rev-parse HEAD) node -e 'require(\"./lib/version\").writeVersionFile({revision:process.env.CLAUDE_CRON_INSTALL_REVISION,source:\"git\"})' || true; } && bash $(printf '%q' "$guard_script")"
   inner="{ $inner; } >> $(printf '%q' "$cron_log") 2>&1"
   printf '0 2 * * * su - %s -c %q && systemctl restart %s\n' \
     "$CLAUDE_USER" "$inner" "$SERVICE_NAME"
