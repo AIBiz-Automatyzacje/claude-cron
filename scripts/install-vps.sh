@@ -565,7 +565,13 @@ show_prerequisites_checklist() {
   echo "  6. Konto Tailscale"
   echo ""
   local go=""
-  ask_tty go "Masz wszystko? [Enter = mam wszystko]: " ""
+  ask_tty go "Masz wszystko? [Enter = mam wszystko, n = przerwij]: " ""
+  # Dotąd KAŻDY input znaczył „mam" — także świadome „n". Odpowiedź przecząca
+  # kończy czysto PRZED jakąkolwiek zmianą stanu (nie ma czego rollbackować).
+  if [[ "$go" =~ ^[nN] ]]; then
+    info "Skompletuj brakujące punkty i wklej komendę instalacji ponownie."
+    exit 0
+  fi
 }
 
 print_state_line() {

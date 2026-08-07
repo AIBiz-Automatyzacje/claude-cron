@@ -340,6 +340,37 @@ EOF
   fi
 }
 
+# --- Test 14e: checklist prerequisites — „n" przerywa czysto, Enter kontynuuje ---
+test_prerequisites_checklist_no_aborts() {
+  local snippet="$SANDBOX/t-prereq-no.sh" out rc
+  echo "n" > "$SANDBOX/fake-tty-prereq-no"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/fake-tty-prereq-no"
+show_prerequisites_checklist
+echo "NIEOSIAGALNE"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" != *"NIEOSIAGALNE"* ]] && [[ "$out" == *"Skompletuj"* ]]; then
+    pass "checklist prerequisites: „n\" = czyste przerwanie z instrukcją"
+  else
+    problem "checklist prerequisites: „n\" nie przerywa (rc=$rc, output: $(printf '%s' "$out" | tail -2))"
+  fi
+
+  echo "" > "$SANDBOX/fake-tty-prereq-yes"
+  cat > "$snippet" <<EOF
+TTY_DEVICE="$SANDBOX/fake-tty-prereq-yes"
+show_prerequisites_checklist
+echo "POSZLO-DALEJ"
+EOF
+  out="$(run_snippet "$snippet")"
+  if [ "$?" -eq 0 ] && [[ "$out" == *"POSZLO-DALEJ"* ]]; then
+    pass "checklist prerequisites: Enter kontynuuje instalację"
+  else
+    problem "checklist prerequisites: Enter NIE kontynuuje (output: $(printf '%s' "$out" | tail -2))"
+  fi
+}
+
 # --- Test 15: grep-strażnik — goły `read` poza definicją ask_tty = 0 trafień ---
 test_no_read_outside_ask_tty() {
   # Pod curl|bash stdin to pipe: goły `read` dostaje EOF i cicho psuje
@@ -3216,6 +3247,7 @@ test_rollback_not_in_subshell
 test_rollback_output_on_stderr
 test_cron_guard_heredoc_no_backticks
 test_cron_guard_generation_clean
+test_prerequisites_checklist_no_aborts
 test_no_read_outside_ask_tty
 test_flags_port_invalid
 test_normalize_repo
