@@ -307,6 +307,39 @@ EOF
   fi
 }
 
+# --- Test 14d: heredoc GUARD bez backticków + generowanie nie wykonuje komend ---
+test_cron_guard_heredoc_no_backticks() {
+  # Heredoc <<GUARD jest NIEQUOTOWANY (interpoluje zmienne instalatora), więc
+  # backtick GDZIEKOLWIEK w treści — także w komentarzu — WYKONUJE komendę przy
+  # generowaniu pliku (incydent srv1362522 07.08: `git pull` z komentarza,
+  # exit 128, cichy rollback). Strażnik: zero backticków w bloku GUARD.
+  local ticks
+  ticks=$(awk '/<<GUARD/,/^GUARD$/' "$INSTALLER" | grep -n '`' || true)
+  if [ -z "$ticks" ]; then
+    pass "grep-strażnik: heredoc GUARD bez backticków"
+  else
+    problem "grep-strażnik: backtick w heredocu GUARD (wykona się przy generowaniu!): $ticks"
+  fi
+}
+
+test_cron_guard_generation_clean() {
+  # Generowanie guard-skryptu w katalogu BEZ repo gita nie może wykonać żadnej
+  # komendy z treści ani zgłosić błędu (dokładny objaw incydentu 07.08).
+  local dir="$SANDBOX/guard-gen" snippet="$SANDBOX/t-guard-gen.sh" out
+  mkdir -p "$dir"
+  cat > "$snippet" <<EOF
+CLAUDE_USER="\$(id -un)"
+cd '$dir'
+write_cron_node_guard '$dir/guard.sh' '$dir/cron.log'
+EOF
+  out="$(run_snippet "$snippet")"
+  if [ -x "$dir/guard.sh" ] && [[ "$out" != *"fatal"* ]] && grep -q "po nocnym 'git pull'" "$dir/guard.sh"; then
+    pass "write_cron_node_guard: generowanie czyste, komentarz nietknięty"
+  else
+    problem "write_cron_node_guard: błąd generowania albo zniekształcony komentarz (out: $(printf '%s' "$out" | head -2))"
+  fi
+}
+
 # --- Test 15: grep-strażnik — goły `read` poza definicją ask_tty = 0 trafień ---
 test_no_read_outside_ask_tty() {
   # Pod curl|bash stdin to pipe: goły `read` dostaje EOF i cicho psuje
@@ -3181,6 +3214,8 @@ test_rollback_disabled
 test_rollback_reenabled
 test_rollback_not_in_subshell
 test_rollback_output_on_stderr
+test_cron_guard_heredoc_no_backticks
+test_cron_guard_generation_clean
 test_no_read_outside_ask_tty
 test_flags_port_invalid
 test_normalize_repo

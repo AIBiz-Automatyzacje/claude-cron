@@ -1872,7 +1872,9 @@ if [ "\$MAJOR" -ge "\$MAX_NODE_MAJOR" ]; then
   exit 1
 fi
 
-# Odświeżenie data/version.json po nocnym `git pull` — bez tego /api/status pokazywałby
+# Odświeżenie data/version.json po nocnym 'git pull' — bez tego /api/status pokazywałby
+# (UWAGA: heredoc GUARD jest NIEQUOTOWANY — backtick w komentarzu WYKONUJE komendę
+# przy generowaniu pliku; incydent srv1362522 07.08. Tu tylko apostrofy.)
 # rewizję z dnia instalacji. Katalog instalacji wyprowadzamy z położenia TEGO skryptu
 # (\$INSTALL_DIR/scripts/cron-node-guard.sh), więc guard nie zależy od zmiennej instalatora.
 # Każdy pad (brak gita, brak repo) jest cichy: to metadane, nie warunek restartu.
