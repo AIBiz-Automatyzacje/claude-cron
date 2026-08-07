@@ -47,13 +47,38 @@ function apiBase() {
   return currentEnv === 'vps' ? '/api/vps' : '/api';
 }
 
+// Twardy timeout żądań — bez niego nieosiągalny VPS (zatrzymany Tailscale = blackhole)
+// trzymał fetch przez proxy 40+ sekund, a panel pokazywał wieczne kreski nieodróżnialne
+// od wolnego ładowania. 6 s dla widoku VPS (round-trip przez proxy + tailnet), 15 s
+// lokalnie (nie ubijamy wolnych, ale żywych odpowiedzi). Abort → czytelny komunikat.
+function fetchTimeoutMs() {
+  return currentEnv === 'vps' ? 6000 : 15000;
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), fetchTimeoutMs());
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error(currentEnv === 'vps'
+        ? 'VPS nieosiągalny — sprawdź, czy Tailscale działa na tym komputerze'
+        : 'serwer nie odpowiada (timeout)');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const API = {
   async get(url) {
-    const res = await fetch(url.replace('/api/', apiBase() + '/'));
+    const res = await fetchWithTimeout(url.replace('/api/', apiBase() + '/'));
     return res.json();
   },
   async post(url, body) {
-    const res = await fetch(url.replace('/api/', apiBase() + '/'), {
+    const res = await fetchWithTimeout(url.replace('/api/', apiBase() + '/'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -61,7 +86,7 @@ const API = {
     return res.json();
   },
   async put(url, body) {
-    const res = await fetch(url.replace('/api/', apiBase() + '/'), {
+    const res = await fetchWithTimeout(url.replace('/api/', apiBase() + '/'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -69,7 +94,7 @@ const API = {
     return res.json();
   },
   async del(url) {
-    const res = await fetch(url.replace('/api/', apiBase() + '/'), { method: 'DELETE' });
+    const res = await fetchWithTimeout(url.replace('/api/', apiBase() + '/'), { method: 'DELETE' });
     return res.json();
   },
 };
@@ -326,7 +351,19 @@ async function loadStatus() {
     renderStatbar(status);
     renderVpsAddr(status);
     renderKillBar(status);
-  } catch { /* silent — statbar degraduje cicho */ }
+  } catch (e) {
+    // Widok VPS NIE degraduje cicho: nieosiągalny VPS wyglądał identycznie jak wolne
+    // ładowanie (wieczne kreski, 40 s ciszy). Komunikat idzie w miejsce „Następne:" —
+    // to pierwszy element statbara, więc nie da się go przeoczyć; wraca sam przy
+    // pierwszym udanym pollu (renderStatbar nadpisuje). Lokalnie zostaje cicho — pad
+    // lokalnego /api/status to restart daemona, stan przejściowy na sekundy.
+    if (currentEnv === 'vps') {
+      const nextName = document.getElementById('stat-next-name');
+      const nextEta = document.getElementById('stat-next-eta');
+      if (nextName) nextName.textContent = `⚠ ${e.message}`;
+      if (nextEta) nextEta.textContent = '';
+    }
+  }
 }
 
 // Kill-bar: WSZYSTKIE biegnące runy, po jednym wierszu z własnym „Zatrzymaj" (R2/R6).

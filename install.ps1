@@ -261,7 +261,9 @@ function Get-RefSha {
         [Parameter(Mandatory = $true)][string] $Ref
     )
     try {
-        $resp = Invoke-RestMethod -Uri "https://api.github.com/repos/$Slug/commits/$Ref" -UseBasicParsing
+        # -TimeoutSec: zdlawione api.github.com trzyma otwarte gniazdo minutami, a pad
+        # rozstrzygania SHA ma zaplanowany fallback (URL galeziowy) - lepiej w niego wejsc.
+        $resp = Invoke-RestMethod -Uri "https://api.github.com/repos/$Slug/commits/$Ref" -UseBasicParsing -TimeoutSec 20
         if ($resp.sha -match '^[0-9a-f]{40}$') { return $resp.sha }
         return ""
     }
@@ -352,8 +354,15 @@ function Stop-PulsProcesses {
     }
     $prefix = Get-PulsProcessPathPrefix -Dir $Dir
 
-    $procs = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { Test-PulsProcessPath -CommandLine $_.CommandLine -Prefix $prefix })
+    # Guard dostepnosci cmdletow: Get-CimInstance nie istnieje poza Windows (testy na
+    # macOS/pwsh), a przy $ErrorActionPreference=Stop CommandNotFound jest terminujacy
+    # nawet z -ErrorAction. Brak cmdletu = pomijamy discovery (jak maszyna bez procesow).
+    $hasCim = [bool](Get-Command Get-CimInstance -ErrorAction SilentlyContinue)
+    $procs = @()
+    if ($hasCim) {
+        $procs = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { Test-PulsProcessPath -CommandLine $_.CommandLine -Prefix $prefix })
+    }
 
     # Druga siatka: node.exe wlasciciel portu dashboardu. Filtr po linii komend jest SLEPY
     # na daemona odpalonego recznie (`Set-Location <dir>; node server.js` - w linii komend
@@ -362,6 +371,7 @@ function Stop-PulsProcesses {
     # (cudza aplikacja na tym porcie to nie nasza sprawa - ja zatrzyma guard nizej).
     $port = Get-PulsDashboardPort
     foreach ($ownerPid in (Get-PortListenerPids -Port $port)) {
+        if (-not $hasCim) { break }
         if ($procs | Where-Object { $_.ProcessId -eq $ownerPid }) { continue }
         $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid" -ErrorAction SilentlyContinue
         if ($owner -and $owner.Name -eq 'node.exe') { $procs += $owner }
@@ -503,7 +513,7 @@ function Install-PortableNode {
         Invoke-WebRequest -Uri "$distUrl/$archive" -OutFile $archivePath -UseBasicParsing
 
         Write-Host "[info] Pobieram SHASUMS256.txt (weryfikacja integralnosci)..." -ForegroundColor Cyan
-        Invoke-WebRequest -Uri "$distUrl/SHASUMS256.txt" -OutFile $shasumsPath -UseBasicParsing
+        Invoke-WebRequest -Uri "$distUrl/SHASUMS256.txt" -OutFile $shasumsPath -UseBasicParsing -TimeoutSec 30
 
         Write-Host "[info] Weryfikuje sume SHA256..." -ForegroundColor Cyan
         $expectedLine = Get-Content $shasumsPath | Where-Object { $_ -match "\s$([regex]::Escape($archive))$" }
@@ -582,6 +592,24 @@ function Install-Dependencies {
 #
 # GATE 0 - ZWERYFIKOWANE 2026-07-01 (Windows 11 + PowerShell 5.1): pod irm|iex
 # pytania setup.mjs czytaja klawiature, latka CONIN$ okazala sie niepotrzebna.
+# Zmienne instalatora NIE moga przejsc na daemona: Start-Process dziedziczy env tej
+# sesji, a updater (lib/updater.js) czyta CLAUDE_CRON_REF przy starcie procesu jako
+# galaz do sprawdzania aktualizacji. Serwer wskrzeszony z REF=<sha> porownywalby
+# w kolko commit <sha> z samym soba i JUZ NIGDY nie zobaczylby nowszej wersji
+# ("Masz najnowsza wersje" do restartu maszyny) - zaobserwowane na zywo 2026-08-07.
+# Czyscimy wszystkie wejscia bootstrapu, nie tylko REF - zaden z nich nie jest
+# konfiguracja runtime'u daemona. Osobna funkcja: testowalna bez odpalania serwera.
+function Clear-BootstrapEnv {
+    foreach ($name in @(
+        "CLAUDE_CRON_REF", "CLAUDE_CRON_REPO_SLUG",
+        "CLAUDE_CRON_ZIP_URL", "CLAUDE_CRON_ZIP_TOPDIR",
+        "CLAUDE_CRON_INSTALL_REVISION", "CLAUDE_CRON_INSTALL_SOURCE",
+        "CLAUDE_CRON_NONINTERACTIVE", "INSTALL_DIR"
+    )) {
+        Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+    }
+}
+
 # Domkniecie aktualizacji BEZ setup.mjs (tryb nieinteraktywny). Dwa kroki, oba potrzebne:
 #   1) zapis data\version.json - bez tego panel po aktualizacji nadal pokazywalby stara
 #      rewizje i "dostepna nowa wersja" w kolko (to setup.mjs normalnie pisze ten plik);
@@ -612,21 +640,7 @@ function Invoke-UpdateFinish {
         finally { Set-Location $oldLocation }
     }
 
-    # Zmienne instalatora NIE moga przejsc na daemona: Start-Process dziedziczy env tej
-    # sesji, a updater (lib/updater.js) czyta CLAUDE_CRON_REF przy starcie procesu jako
-    # galaz do sprawdzania aktualizacji. Serwer wskrzeszony z REF=<sha> porownywalby
-    # w kolko commit <sha> z samym soba i JUZ NIGDY nie zobaczylby nowszej wersji
-    # ("Masz najnowsza wersje" do restartu maszyny) - zaobserwowane na zywo 2026-08-07.
-    # Czyscimy wszystkie wejscia bootstrapu, nie tylko REF - zaden z nich nie jest
-    # konfiguracja runtime'u daemona.
-    foreach ($name in @(
-        "CLAUDE_CRON_REF", "CLAUDE_CRON_REPO_SLUG",
-        "CLAUDE_CRON_ZIP_URL", "CLAUDE_CRON_ZIP_TOPDIR",
-        "CLAUDE_CRON_INSTALL_REVISION", "CLAUDE_CRON_INSTALL_SOURCE",
-        "CLAUDE_CRON_NONINTERACTIVE", "INSTALL_DIR"
-    )) {
-        Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
-    }
+    Clear-BootstrapEnv
 
     Write-Host "[info] Uruchamiam serwer Pulsa..." -ForegroundColor Cyan
     Start-Process -FilePath $NodeExe `

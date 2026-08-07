@@ -174,6 +174,10 @@ test('szew: updateSkrzynkaFile domergowuje frontmatter i nie rusza markerów', a
   const after = await fs.readFile(file, 'utf8');
   assert.ok(after.includes('cssclasses: [skrzynka]'));
   assert.ok(after.includes('moj_klucz: zostaje'));
+  // Normalizacja nagłówka istniejącego pliku (fixture ma STARY „— czekają na odpowiedź"):
+  // przy taskach ten dopisek kłamał — one czekają na odhaczenie, nie na odpowiedź.
+  assert.ok(after.includes('## 📤 Wysłane\n'), 'nowy nagłówek sekcji Wysłane');
+  assert.ok(!after.includes('czekają na odpowiedź'), 'stary nagłówek znormalizowany przy pullu');
   assert.ok(after.includes('%% inbox:items:start %%'));
   assert.ok(after.includes('%% delegated:items:end %%'));
   assert.match(after, /^\*1 nowa\*$/m);

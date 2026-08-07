@@ -222,7 +222,7 @@ cssclasses: [skrzynka]
 %% inbox:items:start %%
 %% inbox:items:end %%
 
-## 📤 Wysłane — czekają na odpowiedź
+## 📤 Wysłane
 
 *0 w toku*
 
@@ -286,9 +286,17 @@ async function ensureSkrzynkaFile(filePath) {
   }
 }
 
+// Normalizacja nagłówków ISTNIEJĄCYCH plików do bieżącego szablonu (decyzja 06.08:
+// „czekają na odpowiedź" kłamie przy taskach — one czekają na odhaczenie). Szablon dotyka
+// tylko NOWYCH plików, a renderer podmienia wyłącznie treść między markerami — bez tej
+// podmiany stary nagłówek zostawałby na zawsze (ta sama pułapka co frontmatter, poz. 12).
+function normalizeSectionHeadings(raw) {
+  return raw.replace('## 📤 Wysłane — czekają na odpowiedź', '## 📤 Wysłane');
+}
+
 // eksportowane dla testu szwu (render + merge frontmattera + zapis na prawdziwym pliku)
 export async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedItems, me) {
-  const raw = await ensureSkrzynkaFile(filePath);
+  const raw = normalizeSectionHeadings(await ensureSkrzynkaFile(filePath));
   const inboxCallouts = buildThreadCallouts(threadRows, activeForMe, me);
   const inboxCount = activeForMe.length;
   const delegatedCount = delegatedItems.length;

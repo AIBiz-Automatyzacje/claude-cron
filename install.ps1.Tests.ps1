@@ -69,8 +69,12 @@ try {
     # trzymal data\claude-cron.db. Fix zabija node'y TEGO katalogu instalacji - filtr po
     # CommandLine musi byc scisly, inaczej instalator ubija cudze aplikacje Node.
     function Test-StopPulsIgnoresForeignNode {
+        # -WindowStyle istnieje tylko na Windows; na macOS/Linux (pwsh w dev-loopie)
+        # odpalamy bez niego - okno i tak nie powstaje.
+        $spawnArgs = @{ FilePath = "node"; ArgumentList = @("-e", "setTimeout(()=>{},30000)"); PassThru = $true; ErrorAction = "SilentlyContinue" }
+        if ($env:OS -eq "Windows_NT") { $spawnArgs.WindowStyle = "Hidden" }
         # Proces spoza katalogu instalacji: sam fakt, ze to node.exe, nie moze wystarczyc.
-        $foreign = Start-Process -FilePath "node" -ArgumentList "-e", "setTimeout(()=>{},30000)" -PassThru -WindowStyle Hidden -ErrorAction SilentlyContinue
+        $foreign = Start-Process @spawnArgs
         if (-not $foreign) {
             Test-Pass "Stop-PulsProcesses: pominieto (brak node w PATH)"
             return
@@ -157,13 +161,18 @@ try {
     # --- Test 7: cudzysłowy z Explorera, ~ i ścieżka względna → absolutna ścieżka ---
     function Test-ResolveInstallDirSanitizes {
         $fallback = Join-Path $HOME "claude-cron"
+        # Baza sciezki wzglednej per platforma: Join-Path z dyskiem C: rzuca na pwsh
+        # poza Windows ("Cannot find drive"), a suita biega tez w dev-loopie na macOS.
+        $base = if ($env:OS -eq "Windows_NT") { "C:\base" } else { Join-Path $Sandbox "base" }
         $quoted   = Resolve-InstallDir -Answer '  "C:\moje pulsy\instancja"  ' -Fallback $fallback
         $tilde    = Resolve-InstallDir -Answer "~\puls" -Fallback $fallback
-        $relative = Resolve-InstallDir -Answer "puls" -Fallback $fallback -Base "C:\base"
+        $relative = Resolve-InstallDir -Answer "puls" -Fallback $fallback -Base $base
 
-        $okQuoted   = $quoted -eq "C:\moje pulsy\instancja"
+        # IsPathRooted("C:\...") na Uniksie = false (sciezka dyskowa nie jest tam rootem)
+        # -> asercja o cudzyslowach z Explorera ma sens wylacznie na Windows.
+        $okQuoted   = if ($env:OS -eq "Windows_NT") { $quoted -eq "C:\moje pulsy\instancja" } else { $true }
         $okTilde    = $tilde -eq (Join-Path $HOME "puls")
-        $okRelative = $relative -eq (Join-Path "C:\base" "puls")
+        $okRelative = $relative -eq (Join-Path $base "puls")
         if ($okQuoted -and $okTilde -and $okRelative) {
             Test-Pass "Resolve-InstallDir: czyści cudzysłowy, rozwija ~ i ścieżkę względną"
         } else {
@@ -286,6 +295,10 @@ try {
     # Test wola Test-PulsProcessPath zamiast powtarzac wyrazenie z Where-Object: kopia
     # wyrazenia w tescie przechodzila nawet wtedy, gdy filtr w kodzie byl zepsuty.
     function Test-StopPulsPathBoundary {
+        if ($env:OS -ne "Windows_NT") {
+            Test-Pass "Test-StopPulsPathBoundary: pominieto poza Windows (semantyka sciezek C:\ wymaga Windows)"
+            return
+        }
         $prefix  = Get-PulsProcessPathPrefix -Dir "C:\puls"
         $own     = "C:\puls\.node\node-v22.17.0-win-x64\node.exe server.js"
         $sibling = "C:\puls-backup\.node\node-v22.17.0-win-x64\node.exe server.js"
@@ -307,6 +320,10 @@ try {
     # ordinalnie: daemon zapisany jako "C:\Puls\..." przezywal filtr z "C:\puls\",
     # trzymal pliki i Move-Item padal przy podmianie katalogu.
     function Test-StopPulsCaseInsensitive {
+        if ($env:OS -ne "Windows_NT") {
+            Test-Pass "Test-StopPulsCaseInsensitive: pominieto poza Windows (semantyka sciezek C:\ wymaga Windows)"
+            return
+        }
         $prefix = Get-PulsProcessPathPrefix -Dir "C:\puls"
         $upper  = "C:\PULS\.node\node-v22.17.0-win-x64\node.exe server.js"
         $mixed  = "c:\Puls\.node\node-v22.17.0-win-x64\node.exe server.js"
@@ -446,6 +463,93 @@ try {
     }
 
     Write-Host "== install.ps1 - testy bootstrap/preserve =="
+
+    # --- Test 12: Get-PulsDashboardPort - env poprawny/smieciowy/brak -> default 7777 ---
+    function Test-GetPulsDashboardPort {
+        $saved = $env:CLAUDE_CRON_PORT
+        try {
+            $env:CLAUDE_CRON_PORT = "8888"
+            $okValid = (Get-PulsDashboardPort) -eq 8888
+            $env:CLAUDE_CRON_PORT = "smiec"
+            $okJunk = (Get-PulsDashboardPort) -eq 7777
+            $env:CLAUDE_CRON_PORT = "0"
+            $okZero = (Get-PulsDashboardPort) -eq 7777
+            $env:CLAUDE_CRON_PORT = $null
+            # Uwaga: na maszynie z User-scope CLAUDE_CRON_PORT ten przypadek zwroci JEJ port -
+            # asercja wylacznie "poprawny zakres", nie konkretna wartosc.
+            $fallback = Get-PulsDashboardPort
+            $okEmpty = ($fallback -ge 1 -and $fallback -le 65535)
+            if ($okValid -and $okJunk -and $okZero -and $okEmpty) {
+                Test-Pass "Get-PulsDashboardPort: env wygrywa, smiec/zero -> 7777"
+            } else {
+                Test-Problem "Get-PulsDashboardPort: valid=$okValid junk=$okJunk zero=$okZero empty=$okEmpty"
+            }
+        } finally { $env:CLAUDE_CRON_PORT = $saved }
+    }
+
+    # --- Test 13: Get-PortListenerPids - brak cmdletu/pusty port -> pusta lista, zero rzutu ---
+    function Test-GetPortListenerPidsFallback {
+        try {
+            $pids = Get-PortListenerPids -Port 1
+            $ok = ($pids -is [array]) -or ($null -eq $pids) -or ($pids.Count -ge 0)
+            if ($ok) { Test-Pass "Get-PortListenerPids: wolny port / brak cmdletu -> pusta lista bez wyjatku" }
+            else { Test-Problem "Get-PortListenerPids: nieoczekiwany wynik '$pids'" }
+        } catch {
+            Test-Problem "Get-PortListenerPids rzucil: $_"
+        }
+    }
+
+    # --- Test 14: Get-RefSha - timeout przekazany, pad sieci -> "", smieciowy sha -> "" ---
+    # Shadow Invoke-RestMethod przechwytuje parametry: pad rozstrzygania SHA ma ZAPLANOWANY
+    # fallback (URL galeziowy), wiec kazda sciezka bledu musi zwracac "", nigdy rzucac.
+    function Test-GetRefShaTimeoutAndFallback {
+        $script:CapturedTimeout = $null
+        function script:Invoke-RestMethod { param($Uri, [switch]$UseBasicParsing, $TimeoutSec)
+            $script:CapturedTimeout = $TimeoutSec
+            return @{ sha = ("a" * 40) }
+        }
+        $okSha = (Get-RefSha -Slug "o/r" -Ref "main") -eq ("a" * 40)
+        $okTimeout = $script:CapturedTimeout -eq 20
+
+        function script:Invoke-RestMethod { param($Uri, [switch]$UseBasicParsing, $TimeoutSec) throw "The operation has timed out." }
+        $okThrow = (Get-RefSha -Slug "o/r" -Ref "main") -eq ""
+
+        function script:Invoke-RestMethod { param($Uri, [switch]$UseBasicParsing, $TimeoutSec) return @{ sha = "nie-sha" } }
+        $okJunk = (Get-RefSha -Slug "o/r" -Ref "main") -eq ""
+
+        Remove-Item Function:script:Invoke-RestMethod -ErrorAction SilentlyContinue
+        if ($okSha -and $okTimeout -and $okThrow -and $okJunk) {
+            Test-Pass "Get-RefSha: -TimeoutSec 20 przekazany; pad sieci i zly sha -> pusty string (fallback)"
+        } else {
+            Test-Problem "Get-RefSha: sha=$okSha timeout=$okTimeout($script:CapturedTimeout) throw=$okThrow junk=$okJunk"
+        }
+    }
+
+    # --- Test 15: Clear-BootstrapEnv - zmienne instalatora znikaja przed startem daemona ---
+    # Regresja 07.08: CLAUDE_CRON_REF odziedziczony przez daemona przybijal updater do SHA
+    # ("Masz najnowsza wersje" na zawsze). INSTALL_DIR czyscimy na koncu testu recznie,
+    # bo piaskownica go potrzebuje.
+    function Test-ClearBootstrapEnv {
+        $savedInstallDir = $env:INSTALL_DIR
+        try {
+            $env:CLAUDE_CRON_REF = "deadbeef"
+            $env:CLAUDE_CRON_ZIP_URL = "https://x/zip"
+            $env:CLAUDE_CRON_INSTALL_REVISION = "deadbeef"
+            $env:CLAUDE_CRON_NONINTERACTIVE = "1"
+
+            Clear-BootstrapEnv
+
+            $leftovers = @("CLAUDE_CRON_REF", "CLAUDE_CRON_ZIP_URL", "CLAUDE_CRON_INSTALL_REVISION",
+                "CLAUDE_CRON_NONINTERACTIVE", "INSTALL_DIR") | Where-Object { Test-Path "Env:$_" }
+            if ($leftovers.Count -eq 0) {
+                Test-Pass "Clear-BootstrapEnv: zadna zmienna bootstrapu nie przejdzie na daemona"
+            } else {
+                Test-Problem "Clear-BootstrapEnv zostawil: $($leftovers -join ', ')"
+            }
+        } finally { $env:INSTALL_DIR = $savedInstallDir }
+    }
+
+
     Test-PreserveMovesDataAndNode
     Test-PreserveNoopWhenNoOld
     Test-RerunPreservesSentinel
@@ -466,6 +570,10 @@ try {
     Test-NonInteractiveRequiresInstallDir
     Test-NonInteractiveRejectsForeignDir
     Test-NonInteractiveAcceptsPulsDir
+    Test-GetPulsDashboardPort
+    Test-GetPortListenerPidsFallback
+    Test-GetRefShaTimeoutAndFallback
+    Test-ClearBootstrapEnv
 
     Write-Host ""
     Write-Host "Wynik: $Pass PASS / $($Pass + $Fail) total"

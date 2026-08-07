@@ -69,12 +69,17 @@ fail()  { echo -e "${RED}[error]${NC} $1"; exit 1; }
 # ============ DOWNLOAD TOOL ============
 
 download() {
-  # download <url> <output-path>
-  local url="$1" out="$2"
+  # download <url> <output-path> [max-time-s]
+  # Trzeci argument = twardy limit CAŁEGO transferu — wyłącznie dla małych zapytań API
+  # (fetch_ref_sha): zdławione api.github.com potrafi trzymać otwarte gniazdo minutami
+  # i instalator wyglądał u usera jak zawieszony, zamiast wejść w zaplanowany fallback.
+  # Duże pobrania (Node, zip repo) świadomie BEZ limitu total — wolne łącze to nie awaria.
+  local url="$1" out="$2" max_time="${3:-}"
   if command -v curl &>/dev/null; then
-    curl -fsSL "$url" -o "$out" || return 1
+    curl -fsSL --connect-timeout 15 ${max_time:+--max-time "$max_time"} "$url" -o "$out" || return 1
   elif command -v wget &>/dev/null; then
-    wget -q "$url" -O "$out" || return 1
+    # wget nie rozróżnia connect/total — jeden timeout per próba, 2 próby.
+    wget -q --timeout="${max_time:-15}" --tries=2 "$url" -O "$out" || return 1
   else
     fail "Brak curl ani wget — nie mogę pobrać plików."
   fi
@@ -318,7 +323,9 @@ preserve_existing_dirs() {
 fetch_ref_sha() {
   local slug="$1" ref="$2" out sha
   out="$(mktemp)"
-  if ! download "https://api.github.com/repos/$slug/commits/$ref" "$out"; then
+  # Limit 20 s na CAŁE zapytanie: pad rozstrzygania SHA ma zaplanowany fallback (URL
+  # gałęziowy + wersja unknown), więc lepiej w niego wejść niż wisieć na gnieździe.
+  if ! download "https://api.github.com/repos/$slug/commits/$ref" "$out" 20; then
     rm -f "$out"
     return 1
   fi
