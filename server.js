@@ -18,7 +18,7 @@ const { isInboxHub } = require('./lib/inbox-hub');
 const { getInstallVersion } = require('./lib/version');
 const updater = require('./lib/updater');
 const { describeEnvUsage, readPersistedEnvCached } = require('./lib/persisted-env');
-const { matchWebhookToken, matchAskToken } = require('./lib/webhook');
+const { matchWebhookToken, matchAskToken, queryParams } = require('./lib/webhook');
 const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
 const { pushNotifySettings, buildPushPayload } = require('./lib/notify-push');
@@ -641,7 +641,12 @@ async function handleWebhook(req, res, token) {
     return error(res, 'Webhooks disabled', 403);
   }
 
-  if (req.method !== 'POST') {
+  // GET obok POST-a: przyciski w narzędziach zewnętrznych (Airtable "Open URL",
+  // Notion, arkusze) potrafią tylko otworzyć adres, czyli GET. Bez tego jedyną
+  // drogą jest automacja wysyłająca POST — w Airtable płatna od planu Team.
+  // UWAGA: GET wykonują też prefetchery i skanery linków, więc job odpalany
+  // przez publiczny webhook musi być idempotentny.
+  if (req.method !== 'POST' && req.method !== 'GET') {
     return error(res, 'Method not allowed', 405);
   }
 
@@ -650,7 +655,9 @@ async function handleWebhook(req, res, token) {
     return error(res, 'Invalid webhook token', 404);
   }
 
-  const body = await parseBody(req);
+  // GET niesie dane w query stringu (?id=recXXX), POST w ciele. Jedno i drugie
+  // ląduje w tym samym miejscu, żeby skrypty miały jeden format do czytania.
+  const body = req.method === 'GET' ? queryParams(req.url) : await parseBody(req);
   const payload = JSON.stringify(body);
 
   const run = db.createRun({
