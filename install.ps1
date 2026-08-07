@@ -567,6 +567,22 @@ function Invoke-UpdateFinish {
         finally { Set-Location $oldLocation }
     }
 
+    # Zmienne instalatora NIE moga przejsc na daemona: Start-Process dziedziczy env tej
+    # sesji, a updater (lib/updater.js) czyta CLAUDE_CRON_REF przy starcie procesu jako
+    # galaz do sprawdzania aktualizacji. Serwer wskrzeszony z REF=<sha> porownywalby
+    # w kolko commit <sha> z samym soba i JUZ NIGDY nie zobaczylby nowszej wersji
+    # ("Masz najnowsza wersje" do restartu maszyny) - zaobserwowane na zywo 2026-08-07.
+    # Czyscimy wszystkie wejscia bootstrapu, nie tylko REF - zaden z nich nie jest
+    # konfiguracja runtime'u daemona.
+    foreach ($name in @(
+        "CLAUDE_CRON_REF", "CLAUDE_CRON_REPO_SLUG",
+        "CLAUDE_CRON_ZIP_URL", "CLAUDE_CRON_ZIP_TOPDIR",
+        "CLAUDE_CRON_INSTALL_REVISION", "CLAUDE_CRON_INSTALL_SOURCE",
+        "CLAUDE_CRON_NONINTERACTIVE", "INSTALL_DIR"
+    )) {
+        Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+    }
+
     Write-Host "[info] Uruchamiam serwer Pulsa..." -ForegroundColor Cyan
     Start-Process -FilePath $NodeExe `
         -ArgumentList "--disable-warning=ExperimentalWarning", "server.js" `
