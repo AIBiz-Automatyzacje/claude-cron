@@ -267,6 +267,46 @@ EOF
   fi
 }
 
+# --- Test 14b: on_err w PODPOWŁOCE nie odwija stosu (incydent srv1362522, 07.08) ---
+test_rollback_not_in_subshell() {
+  # ERR trap dziedziczony przez set -E do $(…) wykonywał rollback w podpowłoce:
+  # komendy cofały REALNY stan (systemctl stop, npm rm), a komunikaty ginęły
+  # w przechwyconym stdout — rodzic szedł dalej z nietkniętym stosem i padał
+  # dopiero na brakującym unicie. Podpowłoka ma tylko wyjść ze statusem.
+  local snippet="$SANDBOX/t-rb-subshell.sh" log="$SANDBOX/rb-subshell.log" out rc
+  cat > "$snippet" <<EOF
+trap on_err ERR
+push_rollback "echo A >> '$log'"
+captured="\$(on_err)" || true
+echo "DALEJ"
+EOF
+  out="$(run_snippet "$snippet")"
+  rc=$?
+  if [ "$rc" -eq 0 ] && [[ "$out" == *"DALEJ"* ]] && [ ! -s "$log" ]; then
+    pass "on_err w podpowłoce: stos NIE odwinięty, rodzic działa dalej"
+  else
+    problem "on_err w podpowłoce odwinął stos albo zabił rodzica (rc=$rc, log: $(cat "$log" 2>/dev/null), output: $out)"
+  fi
+}
+
+# --- Test 14c: komunikaty on_err idą na STDERR (widoczne mimo przechwytu stdout) ---
+test_rollback_output_on_stderr() {
+  local snippet="$SANDBOX/t-rb-stderr.sh" log="$SANDBOX/rb-stderr.log" outf="$SANDBOX/rb-stderr.out" errf="$SANDBOX/rb-stderr.err" rc
+  cat > "$snippet" <<EOF
+trap on_err ERR
+push_rollback "echo A >> '$log'"
+false
+EOF
+  bash -c "export CLAUDE_CRON_LIB_ONLY=1; source '$INSTALLER'; TTY_DEVICE='$SANDBOX/no-tty'; source '$snippet'" >"$outf" 2>"$errf"
+  rc=$?
+  if [ "$rc" -ne 0 ] && grep -q "Cofam kroki" "$errf" && ! grep -q "Cofam kroki" "$outf" \
+    && [ "$(sed -n 1p "$log" 2>/dev/null)" = "A" ]; then
+    pass "on_err: komunikaty rollbacku na stderr, stos odwinięty w rodzicu"
+  else
+    problem "on_err: komunikaty nie trafiły na stderr albo stos nieodwinięty (rc=$rc, out: $(cat "$outf" 2>/dev/null | tail -2), err: $(cat "$errf" 2>/dev/null | tail -2))"
+  fi
+}
+
 # --- Test 15: grep-strażnik — goły `read` poza definicją ask_tty = 0 trafień ---
 test_no_read_outside_ask_tty() {
   # Pod curl|bash stdin to pipe: goły `read` dostaje EOF i cicho psuje
@@ -3139,6 +3179,8 @@ test_run_login_halts_leave_partial
 test_rollback_reverse_order
 test_rollback_disabled
 test_rollback_reenabled
+test_rollback_not_in_subshell
+test_rollback_output_on_stderr
 test_no_read_outside_ask_tty
 test_flags_port_invalid
 test_normalize_repo

@@ -356,21 +356,34 @@ drop_rollback() {
 on_err() {
   local status=$?
   trap - ERR
+  # PODPOWŁOKA ($(…), potok) NIE odwija stosu: jej kopia stosu i tak ginie,
+  # ale komendy cofnęłyby REALNY stan (systemctl stop, npm rm) przy żywym
+  # rodzicu — bezgłośnie, bo stdout podpowłoki jest przechwycony. Incydent
+  # srv1362522 07.08: cichy stop obu serwisów sekundę po „Serwis działa",
+  # instalacja padła dopiero na brakującym unicie przy Funnelu. Podpowłoka
+  # tylko wychodzi ze statusem — decyzję podejmuje trap rodzica.
+  if [ "${BASH_SUBSHELL:-0}" -gt 0 ]; then
+    exit "$status"
+  fi
   if [ "$ROLLBACK_ENABLED" != "1" ]; then
     exit "$status"
   fi
-  echo ""
-  warn "Instalacja przerwana błędem (kod $status)."
-  if [ "${#ROLLBACK_STACK[@]}" -gt 0 ]; then
-    warn "Cofam kroki wykonane w tym uruchomieniu:"
-    local i
-    for (( i=${#ROLLBACK_STACK[@]}-1; i>=0; i-- )); do
-      warn "  ↩ ${ROLLBACK_STACK[i]}"
-      bash -c "${ROLLBACK_STACK[i]}" || warn "    (nie udało się cofnąć: ${ROLLBACK_STACK[i]})"
-    done
-  fi
-  warn "Napraw przyczynę (komunikat wyżej) i wklej ponownie tę samą komendę instalacji — re-run pominie gotowe kroki:"
-  warn "  $RESUME_ONE_LINER"
+  # Cały raport rollbacku na STDERR — nawet gdyby trap odpalił w kontekście
+  # z przechwyconym stdout, ślad odwijania musi dotrzeć do terminala.
+  {
+    echo ""
+    warn "Instalacja przerwana błędem (kod $status)."
+    if [ "${#ROLLBACK_STACK[@]}" -gt 0 ]; then
+      warn "Cofam kroki wykonane w tym uruchomieniu:"
+      local i
+      for (( i=${#ROLLBACK_STACK[@]}-1; i>=0; i-- )); do
+        warn "  ↩ ${ROLLBACK_STACK[i]}"
+        bash -c "${ROLLBACK_STACK[i]}" || warn "    (nie udało się cofnąć: ${ROLLBACK_STACK[i]})"
+      done
+    fi
+    warn "Napraw przyczynę (komunikat wyżej) i wklej ponownie tę samą komendę instalacji — re-run pominie gotowe kroki:"
+    warn "  $RESUME_ONE_LINER"
+  } >&2
   exit "$status"
 }
 
