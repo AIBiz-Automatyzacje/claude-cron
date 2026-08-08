@@ -80,6 +80,11 @@ test('snippet rozjechany → rozjazd z komendą naprawczą', () => {
   assert.equal(drifts.length, 1);
   assert.equal(drifts[0].id, 'theme-drift');
   assert.equal(drifts[0].komenda, THEME_FIX_COMMAND);
+
+  // Kontrakt U12 (domknięty 07.08): komenda naprawcza wskazuje tryb pluginu,
+  // a ręczny fallback zostaje dla vaultów bez pluginu (port community w toku).
+  assert.ok(THEME_FIX_COMMAND.includes('/onboard --refresh-theme'), 'komenda ma odsyłać do refresh-theme');
+  assert.ok(THEME_FIX_COMMAND.includes('.obsidian/snippets/'), 'ręczny fallback zostaje');
 });
 
 test('brak snippetu w vaultcie → rozjazd theme-missing', () => {

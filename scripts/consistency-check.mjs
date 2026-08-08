@@ -26,12 +26,15 @@ const require = createRequire(import.meta.url);
 // Znacznik tożsamości zadania — jedyne kryterium „czy takie zadanie już wisi".
 export const TASK_MARKER = '%% puls:consistency-check %%';
 
-// Kroki naprawcze motywu — świadomie OPIS RĘCZNY, nie komenda. Tryb `/onboard --refresh-theme`
-// jeszcze nie istnieje (U12); zadanie odsyłające do nieistniejącej komendy uczy człowieka, że
-// sygnał kłamie, i zostaje zamknięte bez naprawy. Po dowiezieniu U12 wracamy tu po jedną linię.
+// Kroki naprawcze motywu: `/onboard --refresh-theme` istnieje od 07.08 (aibiz-plugin @ 024aeff
+// — domknięcie U12) i robi całość jedną akcją. Ręczny fallback zostaje w drugiej części,
+// bo port skilla do pluginu społeczności jest w toku — zadanie ma dawać dźwignię każdemu,
+// także vaultom bez pluginu zespołowego.
 export const THEME_FIX_COMMAND =
-  'skopiuj skrzynka.css z pluginu zespołowego (skills/onboard/templates/) do <vault>/.obsidian/snippets/, ' +
-  'potem Obsidian → Ustawienia → Wygląd → Fragmenty CSS → przeładuj i włącz snippet';
+  'w sesji Claude Code z vaulta: /onboard --refresh-theme (najpierw zaktualizuj plugin: ' +
+  'marketplace → plugin → restart sesji); bez pluginu ręcznie: skopiuj skrzynka.css ' +
+  'z pluginu zespołowego (skills/onboard/templates/) do <vault>/.obsidian/snippets/ ' +
+  'i włącz snippet w Ustawienia → Wygląd → Fragmenty CSS';
 
 // Komenda naprawcza wersji: ponowna instalacja zapisuje `data/version.json` (U1).
 export const VERSION_FIX_COMMAND = 'ponownie uruchom instalator Pulsa (install.sh / install.ps1)';
