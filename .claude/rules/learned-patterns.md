@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 18 -->
+<!-- rule-count: 21 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -57,3 +57,12 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **Fail-fast w migracji jest poprawny dla SCHEMATU, ale nie dla DANYCH — rzut z `migrate()` blokuje własne lekarstwo**: `migrate()` biegnie w leniwym `getDb()` przy KAŻDEJ operacji, więc `throw` na stanie danych (kolizja nazw blokująca `COLLATE NOCASE`) daje 500 na wszystkim — także na endpointach, którymi user ten stan naprawia (`listMembers`/`revokeMember`), i zostawia jako jedyne wyjście ręczny `sqlite3` na produkcji. Przed każdym `throw` w migracji pytaj: „czy naprawa tego stanu jest osiągalna przez kod, który ten rzut właśnie zabił?" — jeśli tak, degraduj (zostaw schemat legacy) + `warn` z WYKONYWALNYM komunikatem dla człowieka (nazwy, skutek, dwie drogi wyjścia, warunek domknięcia), a niezmiennik bezpieczeństwa utrzymuj w warstwie logiki (`resolveRecipient` → `ambiguous_recipient`), nie w kolacji/constraincie. Catch wąski i typowany (tylko ten jeden `code`), guard idempotencji z FAKTYCZNEGO DDL (`sqlite_master.sql` — `PRAGMA table_info` nie zna kolacji), a test na PRAWDZIWEJ ścieżce `getDb()`, nie na samej `migrate()`.
   Source: docs/solutions/runtime-errors/2026-08-05-migracja-fail-fast-w-getdb-blokuje-wlasne-lekarstwo.md
+
+- **`trap ERR` z akcjami mutującymi = guard na podpowłokę + raport na stderr**: `set -E` dziedziczy trap do `$(…)`, więc handler odpala się TAKŻE w podstawieniu komendy — akcje (rollback, kill, rm) zmieniają realny stan przy żywym rodzicu, komunikaty giną w przechwyconym stdout, a `exit` kończy tylko podpowłokę (rodzic kontynuuje z nietkniętą kopią stosu — tablice nie propagują się wstecz). Na wejściu handlera: `[ "${BASH_SUBSHELL:-0}" -gt 0 ] && exit "$status"` (BASH_SUBSHELL działa od bash 3.0; BASHPID dopiero od 4.0 — macOS ma 3.2), a cały raport `{ … } >&2`. Objaw w journalu: serwisy stopowane w kolejności LIFO stosu bez śladu w transkrypcie.
+  Source: docs/solutions/deployment-issues/2026-08-07-trap-err-w-podpowloce-cichy-rollback.md
+
+- **Niequotowany heredoc wykonuje backticki WSZĘDZIE — także w komentarzach generowanego skryptu**: bash nie wie, że linia treści heredoca `<<EOF` jest przyszłym komentarzem — `` `git pull` `` w polskim komentarzu wykonał się przy generowaniu pliku (w cwd roota → exit 128 → trap ERR). W generatorach plików przez niequotowany heredoc: zero backticków w treści (nazwy komend w apostrofach), zamierzone podstawienia escapowane `\$(…)`, całość pod grep-strażnikiem w testach (`awk '/<<GUARD/,/^GUARD$/' | grep '\``' = 0 trafień) + test generowania w katalogu bez repo gita.
+  Source: docs/solutions/deployment-issues/2026-08-07-backtick-w-heredocu-wykonuje-komende.md
+
+- **node:sqlite otwieraj kompletem WAL + foreign_keys + busy_timeout**: domyślny `busy_timeout=0` znaczy, że KAŻDE trafienie w blokadę zapisu (nawet mikrosekundowe okno commitu WAL drugiego połączenia) to natychmiastowy `ERR_SQLITE_ERROR: database is locked` i crash procesu — nie czekanie. `db.exec('PRAGMA busy_timeout = 5000')` tuż po otwarciu każdego połączenia (także w skryptach pomocniczych dotykających żywej bazy); kontrakt przybij testem `PRAGMA busy_timeout → 5000`. Wykryte, gdy drugi scheduler umarł na locku szybciej, niż detekcja intruza zdążyła go zgłosić.
+  Source: docs/solutions/runtime-errors/2026-08-07-brak-busy-timeout-crash-na-database-is-locked.md
