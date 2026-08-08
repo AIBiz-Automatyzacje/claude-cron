@@ -148,6 +148,10 @@ test('snippet rozjechany → jedno zadanie z komendą, terminem i wpisem w Dashb
 
   const content = await fs.readFile(path.join(dir, 'Zadania', 'w_trakcie', tasks[0]), 'utf8');
   assert.ok(content.includes(THEME_FIX_COMMAND), 'zadanie bez komendy naprawczej jest naganiaczem');
+  // Kontrakt narracji (audyt C5, 08.08): zadanie mówi wprost o ręcznym zamknięciu —
+  // poprzednie „zadanie znika po ponownym przebiegu" było fałszywe (kontrola nie kasuje).
+  assert.ok(content.includes('zamknij to zadanie ręcznie'), 'zadanie ma instruować ręczne zamknięcie');
+  assert.ok(!content.includes('znika po ponownym przebiegu'), 'fałszywa obietnica auto-kasowania usunięta');
   assert.match(content, /^termin: 2026-08-05$/m);
   assert.ok(content.includes(TASK_MARKER));
 
