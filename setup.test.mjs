@@ -50,6 +50,7 @@ import {
   buildGetUserEnvCommand,
   mergeEnvIntoSettings,
   registerPulsHomeEnv,
+  stripBom,
   writePulsHomePointer,
   defaultPulsHomePointer,
 } from './setup.mjs';
@@ -292,6 +293,31 @@ test('registerPulsHomeEnv na uszkodzonym settings.json robi fail-fast i NIE tyka
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('registerPulsHomeEnv czyta settings.json zapisany z BOM (Notatnik / Set-Content)', () => {
+  // Windows zapisuje UTF-8 z BOM w niemal każdym natywnym narzędziu. Bez zdejmowania
+  // BOM-u JSON.parse wywalał się na „Unexpected token '﻿'", setup uznawał plik za
+  // uszkodzony i cała instalacja kończyła się kodem 1.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-home-bom-'));
+  const settingsFile = path.join(dir, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, `﻿${JSON.stringify({ hooks: { X: [] } }, null, 2)}`, 'utf-8');
+
+  assert.equal(registerPulsHomeEnv(dir, '/opt/puls'), true);
+  const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+  assert.equal(saved.env.PULS_HOME, '/opt/puls');
+  assert.deepEqual(saved.hooks, { X: [] }, 'reszta pliku usera zostaje nietknięta');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('stripBom zdejmuje tylko wiodący U+FEFF i nie tyka reszty tekstu', () => {
+  assert.equal(stripBom('﻿{"a":1}'), '{"a":1}');
+  assert.equal(stripBom('{"a":1}'), '{"a":1}');
+  assert.equal(stripBom('{"a":"﻿"}'), '{"a":"﻿"}');
+  assert.equal(stripBom(''), '');
+  assert.equal(stripBom(null), '');
+});
+
 test('writePulsHomePointer zapisuje FAKTYCZNY katalog instalacji, nie domyślny', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-home-pointer-'));
   const pointer = path.join(dir, '.claude-cron-home');
@@ -409,6 +435,24 @@ test('buildVpsUrl zwraca null dla pustego/białego hosta (tryb tylko lokalny)', 
   assert.equal(buildVpsUrl('   ', '7777'), null);
 });
 
+test('buildVpsUrl: wklejony pełny adres nie dostaje drugiego schematu', () => {
+  assert.equal(buildVpsUrl('http://100.64.0.1', '7777'), 'http://100.64.0.1:7777');
+  assert.equal(buildVpsUrl('http://100.64.0.1:7777', '7777'), 'http://100.64.0.1:7777');
+});
+
+test('buildVpsUrl rozwija podwojony schemat zapisany starą wersją setupu', () => {
+  assert.equal(buildVpsUrl('http://http://100.112.172.81:7777', ''), 'http://100.112.172.81:7777');
+});
+
+test('buildVpsUrl: port z hosta wygrywa z osobną odpowiedzią (user wkleił pełny adres)', () => {
+  assert.equal(buildVpsUrl('100.64.0.1:9000', '7777'), 'http://100.64.0.1:9000');
+});
+
+test('buildVpsUrl zachowuje jawnie podany https i obcina ogon ścieżki', () => {
+  assert.equal(buildVpsUrl('https://vps.example.net:8443/jobs', '7777'), 'https://vps.example.net:8443');
+  assert.equal(buildVpsUrl('http://100.64.0.1/', '7777'), 'http://100.64.0.1:7777');
+});
+
 // === resolveSavedVpsUrl / buildVpsHostPrompt / resolveVpsChoice — re-run nie kasuje adresu ===
 
 test('resolveSavedVpsUrl: utrwalona wartość wygrywa z env bieżącej sesji (stale env)', () => {
@@ -439,6 +483,19 @@ test('resolveVpsChoice: zapisany adres + pusty Enter → wartość zachowana, be
   assert.equal(choice.url, 'http://100.64.0.1:7777');
   assert.equal(choice.action, 'kept');
   assert.equal(choice.persist, false);
+});
+
+test('resolveVpsChoice: zniekształcony zapisany adres + pusty Enter → naprawa i zapis env', () => {
+  // „Bez zmian" nie może zostawić adresu, pod którym Puls nigdy nie odpowie —
+  // to cicha awaria: user widzi zielony komunikat i myśli, że VPS jest podpięty.
+  const choice = resolveVpsChoice({
+    savedUrl: 'http://http://100.112.172.81:7777',
+    hostInput: '',
+    portInput: '7777',
+  });
+  assert.equal(choice.url, 'http://100.112.172.81:7777');
+  assert.equal(choice.action, 'repaired');
+  assert.equal(choice.persist, true);
 });
 
 test('resolveVpsChoice: brak zapisanego adresu + pusty Enter → tryb tylko lokalny, env nie zapisywany', () => {

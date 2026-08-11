@@ -359,8 +359,35 @@ export function buildVpsUrl(host, port) {
   if (!trimmedHost) {
     return null;
   }
-  const resolvedPort = String(port || '').trim() || '7777';
-  return `http://${trimmedHost}:${resolvedPort}`;
+  // Pytamy o „Tailscale IP", ale user równie dobrze wkleja to, co ma pod ręką:
+  // cały adres z dashboardu (`http://100.x.y.z:7777`) albo host z portem. Bez
+  // normalizacji doklejany schemat dawał `http://http://100.x.y.z:7777` — adres
+  // zapisywał się do rejestru, wracał jako podpowiedź „bez zmian" i Puls nigdy
+  // nie łączył się z VPS-em, a nic w setupie o tym nie krzyczało.
+  let value = trimmedHost.replace(/\/+$/, '');
+  // Pętla, nie pojedyncze dopasowanie: w rejestrze siedzą już adresy z podwojonym
+  // schematem (`http://http://...`) zapisane starą wersją setupu — re-run ma je
+  // naprawić, a nie przepisać dalej.
+  let scheme = '';
+  for (;;) {
+    const match = value.match(/^([a-z][a-z0-9+.-]*):\/\//i);
+    if (!match) break;
+    scheme = match[1].toLowerCase();
+    value = value.slice(match[0].length);
+  }
+  if (!scheme) scheme = 'http';
+  // Ogon ścieżki z wklejonego adresu dashboardu (`.../jobs`) — do bazowego URL-a
+  // VPS-a nie należy, a doklejony psułby każde wywołanie API.
+  value = value.split('/')[0];
+  // Port z hosta wygrywa z osobną odpowiedzią: user, który wkleił pełny adres,
+  // podał port świadomie, a na pytanie o port najczęściej wciska Enter (domyślne).
+  // Wyjątek na IPv6 w nawiasach ([::1]:7777) — tam dwukropków jest więcej.
+  const hostPortMatch = value.match(/^(.+?):(\d+)$/);
+  const inlinePort = hostPortMatch && !value.startsWith('[') ? hostPortMatch[2] : '';
+  if (inlinePort) value = hostPortMatch[1];
+  if (!value) return null;
+  const resolvedPort = inlinePort || String(port || '').trim() || '7777';
+  return `${scheme}://${value}:${resolvedPort}`;
 }
 
 // === Pure helper: który adres VPS jest „zapisany" dla potrzeb podpowiedzi ===
@@ -397,9 +424,15 @@ export function resolveVpsChoice({ savedUrl, hostInput, portInput } = {}) {
   const url = buildVpsUrl(hostInput, portInput);
 
   if (!url) {
-    return saved
-      ? { url: saved, action: 'kept', persist: false }
-      : { url: null, action: 'none', persist: false };
+    if (!saved) return { url: null, action: 'none', persist: false };
+    // Czwarty stan: zapisany adres jest zniekształcony (podwojony schemat ze starej
+    // wersji setupu). Enter nie może go zostawić w spokoju — Puls z takim URL-em
+    // milczy, a user widzi „bez zmian" i myśli, że jest połączony.
+    const repaired = buildVpsUrl(saved, '');
+    if (repaired && repaired !== saved) {
+      return { url: repaired, action: 'repaired', persist: true };
+    }
+    return { url: saved, action: 'kept', persist: false };
   }
   return { url, action: 'set', persist: true };
 }
@@ -1150,6 +1183,16 @@ function installPulsSkill() {
   }
 }
 
+// === Pure helper: zdejmij BOM z początku pliku tekstowego ===
+// Windows zapisuje UTF-8 z BOM (U+FEFF) w niemal każdym natywnym narzędziu — Notatnik,
+// `Set-Content`, `Out-File`. `JSON.parse` traktuje BOM jak śmieciowy znak i wywala się
+// na „Unexpected token '﻿'", co w setupie wyglądało jak uszkodzony settings.json
+// usera (i blokowało instalację, bo świadomie NIE nadpisujemy takiego pliku).
+export function stripBom(text) {
+  const value = String(text ?? '');
+  return value.charCodeAt(0) === 0xfeff ? value.slice(1) : value;
+}
+
 // === I/O: odczyt {workspace}/.claude/settings.json z fail-fast na uszkodzonym JSON ===
 // Wydzielone, bo do tego pliku piszą DWIE rzeczy (hook autostartu i env.PULS_HOME) —
 // jedna definicja „co znaczy uszkodzony plik" zamiast dwóch, które mogą się rozjechać.
@@ -1157,7 +1200,7 @@ function readSettingsFileOrThrow(settingsFile) {
   if (!fs.existsSync(settingsFile)) return {};
   const raw = fs.readFileSync(settingsFile, 'utf-8');
   try {
-    return JSON.parse(raw);
+    return JSON.parse(stripBom(raw));
   } catch (error) {
     // Fail-fast: NIE nadpisujemy uszkodzonego settings.json — zniszczyłoby to
     // permissions/inne hooki/env usera. Każemy userowi naprawić ręcznie.
@@ -1412,7 +1455,13 @@ async function main() {
     vpsUrl = vpsChoice.url;
     if (vpsChoice.persist) {
       const vpsLoc = persistEnvVar('CLAUDE_CRON_VPS_URL', vpsUrl, 'Claude-Cron VPS connection');
-      console.log(`[ok] VPS: ${vpsUrl} (zapisano w ${vpsLoc})`);
+      if (vpsChoice.action === 'repaired') {
+        // Głośno, bo user o niczym nie prosił: adres zapisany starą wersją setupu był
+        // zniekształcony i przed chwilą go podmieniliśmy.
+        console.log(`[ok] VPS: naprawiono zapisany adres „${savedVpsUrl}" → ${vpsUrl} (zapisano w ${vpsLoc})`);
+      } else {
+        console.log(`[ok] VPS: ${vpsUrl} (zapisano w ${vpsLoc})`);
+      }
     } else if (vpsChoice.action === 'kept') {
       // Bez zapisu do RC/rejestru (wartość już tam jest), ALE z ustawieniem w BIEŻĄCYM procesie —
       // `savedUrl` mógł przyjść z `readPersistedEnv`, gdy `process.env` tej sesji jest puste
