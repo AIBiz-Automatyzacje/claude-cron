@@ -2,8 +2,8 @@
 // Puls — kontrola spójności instalacji (U8).
 //
 // Dwie kontrole, jeden mechanizm („wykryj rozjazd → powiedz człowiekowi"):
-//   1. motyw Skrzynki — snippet `<vault>/.obsidian/snippets/skrzynka.css` kontra szablon
-//      w pluginie zespołowym (`skills/onboard/templates/skrzynka.css`),
+//   1. motyw — snippety `<vault>/.obsidian/snippets/*.css` (Skrzynka ORAZ Dashboard/zadania)
+//      kontra szablony w pluginie zespołowym (`skills/onboard/templates/`),
 //   2. wersja zainstalowanego kodu (`data/version.json`, lib/version.js) — `unknown` znaczy,
 //      że instalacja nie wie, z czym pracuje, i każda diagnoza po fakcie jest zgadywaniem.
 //
@@ -41,8 +41,17 @@ export const VERSION_FIX_COMMAND = 'ponownie uruchom instalator Pulsa (install.s
 
 const TASK_TITLE = 'Puls — kontrola spójności';
 const TASK_SLUG = 'puls-kontrola-spojnosci';
-const THEME_SNIPPET_RELATIVE = path.join('.obsidian', 'snippets', 'skrzynka.css');
-const TEMPLATE_RELATIVE = path.join('skills', 'onboard', 'templates', 'skrzynka.css');
+
+// Motyw to DWA snippety, nie jeden. Kontrola pilnowała wyłącznie `skrzynka.css`, więc
+// `dashboard-todo.css` mógł być dowolnie stary i nikt się o tym nie dowiadywał — a to on
+// odpowiada za wygląd Dashboardu i listy zadań, czyli ekranu oglądanego najczęściej.
+// Lista, nie dwie kopie kodu: trzeci snippet dopisuje się tu jednym wierszem.
+export const THEME_SNIPPETS = [
+  { file: 'skrzynka.css', label: 'Skrzynka' },
+  { file: 'dashboard-todo.css', label: 'Dashboard i lista zadań' },
+];
+const SNIPPETS_DIR_RELATIVE = path.join('.obsidian', 'snippets');
+const TEMPLATE_DIR_RELATIVE = path.join('skills', 'onboard', 'templates');
 const TASKS_DIR_RELATIVE = path.join('Zadania', 'w_trakcie');
 const DASHBOARD_RELATIVE = path.join('Zadania', 'Dashboard.md');
 
@@ -60,22 +69,30 @@ function normalizeCss(text) {
 }
 
 // Zwraca listę rozjazdów: [{ id, opis, komenda }]. Pusta lista = wszystko zgodne.
-// `vaultCss === null` znaczy „snippetu w vaultcie nie ma" (nie to samo co pusty plik).
-export function detectDrifts({ vaultCss, templateCss, version }) {
+// `snippets`: [{ file, label, vaultCss, templateCss }] — po jednym wpisie na plik motywu.
+// `vaultCss === null` znaczy „snippetu w vaultcie nie ma" (nie to samo co pusty plik);
+// `templateCss === null` znaczy „ten plugin go nie dostarcza" i jest MILCZĄCO pomijane:
+// starszy plugin zespołowy zna tylko `skrzynka.css`, a zadanie „brakuje dashboard-todo.css"
+// byłoby wtedy nienaprawialne i nauczyłoby człowieka ignorować całą kontrolę.
+export function detectDrifts({ snippets = [], version }) {
   const drifts = [];
 
-  if (vaultCss === null) {
-    drifts.push({
-      id: 'theme-missing',
-      opis: 'W vaultcie brakuje snippetu `.obsidian/snippets/skrzynka.css` — Skrzynka renderuje się bez motywu.',
-      komenda: THEME_FIX_COMMAND,
-    });
-  } else if (normalizeCss(vaultCss) !== normalizeCss(templateCss)) {
-    drifts.push({
-      id: 'theme-drift',
-      opis: 'Snippet `skrzynka.css` w vaultcie różni się od szablonu w pluginie zespołowym — Skrzynka wygląda inaczej niż u reszty zespołu.',
-      komenda: THEME_FIX_COMMAND,
-    });
+  for (const { file, label, vaultCss, templateCss } of snippets) {
+    if (templateCss === null || templateCss === undefined) continue;
+
+    if (vaultCss === null || vaultCss === undefined) {
+      drifts.push({
+        id: `theme-missing:${file}`,
+        opis: `W vaultcie brakuje snippetu \`.obsidian/snippets/${file}\` — ${label} renderuje się bez motywu.`,
+        komenda: THEME_FIX_COMMAND,
+      });
+    } else if (normalizeCss(vaultCss) !== normalizeCss(templateCss)) {
+      drifts.push({
+        id: `theme-drift:${file}`,
+        opis: `Snippet \`${file}\` w vaultcie różni się od szablonu w pluginie zespołowym — ${label} wygląda inaczej niż u reszty zespołu.`,
+        komenda: THEME_FIX_COMMAND,
+      });
+    }
   }
 
   // Świadomie NIE porównujemy z wersją zdalną — to należy do aktualizacji przyciskiem (U11).
@@ -171,12 +188,9 @@ async function readFileOrNull(filePath) {
 // katalogu cache — cache trzyma wiele wersji po hashu commita i wybór „którejkolwiek"
 // porównywałby vault z przypadkową, starą wersją szablonu.
 // Wzorzec resolucji lustrzany do `lib/skills.js` (scanPluginSkills).
-export async function resolveThemeTemplate({
+export async function resolveThemeTemplateDir({
   installedPluginsFile = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json'),
-  override = process.env.PULS_THEME_TEMPLATE || '',
 } = {}) {
-  if (override) return (await readFileOrNull(override)) === null ? null : override;
-
   const raw = await readFileOrNull(installedPluginsFile);
   if (raw === null) return null;
 
@@ -195,8 +209,14 @@ export async function resolveThemeTemplate({
     const installPath = entry?.installPath;
     if (!installPath) continue;
 
-    const direct = path.join(installPath, TEMPLATE_RELATIVE);
-    if ((await readFileOrNull(direct)) !== null) return direct;
+    // Sondą istnienia katalogu jest PIERWSZY snippet z listy: `skrzynka.css` jest w każdej
+    // wersji pluginu zespołowego, więc jego brak znaczy „to nie ten katalog", a nie
+    // „plugin nie ma motywu". Sam katalog może przy tym nie mieć nowszych plików — to
+    // rozstrzyga detectDrifts (templateCss === null → pomijamy).
+    const probe = THEME_SNIPPETS[0].file;
+
+    const direct = path.join(installPath, TEMPLATE_DIR_RELATIVE);
+    if ((await readFileOrNull(path.join(direct, probe))) !== null) return direct;
 
     // Zagnieżdżone pluginy: {installPath}/plugins/<nazwa>/skills/...
     let nested = [];
@@ -209,8 +229,8 @@ export async function resolveThemeTemplate({
     }
     for (const dir of nested) {
       if (!dir.isDirectory()) continue;
-      const candidate = path.join(installPath, 'plugins', dir.name, TEMPLATE_RELATIVE);
-      if ((await readFileOrNull(candidate)) !== null) return candidate;
+      const candidate = path.join(installPath, 'plugins', dir.name, TEMPLATE_DIR_RELATIVE);
+      if ((await readFileOrNull(path.join(candidate, probe))) !== null) return candidate;
     }
   }
 
@@ -249,7 +269,7 @@ async function freeTaskPath(tasksDir) {
 // żeby log joba nie kłamał o stanie maszyny.
 export async function runConsistencyCheck({
   workspace,
-  templatePath,
+  templateDir,
   version,
   now = new Date(),
   log = console.log,
@@ -258,22 +278,31 @@ export async function runConsistencyCheck({
 
   // Puls bez pluginu zespołowego (np. VPS) nie ma z czym porównywać motywu — kończymy cicho.
   // Zadanie „zaktualizuj motyw" na maszynie bez motywu byłoby szumem, nie sygnałem.
-  if (!templatePath) {
-    log('[consistency-check] Brak szablonu motywu w pluginie — pomijam kontrolę.');
+  if (!templateDir) {
+    log('[consistency-check] Brak szablonów motywu w pluginie — pomijam kontrolę.');
     return 'no_template';
   }
 
-  const templateCss = await readFileOrNull(templatePath);
-  if (templateCss === null) {
-    log(`[consistency-check] Szablon ${templatePath} zniknął — pomijam kontrolę.`);
+  const snippets = [];
+  for (const { file, label } of THEME_SNIPPETS) {
+    snippets.push({
+      file,
+      label,
+      templateCss: await readFileOrNull(path.join(templateDir, file)),
+      vaultCss: await readFileOrNull(path.join(workspace, SNIPPETS_DIR_RELATIVE, file)),
+    });
+  }
+
+  // Zniknął KOMPLET szablonów (podmieniony/odinstalowany plugin) — nie ma z czym porównywać.
+  if (snippets.every((s) => s.templateCss === null)) {
+    log(`[consistency-check] Szablony w ${templateDir} zniknęły — pomijam kontrolę.`);
     return 'no_template';
   }
 
-  const vaultCss = await readFileOrNull(path.join(workspace, THEME_SNIPPET_RELATIVE));
-  const drifts = detectDrifts({ vaultCss, templateCss, version });
+  const drifts = detectDrifts({ snippets, version });
 
   if (drifts.length === 0) {
-    log('[consistency-check] Spójność OK — motyw zgodny z szablonem, wersja znana.');
+    log('[consistency-check] Spójność OK — motyw zgodny z szablonami, wersja znana.');
     return 'ok';
   }
 
@@ -309,8 +338,8 @@ async function main() {
   }
 
   const { getInstallVersion } = require('../lib/version.js');
-  const templatePath = await resolveThemeTemplate();
-  await runConsistencyCheck({ workspace, templatePath, version: getInstallVersion() });
+  const templateDir = await resolveThemeTemplateDir();
+  await runConsistencyCheck({ workspace, templateDir, version: getInstallVersion() });
 }
 
 // Entry-point guard przez realpath po OBU stronach — macOS symlinkuje /var i /tmp do /private/*.
