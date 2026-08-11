@@ -486,6 +486,26 @@ test('buildFolderPickerCommand win32 → powershell FolderBrowserDialog', () => 
   assert.ok(cmd.args.join(' ').includes('FolderBrowserDialog'));
 });
 
+test('buildFolderPickerCommand win32 wymusza UTF-8 na stdout przed czymkolwiek innym', () => {
+  // Bez tego PowerShell pisze ścieżkę w OEM codepage (cp852), a Node czyta ją jako UTF-8:
+  // „...\Mój asystent" wraca z U+FFFD i setup odrzuca folder jako nieistniejący.
+  const script = buildFolderPickerCommand('win32', 'Wybierz vault').args.join(' ');
+  assert.ok(script.includes('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8'));
+  assert.ok(
+    script.indexOf('[Console]::OutputEncoding') < script.indexOf('FolderBrowserDialog'),
+    'ustawienie kodowania musi poprzedzać dialog',
+  );
+});
+
+test('buildFolderPickerCommand win32 pokazuje dialog z ownerem TopMost', () => {
+  // Bez ownera FolderBrowserDialog potrafi wstać ZA terminalem — instalator wygląda,
+  // jakby zawisł, bo spawnSync czeka na klik w niewidocznym oknie.
+  const script = buildFolderPickerCommand('win32', 'Wybierz vault').args.join(' ');
+  assert.ok(script.includes('$owner.TopMost = $true'));
+  assert.ok(script.includes('$f.ShowDialog($owner)'));
+  assert.ok(script.includes('$owner.Dispose()'));
+});
+
 test('buildFolderPickerCommand escapuje cudzysłów w promptcie (darwin)', () => {
   const cmd = buildFolderPickerCommand('darwin', 'A "B" C');
   assert.ok(cmd.args.some((a) => a.includes('A \\"B\\" C')));
@@ -510,6 +530,15 @@ test('parseFolderPickerResult → null przy anulowaniu osascript (status 1)', ()
 
 test('parseFolderPickerResult → null przy anulowaniu PowerShell (status 0, pusty stdout)', () => {
   assert.equal(parseFolderPickerResult({ status: 0, stdout: '  \n' }), null);
+});
+
+test('parseFolderPickerResult → null gdy ścieżka zawiera znak zastępczy U+FFFD', () => {
+  // Objaw złego dekodowania (cp852 czytane jako UTF-8) — taka ścieżka nie wskaże
+  // realnego folderu, więc lepiej fallback do pytania tekstowego niż twardy błąd.
+  assert.equal(
+    parseFolderPickerResult({ status: 0, stdout: 'C:\\Users\\fswin\\M\uFFFDj asystent\r\n' }),
+    null,
+  );
 });
 
 test('parseFolderPickerResult → null gdy brak binarki/GUI (status null, error)', () => {

@@ -521,10 +521,22 @@ export function buildFolderPickerCommand(platform, promptText) {
   if (platform === 'win32') {
     const escaped = text.replace(/'/g, "''");
     const script =
+      // OutputEncoding PRZED czymkolwiek: domyślnie PowerShell pisze na stdout w OEM
+      // codepage konsoli (cp852 na polskim Windowsie), a spawnSync dekoduje jako UTF-8.
+      // Ścieżka „...\Mój asystent" wracała wtedy z U+FFFD i setup odrzucał ją jako
+      // nieistniejący folder — awaria wyglądała jak zły wybór usera, nie jak bug.
+      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;' +
       'Add-Type -AssemblyName System.Windows.Forms;' +
       '$f = New-Object System.Windows.Forms.FolderBrowserDialog;' +
       `$f.Description = '${escaped}';` +
-      "if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }";
+      // Niewidoczna forma-właściciel z TopMost: FolderBrowserDialog nie ma własnego
+      // TopMost, a bez ownera potrafi otworzyć się ZA oknem terminala. Dla usera
+      // instalator po prostu wisi — spawnSync blokuje, dopóki ktoś nie kliknie OK.
+      '$owner = New-Object System.Windows.Forms.Form;' +
+      '$owner.TopMost = $true;' +
+      'try {' +
+      'if ($f.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }' +
+      '} finally { $owner.Dispose() }';
     return {
       cmd: 'powershell',
       args: ['-NoProfile', '-Command', script],
@@ -541,7 +553,13 @@ export function parseFolderPickerResult(result) {
     return null;
   }
   const value = result.stdout.trim();
-  return value || null;
+  if (!value) return null;
+  // Siatka bezpieczeństwa na wypadek, gdyby wymuszony UTF-8 gdzieś nie zadziałał:
+  // U+FFFD w ścieżce znaczy, że dekodowanie poszło złym kodowaniem. Taka ścieżka
+  // NIGDY nie wskaże realnego folderu, więc lepiej spaść do pytania tekstowego
+  // niż zabić setup komunikatem „folder nie istnieje".
+  if (value.includes('�')) return null;
+  return value;
 }
 
 // === Pure helper: komenda otwarcia URL-a w domyślnej przeglądarce per OS ===
