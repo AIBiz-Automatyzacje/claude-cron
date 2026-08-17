@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Team OS — wysłanie taska/query do skrzynki zespołowej przez hub.
-// Args: --to <nick> --title "..." [--content "..."] --type task|query [--thread <uuid>]
+// Args: --to <nick> --title "..." [--content "..." | --content-file <ścieżka>] --type task|query [--thread <uuid>]
 //
 // Mieszka W REPO (nie w vaultcie) — ten sam powód co close.mjs: kopia w vaultcie nie jest
 // objęta `npm test` i cicho rozjeżdża się z repo (kopia inbox-client sprzed PR #5 nie miała
@@ -12,31 +12,24 @@
 import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { parseArgs } from './args.mjs';
 import * as inboxClient from './inbox-client.mjs';
+import { readContent } from './content-arg.mjs';
 import { loadEnv } from './skill-env.mjs';
 
 const TYPES = ['task', 'query', 'reply', 'close'];
 
-export function parseArgs(argv) {
-  const out = {};
-  for (let i = 2; i < argv.length; i++) {
-    const a = argv[i];
-    if (a.startsWith('--')) {
-      out[a.slice(2)] = argv[i + 1];
-      i++;
-    }
-  }
-  return out;
-}
+export { parseArgs };
 
 // client wstrzykiwany dla testowalności (mock huba) — wzorzec close.mjs.
 export async function main({ client = inboxClient, argv = process.argv } = {}) {
   await loadEnv();
   const args = parseArgs(argv);
-  const { to, title, content, type, thread } = args;
+  const { to, title, type, thread } = args;
+  const content = readContent(args);
 
   if (!to || !title) {
-    throw new Error('Usage: send.mjs --to <nick> --title "..." [--content "..."] --type task|query [--thread <uuid>]');
+    throw new Error('Usage: send.mjs --to <nick> --title "..." [--content "..." | --content-file <ścieżka>] --type task|query [--thread <uuid>]');
   }
   // Brak cichego defaultu: nowa wiadomość MUSI mieć jawny --type (task vs query → inny
   // render u odbiorcy i inna ścieżka domknięcia).

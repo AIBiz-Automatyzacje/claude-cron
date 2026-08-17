@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { parseArgs } from './args.mjs';
 import { appendToArchive } from './inbox-push.mjs';
 import * as inboxClient from './inbox-client.mjs';
 import { loadEnv } from './env-loader.mjs';
@@ -44,17 +45,7 @@ async function loadInboxEnv() {
   }
 }
 
-export function parseArgs(argv) {
-  const out = {};
-  for (let i = 2; i < argv.length; i++) {
-    const a = argv[i];
-    if (a.startsWith('--')) {
-      out[a.slice(2)] = argv[i + 1];
-      i++;
-    }
-  }
-  return out;
-}
+export { parseArgs };
 
 // client wstrzykiwany dla testowalności (mock huba); archiwum piszemy PRAWDZIWYM
 // `appendToArchive` do katalogu z INBOX_ARCHIVE_DIR — szew hub↔plik ma być testowany

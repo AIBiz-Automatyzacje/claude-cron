@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Team OS — odpowiedź na wiadomość w wątku, przez hub.
-// Args: --thread-id <uuid> --content "..." [--title "..."] [--to <nick>]
+// Args: --thread-id <uuid> [--content "..." | --content-file <ścieżka>] [--title "..."] [--to <nick>]
 //
 // Mieszka W REPO (nie w vaultcie) — ten sam powód co close.mjs/send.mjs: kopie w vaultcie
 // nie są objęte `npm test` i cicho rozjeżdżają się z repo. Skill `deleguj` woła:
@@ -16,20 +16,12 @@
 import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { parseArgs } from './args.mjs';
 import * as inboxClient from './inbox-client.mjs';
+import { readContent } from './content-arg.mjs';
 import { loadEnv } from './skill-env.mjs';
 
-export function parseArgs(argv) {
-  const out = {};
-  for (let i = 2; i < argv.length; i++) {
-    const a = argv[i];
-    if (a.startsWith('--')) {
-      out[a.slice(2)] = argv[i + 1];
-      i++;
-    }
-  }
-  return out;
-}
+export { parseArgs };
 
 // Najstarszy task/query wątku — z nitek przychodzących albo z moich delegacji.
 // Widok `delegated` huba ukrywa query z cudzą odpowiedzią, więc dla takich wątków
@@ -47,10 +39,11 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
   await loadEnv();
   const args = parseArgs(argv);
   const threadId = args['thread-id'] || args.thread;
-  const { content, title, to } = args;
+  const { title, to } = args;
+  const content = readContent(args);
 
   if (!threadId || !content) {
-    throw new Error('Usage: reply.mjs --thread-id <uuid> --content "..." [--title "..."] [--to <nick>]');
+    throw new Error('Usage: reply.mjs --thread-id <uuid> [--content "..." | --content-file <ścieżka>] [--title "..."] [--to <nick>]');
   }
 
   const pulled = await client.pull();
