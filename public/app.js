@@ -730,8 +730,16 @@ function renderVaultFilters() {
   box.innerHTML = pills.map((p) => {
     const hue = p.value === VAULT_ALL || p.value === VAULT_NONE ? '' : ` style="--vault-hue:${vaultHue(p.value)}"`;
     const label = p.value === VAULT_ALL ? '⊞ Wszystkie' : esc(p.label);
-    return `<button class="filter-pill vault-filter${p.active ? ' active' : ''}" data-filter="${esc(p.value)}"${hue} onclick="filterVault('${esc(p.value)}')" aria-pressed="${p.active}">${label} <span class="fc">${p.count}</span></button>`;
+    // Nazwa sejfu pochodzi od użytkownika, więc NIE może trafić do treści inline handlera:
+    // atrybut zdarzenia jest dekodowany jako HTML przed wykonaniem, więc apostrof wróciłby
+    // i zamknął literał w `onclick="filterVault('…')"` — czyli dowolny kod z nazwy sejfu.
+    // Wartość idzie do `data-filter` (tam escAttr wystarcza), klik obsługuje delegacja.
+    return `<button class="filter-pill vault-filter${p.active ? ' active' : ''}" data-filter="${escAttr(p.value)}"${hue} aria-pressed="${p.active}">${label} <span class="fc">${p.count}</span></button>`;
   }).join('');
+  box.onclick = (ev) => {
+    const btn = ev.target.closest('.vault-filter');
+    if (btn) filterVault(btn.dataset.filter);
+  };
   box.classList.toggle('hidden', pills.length === 0);
 }
 
@@ -1325,7 +1333,7 @@ async function killRun(runId) {
 function syncVaultDatalist() {
   const list = document.getElementById('vault-options');
   if (!list) return;
-  list.innerHTML = vaultNames(allJobs).map((v) => `<option value="${esc(v)}"></option>`).join('');
+  list.innerHTML = vaultNames(allJobs).map((v) => `<option value="${escAttr(v)}"></option>`).join('');
 }
 
 function openCreateModal() {
