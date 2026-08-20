@@ -220,6 +220,17 @@ function proxyToVps(req, res, targetPath) {
   }
 }
 
+// Parsowanie `job_id` z query stringa. `parseInt('12x', 10)` zwraca 12, a `parseInt('x', 10)`
+// daje NaN, które warstwa filtrów traktuje jak brak filtra — odpowiedź wygląda wtedy na
+// poprawną (200 i pełna lista), choć pytanie było o konkretne zadanie. Zwraca `undefined`
+// (brak parametru), liczbę albo `null` (wartość nie do przyjęcia → 400 po stronie routingu).
+function parseJobIdParam(params) {
+  const raw = params.get('job_id');
+  if (raw === null || raw === '') return undefined;
+  const id = Number(raw);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
 async function handleApi(req, res) {
   const { method, path: urlPath, segments, params } = matchRoute(req.method, req.url);
 
@@ -493,7 +504,8 @@ async function handleApi(req, res) {
   if (method === 'GET' && urlPath === '/api/runs') {
     const limit = parseInt(params.get('limit') || '50', 10);
     const offset = parseInt(params.get('offset') || '0', 10);
-    const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
+    const job_id = parseJobIdParam(params);
+    if (job_id === null) return error(res, 'Invalid job ID');
     const hideRoutine = params.get('hide_routine') === '1';
     const fields = params.get('fields') || undefined;
     // Status z whitelisty: literówka („succes") ma dać 400, nie cichą pustą listę
@@ -556,7 +568,8 @@ async function handleApi(req, res) {
   // w historii). Ta sama uwaga o kolejności co przy /recent: literał musi stać przed
   // matcherem /api/runs/:id, bo 'stats' nie jest liczbą.
   if (method === 'GET' && urlPath === '/api/runs/stats') {
-    const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
+    const job_id = parseJobIdParam(params);
+    if (job_id === null) return error(res, 'Invalid job ID');
     const hideRoutine = params.get('hide_routine') === '1';
     return json(res, db.getRunStatusCounts({ job_id, hideRoutine }));
   }
@@ -577,7 +590,8 @@ async function handleApi(req, res) {
   if (method === 'GET' && segments[0] === 'api' && segments[1] === 'runs') {
     const limit = parseInt(params.get('limit') || '50', 10);
     const offset = parseInt(params.get('offset') || '0', 10);
-    const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
+    const job_id = parseJobIdParam(params);
+    if (job_id === null) return error(res, 'Invalid job ID');
     const hideRoutine = params.get('hide_routine') === '1';
     const fields = params.get('fields') || undefined;
     return json(res, db.getRuns({ limit, offset, job_id, hideRoutine, fields }));

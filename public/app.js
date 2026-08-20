@@ -13,6 +13,10 @@ const RUNS_FILTER_KEY = 'puls.runsFilter';
 let runsFilter = { jobId: '', status: '', hideRoutine: true };
 let runStats = { total: 0, by_status: {} };
 let runsJobOptionsSig = null;
+// Numer generacji filtra. Każda zmiana filtra go podbija, a odpowiedź API, która wróciła
+// z innym numerem niż aktualny, jest odrzucana — inaczej wolniejsza odpowiedź dla
+// POPRZEDNIEGO filtra nadpisuje listę i liczniki już przefiltrowane na nowo.
+let runsFilterGen = 0;
 
 function loadRunsFilter() {
   try {
@@ -27,13 +31,18 @@ function loadRunsFilter() {
       hideRoutine: saved ? saved.hideRoutine !== false : true,
     };
     if (runsFilter.status && !EnumMap.STATUS_ORDER.includes(runsFilter.status)) runsFilter.status = '';
-  } catch { /* brak/uszkodzony storage — zostają domyślne */ }
+  } catch (e) {
+    console.warn(`Nie udało się odczytać zapamiętanych filtrów historii: ${e.message}`);
+  }
 }
 
 function saveRunsFilter() {
   try {
     localStorage.setItem(RUNS_FILTER_KEY, JSON.stringify(runsFilter));
-  } catch { /* prywatne okno / brak quoty — filtr działa, po prostu się nie zapamięta */ }
+  } catch (e) {
+    // Prywatne okno albo brak quoty — filtr działa, po prostu się nie zapamięta.
+    console.warn(`Nie udało się zapisać filtrów historii: ${e.message}`);
+  }
 }
 let recentByJob = {}; // job_id -> [recent runs] z /api/runs/recent (sparkline + ostatni run)
 let expandedRuns = new Set(); // track expanded run details
@@ -643,15 +652,17 @@ function runsQuery(statsOnly = false) {
 }
 
 async function loadRuns() {
+  const gen = runsFilterGen;
   try {
     const runs = await API.get(`/api/runs?${runsQuery()}`);
+    if (gen !== runsFilterGen) return; // filtr zmienił się w trakcie żądania
     // Odpowiedź błędu ({error:…} z proxy/serwera) nie jest tablicą — pokaż JEJ treść.
     // Gołe „Błąd ładowania historii" po TypeError z .map() kosztowało godzinę diagnozy.
     if (!Array.isArray(runs)) throw new Error(runs?.error || 'nieoczekiwana odpowiedź API');
     allRuns = runs;
     lastRunsSig = pollSignature(allRuns, lastStatus); // sync guard po jawnym odświeżeniu
     renderRuns(allRuns);
-    loadRunStats();
+    loadRunStats(gen);
   } catch (e) {
     toast(`Błąd ładowania historii: ${e.message}`, true);
   }
@@ -659,11 +670,17 @@ async function loadRuns() {
 
 // Liczniki na pill-ach — z CAŁEJ bazy, nie z okna 100 runów. Degraduje cicho: przy błędzie
 // zostają poprzednie liczby, bo pill bez licznika jest mniej mylący niż pill z zerem.
-async function loadRunStats() {
+async function loadRunStats(gen = runsFilterGen) {
   try {
     const stats = await API.get(`/api/runs/stats?${runsQuery(true)}`);
+    if (gen !== runsFilterGen) return; // liczniki dla filtra, którego już nie ma
     if (stats && typeof stats.total === 'number') runStats = stats;
-  } catch { /* cicho */ }
+  } catch (e) {
+    // Degradacja jest celowa (pill bez licznika myli mniej niż pill z zerem), ale bez
+    // śladu w konsoli awaria endpointu byłaby nierozpoznawalna — liczniki po prostu
+    // zamarzłyby na starych wartościach.
+    console.warn(`Nie udało się pobrać liczników historii: ${e.message}`);
+  }
   renderStatusFilters();
 }
 
@@ -703,7 +720,9 @@ function sparklineHtml(jobId) {
   // Brak runów → myślnik BEZ linku: historia tego joba i tak byłaby pusta.
   if (spark.length === 0) return '<span class="cell-mute">—</span>';
   const job = jobsMap[jobId];
-  const name = job ? esc(job.name) : `Job #${jobId}`;
+  // escAttr, nie esc: wartość ląduje w atrybutach (title/aria-label), a esc()
+  // przepuszcza cudzysłowy — nazwa z `"` zamknęłaby atrybut i wpuściła handler.
+  const name = job ? escAttr(job.name) : `Job #${jobId}`;
   // Klikalny jest CAŁY sparkline (61×18 px), nie pojedynczy słupek: słupek ma 7×16 px,
   // czyli poniżej minimum celu dotykowego, a hitbox 24 px zachodziłby na sąsiadów.
   return `<button type="button" class="spark spark-link" onclick="event.stopPropagation(); openJobHistory(${jobId})" title="Pokaż historię: ${name}" aria-label="Pokaż historię zadania ${name}">${spark.map(s =>
@@ -744,15 +763,15 @@ function renderJobs() {
       <div>${sparklineHtml(j.id)}</div>
       <div>
         <label class="switch">
-          <input type="checkbox" ${j.enabled ? 'checked' : ''} onchange="toggleJob(${j.id})" aria-label="Przełącz ${esc(j.name)}" />
+          <input type="checkbox" ${j.enabled ? 'checked' : ''} onchange="toggleJob(${j.id})" aria-label="Przełącz ${escAttr(j.name)}" />
           <span class="track"><span class="thumb"></span></span>
         </label>
       </div>
       <div class="actions">
-        <button class="act-btn run" onclick="triggerJob(${j.id})" title="Uruchom" aria-label="Uruchom ${esc(j.name)}">▶</button>
-        <button class="act-btn" onclick="toggleJob(${j.id})" title="${j.enabled ? 'Wyłącz' : 'Włącz'}" aria-label="${j.enabled ? 'Wyłącz' : 'Włącz'} ${esc(j.name)}">⏻</button>
-        <button class="act-btn" onclick="openEditModal(${j.id})" title="Edytuj" aria-label="Edytuj ${esc(j.name)}">✎</button>
-        <button class="act-btn danger" onclick="deleteJob(${j.id})" title="Usuń" aria-label="Usuń ${esc(j.name)}">✕</button>
+        <button class="act-btn run" onclick="triggerJob(${j.id})" title="Uruchom" aria-label="Uruchom ${escAttr(j.name)}">▶</button>
+        <button class="act-btn" onclick="toggleJob(${j.id})" title="${j.enabled ? 'Wyłącz' : 'Włącz'}" aria-label="${j.enabled ? 'Wyłącz' : 'Włącz'} ${escAttr(j.name)}">⏻</button>
+        <button class="act-btn" onclick="openEditModal(${j.id})" title="Edytuj" aria-label="Edytuj ${escAttr(j.name)}">✎</button>
+        <button class="act-btn danger" onclick="deleteJob(${j.id})" title="Usuń" aria-label="Usuń ${escAttr(j.name)}">✕</button>
       </div>
     </div>
   `}).join('');
@@ -892,14 +911,27 @@ function renderStatusFilters() {
   const pills = statusFilterPills(runStats, runsFilter.status, EnumMap.STATUS_ORDER);
   const html = pills.map(p => {
     const label = p.status === '' ? '⊞ Wszystkie' : esc(mapStatus(p.status).label);
-    return `<button class="filter-pill${p.active ? ' active' : ''}" onclick="setRunsStatusFilter('${p.status}')" aria-pressed="${p.active}">${label} <span class="fc">${p.count}</span></button>`;
+    // Wartość idzie do data-atrybutu, nie w treść inline handlera. Dziś statusy pochodzą
+    // z zamkniętej listy, ale wklejanie WARTOŚCI w `onclick="fn('…')"` to wzorzec, który
+    // przy pierwszym polu wypełnianym przez człowieka staje się wykonaniem obcego kodu:
+    // atrybut zdarzenia jest najpierw dekodowany jako HTML, więc żadne escapowanie
+    // encjami nie ochroni stringa JS w środku.
+    return `<button class="filter-pill${p.active ? ' active' : ''}" data-status="${escAttr(p.status)}" aria-pressed="${p.active}">${label} <span class="fc">${p.count}</span></button>`;
   });
   // Droga powrotna po skoku z Zadań/kalendarza: bez niej trzeba pamiętać, ŻE filtr w ogóle
   // jest ustawiony, i odklikać go w dwóch różnych miejscach (select + pill).
   if (runsFilterIsActive(runsFilter)) {
-    html.push('<button class="filter-pill filter-pill-clear" onclick="clearRunsFilter()">⊗ Wyczyść filtry</button>');
+    html.push('<button class="filter-pill filter-pill-clear" data-clear-filters="1">⊗ Wyczyść filtry</button>');
   }
   box.innerHTML = html.join('');
+  // Delegacja: jeden handler na kontenerze, podmieniany przy każdym renderze (przypisanie
+  // przez `onclick` nadpisuje poprzedni, więc listenery się nie kumulują).
+  box.onclick = (ev) => {
+    const btn = ev.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.clearFilters) return clearRunsFilter();
+    if (btn.dataset.status !== undefined) setRunsStatusFilter(btn.dataset.status);
+  };
 }
 
 // Wybrane zadanie wygrywa nad „Ukryj rutynowe" (tak filtruje baza) — checkbox jest wtedy
@@ -924,6 +956,7 @@ function syncRunsFilterUI() {
 // `lastRunsSig = null` jest tu KLUCZOWE — bez tego guard podpisu uznałby, że nic się nie
 // zmieniło (te same runy w odpowiedzi) i pominął re-render.
 function applyRunsFilter() {
+  runsFilterGen += 1; // odpowiedzi w locie dla poprzedniego filtra przestają się liczyć
   saveRunsFilter();
   syncRunsFilterUI();
   lastRunsSig = null;
@@ -1931,15 +1964,17 @@ async function poll() {
 
 // Guard historii: pomiń re-render gdy podpis (length + id + statusy) bez zmian.
 async function pollRuns() {
+  const gen = runsFilterGen;
   try {
     const runs = await API.get(`/api/runs?${runsQuery()}`);
+    if (gen !== runsFilterGen) return; // filtr zmienił się, zanim poll wrócił
     if (!Array.isArray(runs)) return; // błąd API — poll degraduje cicho, zostają stare dane
     const sig = pollSignature(runs, lastStatus);
     if (sig === lastRunsSig) return;
     lastRunsSig = sig;
     allRuns = runs;
     renderRuns(allRuns);
-    loadRunStats(); // lista się zmieniła → liczniki też mogły; poza tym poll ich nie rusza
+    loadRunStats(gen); // lista się zmieniła → liczniki też mogły; poza tym poll ich nie rusza
   } catch { /* silent — historia degraduje cicho */ }
 }
 

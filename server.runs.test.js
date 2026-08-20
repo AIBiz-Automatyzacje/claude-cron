@@ -487,3 +487,19 @@ test('GET /api/runs/:id jest prywatny: X-Forwarded-For → 403', async () => {
   const res = await api('/api/runs/1', { headers: { 'X-Forwarded-For': '1.2.3.4' } });
   assert.equal(res.status, 403);
 });
+
+test('job_id ze śmieciem daje 400 na liście i licznikach — nie cichą odpowiedź bez filtra', async () => {
+  // parseInt('12x') = 12, parseInt('x') = NaN. NaN wchodził dalej jako „brak filtra", więc
+  // pytanie o konkretne zadanie dostawało 200 i dane WSZYSTKICH zadań.
+  // /api/runs/recent świadomie pominięty — ten endpoint nie zna parametru job_id (tylko per_job).
+  for (const path of ['/api/runs', '/api/runs/stats']) {
+    for (const bad of ['x', '12x', '0', '-3', '1.5', '99999999999999999999']) {
+      const res = await api(`${path}?job_id=${encodeURIComponent(bad)}`);
+      assert.equal(res.status, 400, `${path}?job_id=${bad} musi być odrzucone`);
+    }
+  }
+
+  // Poprawne id dalej działa, brak parametru też (filtr nieobowiązkowy).
+  assert.equal((await api(`/api/runs/stats?job_id=${jobA.id}`)).status, 200);
+  assert.equal((await api('/api/runs/stats')).status, 200);
+});
