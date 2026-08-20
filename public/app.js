@@ -69,12 +69,17 @@ const { mapStatus, mapTrigger } = EnumMap;
 const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = RenderHelpers;
 const { computeWeekOccurrences, startOfDay } = RenderHelpers;
 const { buildRunsQuery, statusFilterPills, runsFilterIsActive } = RenderHelpers;
+const { vaultNames, vaultFilterPills, filterJobsByVault, vaultHue, VAULT_ALL, VAULT_NONE } = RenderHelpers;
 const { overlapsMaintenanceWindow } = RenderHelpers;
 const { validateMemberName, memberRowData } = RenderHelpers;
 const { runningRunsFrom, activeRunRows, activeRunsSignature } = RenderHelpers;
 const { shortRevision, revisionsMatch, updateBarView, sysbarView } = RenderHelpers;
 
 let zadaniaView = 'lista'; // 'lista' | 'kalendarz'
+// Filtr sejfu (vault) — wspólny dla listy i kalendarza. VAULT_ALL, nazwa sejfu albo
+// VAULT_NONE (zadania bez przypisania). Pasek filtrów pokazuje się dopiero wtedy, gdy
+// jakiekolwiek zadanie ma sejf ustawiony.
+let currentVaultFilter = VAULT_ALL;
 
 // UI pokazuje timeouty w minutach (czytelniej niż ms), baza/executor trzymają ms.
 const MS_PER_MIN = 60000;
@@ -700,6 +705,48 @@ function jobTypePill(j) {
   return '<span class="task-tag tag-type">prompt</span>';
 }
 
+// Plakietka sejfu przy nazwie zadania. Zadania bez przypisania nie dostają nic — pusta
+// etykieta niosłaby zero informacji, a zabierała miejsce w każdym wierszu.
+function vaultPill(j) {
+  const vault = (j && j.vault) || '';
+  if (!vault) return '';
+  return `<span class="task-tag tag-vault" style="--vault-hue:${vaultHue(vault)}">${esc(vault)}</span>`;
+}
+
+// Pasek filtrów sejfu. Buduje się z danych, nie z listy zaszytej w HTML — nazwy sejfów
+// wymyśla właściciel instalacji, a jest ich tyle, ile sam założy.
+function renderVaultFilters() {
+  const box = document.getElementById('vault-filters');
+  if (!box) return;
+  const pills = vaultFilterPills(allJobs, currentVaultFilter);
+
+  // Aktywny filtr mógł zniknąć razem z ostatnim zadaniem, które go używało — bez tego
+  // lista zostałaby pusta, a jedyny pill zdejmujący filtr już by się nie renderował.
+  if (currentVaultFilter !== VAULT_ALL && !pills.some((p) => p.value === currentVaultFilter)) {
+    currentVaultFilter = VAULT_ALL;
+    return renderVaultFilters();
+  }
+
+  box.innerHTML = pills.map((p) => {
+    const hue = p.value === VAULT_ALL || p.value === VAULT_NONE ? '' : ` style="--vault-hue:${vaultHue(p.value)}"`;
+    const label = p.value === VAULT_ALL ? '⊞ Wszystkie' : esc(p.label);
+    return `<button class="filter-pill vault-filter${p.active ? ' active' : ''}" data-filter="${esc(p.value)}"${hue} onclick="filterVault('${esc(p.value)}')" aria-pressed="${p.active}">${label} <span class="fc">${p.count}</span></button>`;
+  }).join('');
+  box.classList.toggle('hidden', pills.length === 0);
+}
+
+function filterVault(filter) {
+  currentVaultFilter = filter;
+  lastJobsSig = null; // wymuś re-render mimo guardu sygnaturowego (filtr nie zmienia danych zadań)
+  renderJobs(); // renderJobs() sam odświeży też kalendarz, jeśli jest aktywny
+}
+
+// Wspólny filtr — używany przez listę (renderJobs) I kalendarz (renderKalendarz),
+// żeby oba widoki Zadań pokazywały ten sam podzbiór.
+function getFilteredJobs() {
+  return filterJobsByVault(allJobs, currentVaultFilter);
+}
+
 // Sparkline 7 RUN z recentByJob (chronologicznie, kolor wg statusu).
 function sparklineHtml(jobId) {
   const spark = buildSparkData(recentByJob[jobId]);
@@ -729,21 +776,24 @@ function renderJobs() {
   const body = document.getElementById('jobs-body');
   const empty = document.getElementById('jobs-empty');
 
-  if (allJobs.length === 0) {
+  renderVaultFilters();
+  const filteredJobs = getFilteredJobs();
+
+  if (filteredJobs.length === 0) {
     body.innerHTML = '';
     empty.style.display = 'block';
     return;
   }
 
   empty.style.display = 'none';
-  body.innerHTML = allJobs.map(j => {
+  body.innerHTML = filteredJobs.map(j => {
     const ico = j.job_type === 'script' ? '›_' : '◷';
     const sched = j.cron_expr ? esc(cronToHuman(j.cron_expr)) : '<span class="cell-mute">tylko webhook</span>';
     return `
     <div class="trow grid-zadania ${j.enabled ? '' : 'disabled'}">
       <div class="task-cell">
         <span class="task-ico">${ico}</span>
-        <span><span class="task-name">${esc(j.name)}</span>${jobTypePill(j)}</span>
+        <span><span class="task-name">${esc(j.name)}</span>${vaultPill(j)}${jobTypePill(j)}</span>
       </div>
       <div class="cell-dim">${sched}</div>
       <div>${sparklineHtml(j.id)}</div>
@@ -799,7 +849,7 @@ function renderKalendarz() {
   const now = new Date();
   const rangeStart = startOfDay(now);
   const runs = Object.values(recentByJob).flat();
-  const days = computeWeekOccurrences(allJobs, runs, rangeStart, now);
+  const days = computeWeekOccurrences(getFilteredJobs(), runs, rangeStart, now);
 
   const nav = `<div class="cal-nav">
     <div class="cal-nav-left">
@@ -1270,10 +1320,22 @@ async function killRun(runId) {
 }
 
 // === Modal ===
+// Podpowiedzi sejfów w formularzu: istniejące nazwy jako datalist, ale pole zostaje
+// tekstowe — nowy sejf zakłada się wpisaniem nazwy, bez osobnego ekranu zarządzania.
+function syncVaultDatalist() {
+  const list = document.getElementById('vault-options');
+  if (!list) return;
+  list.innerHTML = vaultNames(allJobs).map((v) => `<option value="${esc(v)}"></option>`).join('');
+}
+
 function openCreateModal() {
   document.getElementById('modal-title').textContent = 'NOWY JOB';
   document.getElementById('form-id').value = '';
   document.getElementById('form-name').value = '';
+  // Nowe zadanie dziedziczy aktywny filtr: jeśli przeglądasz jeden sejf, prawie zawsze
+  // właśnie do niego dokładasz zadanie.
+  syncVaultDatalist();
+  document.getElementById('form-vault').value = [VAULT_ALL, VAULT_NONE].includes(currentVaultFilter) ? '' : currentVaultFilter;
   document.getElementById('form-skill').value = '';
   document.getElementById('form-freq').value = 'daily';
   document.getElementById('form-time').value = '09:00';
@@ -1323,6 +1385,8 @@ function openEditModal(id) {
   document.getElementById('modal-title').textContent = 'EDYTUJ JOB';
   document.getElementById('form-id').value = job.id;
   document.getElementById('form-name').value = job.name;
+  syncVaultDatalist();
+  document.getElementById('form-vault').value = job.vault || '';
   document.getElementById('form-args').value = job.arguments || '';
   document.getElementById('form-timeout').value = msToMin(job.timeout_ms);
   document.getElementById('form-idle-timeout').value = msToMin(job.idle_timeout_ms ?? 300000);
@@ -1379,6 +1443,7 @@ async function saveJob(e) {
   const lockGroup = document.getElementById('form-lock-group').value.trim();
   const body = {
     name: document.getElementById('form-name').value,
+    vault: document.getElementById('form-vault').value.trim(),
     job_type: jobType,
     skill_name: jobType === 'script' ? '' : document.getElementById('form-skill').value,
     command: jobType === 'script' ? document.getElementById('form-command').value : null,

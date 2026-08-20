@@ -345,6 +345,20 @@ body {
 .task-tag.tag-type {
   text-transform: uppercase; color: var(--dim); background: rgba(255,255,255,.04);
 }
+.task-tag.tag-vault {
+  /* Odcień wyprowadzony z nazwy sejfu (--vault-hue ustawiane w JS) — dowolna nazwa dostaje
+     własny, zawsze ten sam kolor. Nasycenie i jasność stałe, więc każdy wariant zostaje
+     czytelny na ciemnym tle. */
+  color: hsl(var(--vault-hue, 210) 85% 72%);
+  background: hsl(var(--vault-hue, 210) 85% 72% / .13);
+  border-color: hsl(var(--vault-hue, 210) 85% 72% / .38);
+}
+.filter-pill.vault-filter.active[style*="--vault-hue"] {
+  color: hsl(var(--vault-hue, 210) 85% 72%);
+  background: hsl(var(--vault-hue, 210) 85% 72% / .13);
+  border-color: hsl(var(--vault-hue, 210) 85% 72% / .38);
+}
+.filter-pill.vault-filter.active[style*="--vault-hue"] .fc { background: hsl(var(--vault-hue, 210) 85% 72% / .3); }
 .cell-dim { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cell-strong { color: var(--text); font-weight: 600; }
 .cell-mute { color: var(--mute); }

@@ -33,7 +33,7 @@
   function jobsSignature(jobs) {
     const list = Array.isArray(jobs) ? jobs : [];
     return list
-      .map((j) => `${j.id}:${j.enabled ? 1 : 0}:${j.next_run || ''}:${j.cron_expr || ''}:${j.webhook_token ? 1 : 0}`)
+      .map((j) => `${j.id}:${j.enabled ? 1 : 0}:${j.next_run || ''}:${j.cron_expr || ''}:${j.webhook_token ? 1 : 0}:${j.vault || ''}`)
       .join(',');
   }
 
@@ -103,6 +103,60 @@
       pills.push({ status, count, active: active === status });
     }
     return pills;
+  }
+
+  // === Sejfy (vault) — opcjonalna etykieta przestrzeni roboczej ===
+
+  // Nazwy sejfów obecne w zadaniach, alfabetycznie. Pusta lista = nikt tej etykiety
+  // nie używa, więc UI w ogóle nie pokazuje paska filtrów (funkcja, której nie włączyłeś,
+  // nie ma prawa zabierać miejsca w widoku).
+  function vaultNames(jobs) {
+    const list = Array.isArray(jobs) ? jobs : [];
+    const names = new Set();
+    for (const j of list) {
+      const v = (j && j.vault) || '';
+      if (v) names.add(v);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }
+
+  // Pill-e filtra: „wszystkie", każdy sejf z osobna, a na końcu „bez sejfu" — ten ostatni
+  // TYLKO gdy takie zadania faktycznie są. Liczniki zawsze z pełnej listy, nie z aktywnego
+  // filtra, inaczej po pierwszym kliknięciu reszta pokazałaby zera.
+  const VAULT_ALL = 'all';
+  const VAULT_NONE = '__none__';
+
+  function vaultFilterPills(jobs, activeFilter) {
+    const list = Array.isArray(jobs) ? jobs : [];
+    const names = vaultNames(list);
+    if (names.length === 0) return [];
+
+    const active = activeFilter || VAULT_ALL;
+    const pills = [{ value: VAULT_ALL, label: 'Wszystkie', count: list.length, active: active === VAULT_ALL }];
+    for (const name of names) {
+      const count = list.filter((j) => (j.vault || '') === name).length;
+      pills.push({ value: name, label: name, count, active: active === name });
+    }
+    const orphans = list.filter((j) => !(j.vault || '')).length;
+    if (orphans > 0) pills.push({ value: VAULT_NONE, label: 'bez sejfu', count: orphans, active: active === VAULT_NONE });
+    return pills;
+  }
+
+  function filterJobsByVault(jobs, filter) {
+    const list = Array.isArray(jobs) ? jobs : [];
+    if (!filter || filter === VAULT_ALL) return list;
+    if (filter === VAULT_NONE) return list.filter((j) => !(j.vault || ''));
+    return list.filter((j) => (j.vault || '') === filter);
+  }
+
+  // Kolor plakietki wyprowadzony z nazwy, nie z listy zaszytej w kodzie: dowolna nazwa
+  // sejfu dostaje własny, ZAWSZE ten sam odcień. Nasycenie i jasność są stałe, więc każdy
+  // wariant zostaje czytelny na ciemnym tle — losowy jest wyłącznie odcień.
+  function vaultHue(name) {
+    const text = String(name || '');
+    let hash = 0;
+    for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) % 360;
+    return hash;
   }
 
   // === Kalendarz: occurrences w JS (R10) ===
@@ -445,6 +499,7 @@
     shortRevision, revisionsMatch, updateBarView, sysbarView, hostOf, REVISION_PREFIX,
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
     buildRunsQuery, statusFilterPills, runsFilterIsActive,
+    vaultNames, vaultFilterPills, filterJobsByVault, vaultHue, VAULT_ALL, VAULT_NONE,
     parseCronForCalendar, computeWeekOccurrences, startOfDay, formatHourMinute,
     overlapsMaintenanceWindow,
     runningRunsFrom, formatElapsed, activeRunRows, activeRunsSignature,

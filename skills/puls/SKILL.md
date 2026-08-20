@@ -65,6 +65,7 @@ Serwer przyjmuje TYLKO te pola (reszta jest ignorowana):
 | `discord_notify` | `0` | 0/1 — powiadomienie Discord po runie |
 | `telegram_notify` | `0` | 0/1 — powiadomienie Telegram po runie |
 | `routine` | `0` | 0/1 — job rutynowy: udane runy chowane w UI i kasowane po 24 h |
+| `vault` | `""` | Opcjonalna etykieta przestrzeni roboczej (sejf/vault/projekt) — filtruje listę zadań i kalendarz w UI. Dowolny tekst; nowa nazwa zakłada nowy sejf. Puste = zadanie bez przypisania |
 | `lock_group` | `null` | **Grupa wyłączności** — dwa joby z tą samą niepustą wartością nigdy nie biegną równolegle (patrz „Równoległość"). Pusty string/`null` = job do żadnej grupy nie należy |
 
 Reguły walidacji (serwer odrzuca z `{ "error": ... }`):

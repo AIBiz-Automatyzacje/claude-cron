@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   pollSignature, jobsSignature, buildSparkData, groupRecentByJob,
   buildRunsQuery, statusFilterPills, runsFilterIsActive,
+  vaultNames, vaultFilterPills, filterJobsByVault, vaultHue, VAULT_ALL, VAULT_NONE,
   parseCronForCalendar, computeWeekOccurrences, startOfDay,
   overlapsMaintenanceWindow,
   validateMemberName, memberRowData, MEMBER_NAME_MAX,
@@ -70,6 +71,12 @@ test('jobsSignature: toggle enabled zmienia podpis', () => {
   assert.notEqual(before, after);
 });
 
+test('jobsSignature: zmiana sejfu zmienia podpis (edycja bez innych zmian musi odświeżyć widok)', () => {
+  const before = jobsSignature([{ id: 1, enabled: true, next_run: 'x', vault: 'praca' }]);
+  const after = jobsSignature([{ id: 1, enabled: true, next_run: 'x', vault: 'dom' }]);
+  assert.notEqual(before, after);
+});
+
 test('jobsSignature: brak jobów → pusty string, nie rzuca', () => {
   assert.equal(jobsSignature([]), '');
   assert.doesNotThrow(() => jobsSignature(undefined));
@@ -116,6 +123,62 @@ test('groupRecentByJob: grupuje po job_id zachowując kolejność', () => {
 test('groupRecentByJob: pusta/nullowa lista → pusty obiekt, nie rzuca', () => {
   assert.deepEqual(groupRecentByJob([]), {});
   assert.doesNotThrow(() => groupRecentByJob(null));
+});
+
+// === Sejfy (vault) ===
+
+const VJOBS = [
+  { id: 1, name: 'a', vault: 'praca' },
+  { id: 2, name: 'b', vault: '' },
+  { id: 3, name: 'c', vault: 'dom' },
+  { id: 4, name: 'd', vault: 'praca' },
+];
+
+test('vaultNames: unikalne, alfabetycznie, bez pustych', () => {
+  assert.deepEqual(vaultNames(VJOBS), ['dom', 'praca']);
+});
+
+test('vaultNames: nikt nie używa etykiety → pusta lista (UI ukrywa pasek filtrów)', () => {
+  assert.deepEqual(vaultNames([{ id: 1 }, { id: 2, vault: '' }]), []);
+  assert.doesNotThrow(() => vaultNames(null));
+});
+
+test('vaultFilterPills: „wszystkie" pierwsze, sejfy alfabetycznie, „bez sejfu" na końcu', () => {
+  const pills = vaultFilterPills(VJOBS, VAULT_ALL);
+  assert.deepEqual(pills.map(p => p.value), [VAULT_ALL, 'dom', 'praca', VAULT_NONE]);
+  assert.deepEqual(pills.map(p => p.count), [4, 1, 2, 1]);
+  assert.equal(pills[0].active, true);
+});
+
+test('vaultFilterPills: bez zadań osieroconych nie ma pill-a „bez sejfu"', () => {
+  const pills = vaultFilterPills([{ id: 1, vault: 'praca' }], VAULT_ALL);
+  assert.deepEqual(pills.map(p => p.value), [VAULT_ALL, 'praca']);
+});
+
+test('vaultFilterPills: żaden zadanie nie ma sejfu → ZERO pill-ów, nie samo „wszystkie"', () => {
+  // Funkcja, której nie włączyłeś, nie ma prawa zabierać miejsca w widoku.
+  assert.deepEqual(vaultFilterPills([{ id: 1, vault: '' }], VAULT_ALL), []);
+});
+
+test('vaultFilterPills: liczniki są z PEŁNEJ listy, nie z aktywnego filtra', () => {
+  const pills = vaultFilterPills(VJOBS, 'dom');
+  assert.equal(pills.find(p => p.value === 'praca').count, 2, 'inaczej po kliknięciu reszta pokazałaby zera');
+});
+
+test('filterJobsByVault: nazwa, „bez sejfu" i „wszystkie"', () => {
+  assert.deepEqual(filterJobsByVault(VJOBS, 'praca').map(j => j.id), [1, 4]);
+  assert.deepEqual(filterJobsByVault(VJOBS, VAULT_NONE).map(j => j.id), [2]);
+  assert.equal(filterJobsByVault(VJOBS, VAULT_ALL).length, 4);
+  assert.equal(filterJobsByVault(VJOBS, '').length, 4, 'brak filtra = wszystko, nie nic');
+});
+
+test('vaultHue: ta sama nazwa → ten sam odcień, zawsze w zakresie 0-359', () => {
+  assert.equal(vaultHue('praca'), vaultHue('praca'));
+  assert.notEqual(vaultHue('praca'), vaultHue('dom'));
+  for (const n of ['', 'a', 'bardzo-długa-nazwa-sejfu', 'Projekt Alfa 2026']) {
+    const h = vaultHue(n);
+    assert.ok(h >= 0 && h < 360, `${n} → ${h}`);
+  }
 });
 
 // === buildRunsQuery (filtry historii) ===

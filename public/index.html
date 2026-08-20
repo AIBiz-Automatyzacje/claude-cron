@@ -94,6 +94,9 @@
             <button class="btn btn-primary" onclick="openCreateModal()">+ Nowe zadanie</button>
           </div>
         </div>
+        <!-- Pasek filtrów sejfu — wypełnia renderVaultFilters(); pusty i ukryty, dopóki
+             żadne zadanie nie ma ustawionego sejfu. -->
+        <div class="filters hidden" id="vault-filters"></div>
         <div id="zadania-lista">
           <div class="table">
             <div class="thead grid-zadania">
@@ -221,6 +224,11 @@
 
           <label class="field-label" for="form-name">NAZWA</label>
           <input type="text" class="input input-focus" id="form-name" required placeholder="Nazwa zadania" />
+
+          <label class="field-label" for="form-vault">SEJF (opcjonalnie)</label>
+          <input type="text" class="input input-focus" id="form-vault" list="vault-options" placeholder="np. praca, notatki, dom" autocomplete="off" />
+          <datalist id="vault-options"></datalist>
+          <div class="hint">Etykieta przestrzeni roboczej, po której filtrujesz listę zadań i kalendarz. Nowa nazwa zakłada nowy sejf. Puste = zadanie bez przypisania.</div>
 
           <label class="field-label">TYP ZADANIA</label>
           <div class="seg seg-type" id="job-type-seg">
