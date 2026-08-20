@@ -817,12 +817,12 @@ function renderKalendarz() {
         <div class="cal-event ${e.status === 'ok' ? 'done' : ''}">
           <div class="cal-event-time">${calDotFor(e.status)}${esc(e.time)}</div>
           <div class="cal-event-name">${esc(e.name)}</div>
-          <div class="cal-event-last">${e.ranAt ? `<button type="button" class="cal-last-link" onclick="openJobHistory(${e.jobId})" title="Faktyczny start runu — kliknij po historię zadania" aria-label="Pokaż historię zadania ${esc(e.name)}">${esc(formatDateTime(e.ranAt))}</button>` : ''}</div>
+          <div class="cal-event-last">${e.ranAt ? `<button type="button" class="cal-last-link" onclick="openJobHistory(${e.jobId})" title="Faktyczny start runu — kliknij po historię zadania" aria-label="Pokaż historię zadania ${escAttr(e.name)}">${esc(formatDateTime(e.ranAt))}</button>` : ''}</div>
           <div class="cal-event-actions">
-            <button class="act-btn run" onclick="triggerJob(${e.jobId})" title="Uruchom" aria-label="Uruchom ${esc(e.name)}">▶</button>
-            <button class="act-btn" onclick="toggleJob(${e.jobId})" title="Wyłącz" aria-label="Wyłącz ${esc(e.name)}">⏻</button>
-            <button class="act-btn" onclick="openEditModal(${e.jobId})" title="Edytuj" aria-label="Edytuj ${esc(e.name)}">✎</button>
-            <button class="act-btn danger" onclick="deleteJob(${e.jobId})" title="Usuń" aria-label="Usuń ${esc(e.name)}">✕</button>
+            <button class="act-btn run" onclick="triggerJob(${e.jobId})" title="Uruchom" aria-label="Uruchom ${escAttr(e.name)}">▶</button>
+            <button class="act-btn" onclick="toggleJob(${e.jobId})" title="Wyłącz" aria-label="Wyłącz ${escAttr(e.name)}">⏻</button>
+            <button class="act-btn" onclick="openEditModal(${e.jobId})" title="Edytuj" aria-label="Edytuj ${escAttr(e.name)}">✎</button>
+            <button class="act-btn danger" onclick="deleteJob(${e.jobId})" title="Usuń" aria-label="Usuń ${escAttr(e.name)}">✕</button>
           </div>
         </div>`).join('')}</div>
     </div>`).join('')}</div>`;
