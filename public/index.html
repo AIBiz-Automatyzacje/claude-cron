@@ -120,10 +120,14 @@
             <h2 class="toolbar-title">Historia uruchomień</h2>
           </div>
           <div class="toolbar-right">
-            <label class="check"><input type="checkbox" id="runs-hide-routine" checked onchange="loadRuns()" /><span class="checkbox"></span> Ukryj rutynowe runy</label>
+            <select class="select select-inline" id="runs-job-filter" onchange="setRunsJobFilter(this.value)" aria-label="Filtruj po zadaniu">
+              <option value="">Wszystkie zadania</option>
+            </select>
+            <label class="check" id="runs-hide-routine-label"><input type="checkbox" id="runs-hide-routine" checked onchange="setRunsHideRoutine(this.checked)" /><span class="checkbox"></span> Ukryj rutynowe runy</label>
             <button class="btn btn-ghost" onclick="loadRuns()">↻ Odśwież</button>
           </div>
         </div>
+        <div class="filters" id="runs-status-filters"></div>
         <div class="table">
           <div class="thead grid-historia">
             <div>ZADANIE</div>
@@ -135,7 +139,7 @@
         </div>
         <div class="empty-state" id="runs-empty" style="display:none">
           <div class="icon">📜</div>
-          <div>Brak uruchomień.</div>
+          <div id="runs-empty-text">Brak uruchomień.</div>
         </div>
       </section>
 

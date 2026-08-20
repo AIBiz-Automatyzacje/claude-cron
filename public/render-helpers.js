@@ -60,6 +60,51 @@
     return map;
   }
 
+  // === Historia: filtry (zadanie + status) ===
+
+  // JEDNO miejsce budujące query listy runów. Wcześniej `loadRuns` i `pollRuns` miały
+  // po własnej kopii — przy filtrach oznaczałoby to, że poll co 3 s cicho nadpisuje
+  // przefiltrowaną listę pełną, bo zbudował URL bez filtrów.
+  // `statsOnly` pomija limit/fields: endpoint liczników przyjmuje tylko job_id + hide_routine
+  // (liczy CAŁĄ bazę, a filtr statusu pominięty świadomie — patrz getRunStatusCounts).
+  function buildRunsQuery({ jobId, status, hideRoutine, limit } = {}, statsOnly = false) {
+    const q = [];
+    // job_id wygrywa nad hide_routine już w warstwie bazy — nie wysyłamy obu naraz,
+    // żeby URL odzwierciedlał to, co realnie zadziała (UI wyszarza wtedy checkbox).
+    if (jobId) q.push(`job_id=${encodeURIComponent(jobId)}`);
+    else if (hideRoutine) q.push('hide_routine=1');
+    if (!statsOnly) {
+      if (status) q.push(`status=${encodeURIComponent(status)}`);
+      q.push(`limit=${limit || 100}`);
+      q.push('fields=meta');
+    }
+    return q.join('&');
+  }
+
+  // Czy historia jest w ogóle przefiltrowana (→ pokazać pill „Wyczyść filtry").
+  // `hideRoutine: true` to stan DOMYŚLNY, więc sam z siebie nie jest filtrem do czyszczenia;
+  // liczy się dopiero jego wyłączenie, bo wtedy widok odbiega od tego, co dostajesz po wejściu.
+  function runsFilterIsActive(filter) {
+    const f = filter || {};
+    return Boolean(f.jobId) || Boolean(f.status) || f.hideRoutine === false;
+  }
+
+  // Pill-e filtra statusu: zawsze „Wszystkie", potem statusy w kolejności `order`.
+  // Pokazujemy status, który MA runy — plus aktywny nawet przy zerze, bo pill, który
+  // znika po kliknięciu, zostawia UI bez wskazania, czym właściwie jest przefiltrowane.
+  function statusFilterPills(stats, activeStatus, order) {
+    const counts = (stats && stats.by_status) || {};
+    const total = (stats && stats.total) || 0;
+    const active = activeStatus || '';
+    const pills = [{ status: '', count: total, active: active === '' }];
+    for (const status of Array.isArray(order) ? order : []) {
+      const count = counts[status] || 0;
+      if (count === 0 && active !== status) continue;
+      pills.push({ status, count, active: active === status });
+    }
+    return pills;
+  }
+
   // === Kalendarz: occurrences w JS (R10) ===
   // Formularz generuje TYLKO 5 wzorców cron (buildCronFromForm):
   //   daily      "mm hh * * *"     → codziennie o hh:mm
@@ -388,6 +433,7 @@
   const api = {
     shortRevision, revisionsMatch, updateBarView, sysbarView, hostOf, REVISION_PREFIX,
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
+    buildRunsQuery, statusFilterPills, runsFilterIsActive,
     parseCronForCalendar, computeWeekOccurrences, startOfWeek, formatHourMinute,
     overlapsMaintenanceWindow,
     runningRunsFrom, formatElapsed, activeRunRows, activeRunsSignature,

@@ -6,6 +6,7 @@ const { randomUUID } = require('node:crypto');
 const { PORT, PUBLIC_DIR, VPS_API_URL, WEBHOOK_ENABLED, WEBHOOK_BASE_URL, MAINTENANCE_WINDOW, ASK_ENABLED } = require('./lib/config');
 const ask = require('./lib/ask');
 const db = require('./lib/db');
+const { RUN_STATUSES } = db;
 const computeNextRun = require('./lib/next-run');
 const scheduler = require('./lib/scheduler');
 const executor = require('./lib/executor');
@@ -495,7 +496,11 @@ async function handleApi(req, res) {
     const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
     const hideRoutine = params.get('hide_routine') === '1';
     const fields = params.get('fields') || undefined;
-    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine, fields }));
+    // Status z whitelisty: literówka („succes") ma dać 400, nie cichą pustą listę
+    // udającą „nic takiego nie ma". Brak parametru = bez filtra, jak dotąd.
+    const statusParam = params.get('status') || undefined;
+    if (statusParam && !RUN_STATUSES.includes(statusParam)) return error(res, `Invalid status: ${statusParam}`);
+    return json(res, db.getRuns({ limit, offset, job_id, status: statusParam, hideRoutine, fields }));
   }
 
   // GET /api/runs/current
@@ -545,6 +550,15 @@ async function handleApi(req, res) {
   if (method === 'GET' && urlPath === '/api/runs/recent') {
     const perJob = params.get('per_job');
     return json(res, db.getRecentRunsPerJob(perJob));
+  }
+
+  // GET /api/runs/stats?job_id=&hide_routine=1 — liczniki runów per status (pill-e filtra
+  // w historii). Ta sama uwaga o kolejności co przy /recent: literał musi stać przed
+  // matcherem /api/runs/:id, bo 'stats' nie jest liczbą.
+  if (method === 'GET' && urlPath === '/api/runs/stats') {
+    const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
+    const hideRoutine = params.get('hide_routine') === '1';
+    return json(res, db.getRunStatusCounts({ job_id, hideRoutine }));
   }
 
   // GET /api/runs/:id — pełny wiersz JEDNEGO runu (z logami), do lazy-loadu w historii.

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   pollSignature, jobsSignature, buildSparkData, groupRecentByJob,
+  buildRunsQuery, statusFilterPills, runsFilterIsActive,
   parseCronForCalendar, computeWeekOccurrences, startOfWeek,
   overlapsMaintenanceWindow,
   validateMemberName, memberRowData, MEMBER_NAME_MAX,
@@ -115,6 +116,84 @@ test('groupRecentByJob: grupuje po job_id zachowując kolejność', () => {
 test('groupRecentByJob: pusta/nullowa lista → pusty obiekt, nie rzuca', () => {
   assert.deepEqual(groupRecentByJob([]), {});
   assert.doesNotThrow(() => groupRecentByJob(null));
+});
+
+// === buildRunsQuery (filtry historii) ===
+
+const STATUS_ORDER = require('./enum-map.js').STATUS_ORDER;
+
+test('buildRunsQuery: brak filtrów → samo okno i lekki payload', () => {
+  assert.equal(buildRunsQuery({ limit: 100 }), 'limit=100&fields=meta');
+});
+
+test('buildRunsQuery: job_id WYPIERA hide_routine (tak filtruje baza)', () => {
+  const q = buildRunsQuery({ jobId: 7, hideRoutine: true, limit: 100 });
+  assert.ok(q.includes('job_id=7'));
+  assert.ok(!q.includes('hide_routine'), 'wysyłanie obu naraz obiecywałoby filtr, którego baza nie zastosuje');
+});
+
+test('buildRunsQuery: status i hide_routine składają się', () => {
+  const q = buildRunsQuery({ status: 'failed', hideRoutine: true, limit: 100 });
+  assert.ok(q.includes('status=failed'));
+  assert.ok(q.includes('hide_routine=1'));
+});
+
+test('buildRunsQuery: statsOnly pomija status, limit i fields', () => {
+  // Endpoint liczników celowo nie filtruje po statusie — inaczej po kliknięciu „Błąd"
+  // wszystkie pozostałe pill-e pokazałyby 0.
+  const q = buildRunsQuery({ jobId: 3, status: 'failed', hideRoutine: true, limit: 100 }, true);
+  assert.equal(q, 'job_id=3');
+});
+
+test('buildRunsQuery: ta sama funkcja karmi listę i poll — identyczne wejście, identyczny URL', () => {
+  const filter = { jobId: 4, status: 'timeout', limit: 100 };
+  assert.equal(buildRunsQuery(filter), buildRunsQuery(filter), 'poll nie może zbudować innego URL-a niż jawne odświeżenie');
+});
+
+// === statusFilterPills ===
+
+test('statusFilterPills: „Wszystkie" zawsze pierwsze, statusy w kolejności z enum-map', () => {
+  const stats = { total: 10, by_status: { failed: 3, success: 7 } };
+  const pills = statusFilterPills(stats, '', STATUS_ORDER);
+  assert.deepEqual(pills.map(p => p.status), ['', 'success', 'failed']);
+  assert.equal(pills[0].count, 10);
+  assert.equal(pills[0].active, true);
+});
+
+test('statusFilterPills: status bez runów nie zaśmieca paska', () => {
+  const stats = { total: 7, by_status: { success: 7 } };
+  const pills = statusFilterPills(stats, '', STATUS_ORDER);
+  assert.deepEqual(pills.map(p => p.status), ['', 'success'], 'killed/running/queued z zerem odpadają');
+});
+
+test('statusFilterPills: AKTYWNY status zostaje widoczny nawet przy zerze', () => {
+  // Inaczej pill znikałby po kliknięciu i UI nie mówiłoby, czym lista jest przefiltrowana.
+  const stats = { total: 0, by_status: {} };
+  const pills = statusFilterPills(stats, 'killed', STATUS_ORDER);
+  assert.deepEqual(pills.map(p => p.status), ['', 'killed']);
+  assert.equal(pills[1].count, 0);
+  assert.equal(pills[1].active, true);
+  assert.equal(pills[0].active, false);
+});
+
+test('statusFilterPills: brak statystyk nie rzuca i daje sam pill „Wszystkie"', () => {
+  assert.deepEqual(statusFilterPills(null, '', STATUS_ORDER), [{ status: '', count: 0, active: true }]);
+  assert.doesNotThrow(() => statusFilterPills({ total: 1, by_status: { success: 1 } }, '', null));
+});
+
+// === runsFilterIsActive (pill „Wyczyść filtry") ===
+
+test('runsFilterIsActive: stan domyślny NIE jest filtrem do wyczyszczenia', () => {
+  // hideRoutine:true to widok, który dostajesz po wejściu — pill powrotny byłby wtedy szumem.
+  assert.equal(runsFilterIsActive({ jobId: '', status: '', hideRoutine: true }), false);
+  assert.equal(runsFilterIsActive({}), false);
+  assert.equal(runsFilterIsActive(null), false);
+});
+
+test('runsFilterIsActive: każdy z trzech filtrów z osobna włącza pill', () => {
+  assert.equal(runsFilterIsActive({ jobId: '7', status: '', hideRoutine: true }), true, 'wybrane zadanie');
+  assert.equal(runsFilterIsActive({ jobId: '', status: 'failed', hideRoutine: true }), true, 'wybrany status');
+  assert.equal(runsFilterIsActive({ jobId: '', status: '', hideRoutine: false }), true, 'odznaczone rutynowe');
 });
 
 // === parseCronForCalendar ===

@@ -351,6 +351,19 @@ body {
 
 /* Sparkline 7 RUN */
 .spark { display: flex; gap: 3px; align-items: flex-end; height: 18px; }
+/* Sparkline jako skrót do historii joba. Klikalny jest cały pasek — pojedynczy
+   słupek (7×16 px) jest poniżej minimalnego celu dotykowego, a szerszy hitbox zachodziłby
+   na sąsiada przy gapie 3 px. Padding powiększa obszar trafienia bez zmiany wyglądu. */
+.spark-link {
+  background: none; border: 0; padding: 4px 2px; margin: -4px -2px;
+  cursor: pointer; border-radius: 4px;
+  /* box-sizing: border-box jest globalny, więc padding zjadłby wysokość paska (18 → 10 px)
+     i słupki wystawałyby poza element. Wysokość podniesiona o padding, margines ujemny
+     oddaje przestrzeń z powrotem, żeby wiersz zadania nie urósł. */
+  height: 26px;
+}
+.spark-link:hover { background: rgba(255,255,255,.06); }
+.spark-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .spark i { width: 7px; border-radius: 2px; background: var(--green); }
 
 /* Switch */
@@ -530,6 +543,17 @@ body {
 .filter-pill.active { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
 .fc { background: rgba(255,255,255,.08); color: inherit; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; }
 .filter-pill.active .fc { background: var(--accent-line); }
+/* Filtry historii: pill-e statusu siedzą pod toolbarem, select zadania w samym toolbarze
+   — przy kilkunastu zadaniach lista nie zmieści się jako pill-e. */
+.select-inline { padding: 7px 10px; font-size: 13px; max-width: 260px; }
+/* Wybrane zadanie wygrywa nad „Ukryj rutynowe" (tak działa filtr w bazie), więc checkbox
+   jest wtedy wyszarzony — bez tego wyglądałby na zepsuty, gdy klik nic nie zmienia. */
+.check.is-disabled { opacity: .4; cursor: not-allowed; }
+.check.is-disabled input { cursor: not-allowed; }
+/* Pill zdejmujący wszystkie filtry — wizualnie stonowany, bo to droga powrotna,
+   nie kolejny wymiar filtrowania. */
+.filter-pill-clear { color: var(--mute); border-style: dashed; }
+.filter-pill-clear:hover { color: var(--text); }
 
 .skille-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .skill-card {

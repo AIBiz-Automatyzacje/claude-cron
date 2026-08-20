@@ -5,6 +5,36 @@ let allMembers = []; // członkowie skrzynki z /api/inbox/members (tokeny ZAWSZE
 let allRuns = []; // historia z /api/runs (może być filtrowana przez hide_routine)
 let calendarRuns = []; // runy do kropek kalendarza — NIGDY filtrowane przez hide_routine (osobne od historii)
 let jobsMap = {}; // id -> job
+
+// Filtry historii (zadanie + status + rutynowe). Trzymane w localStorage, bo filtr, który
+// resetuje się przy każdym odświeżeniu panelu, w praktyce nie istnieje — a Puls chodzi
+// w karcie otwartej całymi dniami i przeżywa restarty przeglądarki.
+const RUNS_FILTER_KEY = 'puls.runsFilter';
+let runsFilter = { jobId: '', status: '', hideRoutine: true };
+let runStats = { total: 0, by_status: {} };
+let runsJobOptionsSig = null;
+
+function loadRunsFilter() {
+  try {
+    const raw = localStorage.getItem(RUNS_FILTER_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    // Czytamy pole po polu: śmieć w storage (ręczna edycja, starszy format) nie może
+    // wysypać startu panelu ani wysłać do API czegoś, czego whitelista nie zna.
+    runsFilter = {
+      jobId: saved && saved.jobId ? String(saved.jobId) : '',
+      status: saved && typeof saved.status === 'string' ? saved.status : '',
+      hideRoutine: saved ? saved.hideRoutine !== false : true,
+    };
+    if (runsFilter.status && !EnumMap.STATUS_ORDER.includes(runsFilter.status)) runsFilter.status = '';
+  } catch { /* brak/uszkodzony storage — zostają domyślne */ }
+}
+
+function saveRunsFilter() {
+  try {
+    localStorage.setItem(RUNS_FILTER_KEY, JSON.stringify(runsFilter));
+  } catch { /* prywatne okno / brak quoty — filtr działa, po prostu się nie zapamięta */ }
+}
 let recentByJob = {}; // job_id -> [recent runs] z /api/runs/recent (sparkline + ostatni run)
 let expandedRuns = new Set(); // track expanded run details
 // Logi runów dociągane leniwie z /api/runs/:id (lista wozi same metadane). id -> pełny run.
@@ -30,6 +60,7 @@ let lastStatus = {}; // ostatni payload /api/status (część podpisu poll histo
 const { mapStatus, mapTrigger } = EnumMap;
 const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = RenderHelpers;
 const { computeWeekOccurrences, startOfWeek } = RenderHelpers;
+const { buildRunsQuery, statusFilterPills, runsFilterIsActive } = RenderHelpers;
 const { overlapsMaintenanceWindow } = RenderHelpers;
 const { validateMemberName, memberRowData } = RenderHelpers;
 const { runningRunsFrom, activeRunRows, activeRunsSignature } = RenderHelpers;
@@ -587,6 +618,7 @@ async function loadJobs() {
     allJobs = await API.get('/api/jobs');
     jobsMap = {};
     allJobs.forEach(j => jobsMap[j.id] = j);
+    syncRunsJobOptions();
     await loadRecentRuns();
     renderJobs();
   } catch (e) {
@@ -605,19 +637,34 @@ async function loadRecentRuns() {
   }
 }
 
+// Query listy runów — JEDNO źródło dla loadRuns i pollRuns (patrz buildRunsQuery).
+function runsQuery(statsOnly = false) {
+  return buildRunsQuery({ ...runsFilter, limit: 100 }, statsOnly);
+}
+
 async function loadRuns() {
   try {
-    const hideRoutine = document.getElementById('runs-hide-routine')?.checked ? '&hide_routine=1' : '';
-    const runs = await API.get(`/api/runs?limit=100${hideRoutine}&fields=meta`);
+    const runs = await API.get(`/api/runs?${runsQuery()}`);
     // Odpowiedź błędu ({error:…} z proxy/serwera) nie jest tablicą — pokaż JEJ treść.
     // Gołe „Błąd ładowania historii" po TypeError z .map() kosztowało godzinę diagnozy.
     if (!Array.isArray(runs)) throw new Error(runs?.error || 'nieoczekiwana odpowiedź API');
     allRuns = runs;
     lastRunsSig = pollSignature(allRuns, lastStatus); // sync guard po jawnym odświeżeniu
     renderRuns(allRuns);
+    loadRunStats();
   } catch (e) {
     toast(`Błąd ładowania historii: ${e.message}`, true);
   }
+}
+
+// Liczniki na pill-ach — z CAŁEJ bazy, nie z okna 100 runów. Degraduje cicho: przy błędzie
+// zostają poprzednie liczby, bo pill bez licznika jest mniej mylący niż pill z zerem.
+async function loadRunStats() {
+  try {
+    const stats = await API.get(`/api/runs/stats?${runsQuery(true)}`);
+    if (stats && typeof stats.total === 'number') runStats = stats;
+  } catch { /* cicho */ }
+  renderStatusFilters();
 }
 
 // Runy do kropek kalendarza — osobne źródło od historii.
@@ -653,10 +700,15 @@ function jobTypePill(j) {
 // Sparkline 7 RUN z recentByJob (chronologicznie, kolor wg statusu).
 function sparklineHtml(jobId) {
   const spark = buildSparkData(recentByJob[jobId]);
+  // Brak runów → myślnik BEZ linku: historia tego joba i tak byłaby pusta.
   if (spark.length === 0) return '<span class="cell-mute">—</span>';
-  return `<div class="spark">${spark.map(s =>
+  const job = jobsMap[jobId];
+  const name = job ? esc(job.name) : `Job #${jobId}`;
+  // Klikalny jest CAŁY sparkline (61×18 px), nie pojedynczy słupek: słupek ma 7×16 px,
+  // czyli poniżej minimum celu dotykowego, a hitbox 24 px zachodziłby na sąsiadów.
+  return `<button type="button" class="spark spark-link" onclick="event.stopPropagation(); openJobHistory(${jobId})" title="Pokaż historię: ${name}" aria-label="Pokaż historię zadania ${name}">${spark.map(s =>
     `<i style="height:${s.ok ? 16 : 11}px;background:${s.ok ? 'var(--green)' : 'var(--red)'}"></i>`
-  ).join('')}</div>`;
+  ).join('')}</button>`;
 }
 
 function renderJobs() {
@@ -810,12 +862,118 @@ function logPlaceholderHtml(r) {
   return `<div class="log-line"><span class="log-ts"></span><span class="log-msg cell-mute">Ładowanie logu…${size}</span></div>`;
 }
 
+// === Filtry historii (zadanie + status) ===
+
+// Opcje selecta zadań. Przebudowa TYLKO przy realnej zmianie listy jobów — poll leci co 3 s,
+// a odtwarzanie <select> pod otwartą listą rozwaliłoby wybór w trakcie klikania.
+function syncRunsJobOptions() {
+  const sel = document.getElementById('runs-job-filter');
+  if (!sel) return;
+  const sig = allJobs.map(j => `${j.id}:${j.name}`).join('|');
+  if (sig === runsJobOptionsSig) return;
+  runsJobOptionsSig = sig;
+
+  const options = ['<option value="">Wszystkie zadania</option>']
+    .concat(allJobs.map(j => `<option value="${j.id}">${esc(j.name)}</option>`));
+  sel.innerHTML = options.join('');
+  // Job mógł zostać usunięty, gdy filtr na niego wskazywał — wtedy wracamy do „wszystkich",
+  // zamiast zostawiać select z pustym wyborem i listę z niczym.
+  if (runsFilter.jobId && !allJobs.some(j => String(j.id) === String(runsFilter.jobId))) {
+    runsFilter.jobId = '';
+    saveRunsFilter();
+    loadRuns();
+  }
+  sel.value = runsFilter.jobId || '';
+}
+
+function renderStatusFilters() {
+  const box = document.getElementById('runs-status-filters');
+  if (!box) return;
+  const pills = statusFilterPills(runStats, runsFilter.status, EnumMap.STATUS_ORDER);
+  const html = pills.map(p => {
+    const label = p.status === '' ? '⊞ Wszystkie' : esc(mapStatus(p.status).label);
+    return `<button class="filter-pill${p.active ? ' active' : ''}" onclick="setRunsStatusFilter('${p.status}')" aria-pressed="${p.active}">${label} <span class="fc">${p.count}</span></button>`;
+  });
+  // Droga powrotna po skoku z Zadań/kalendarza: bez niej trzeba pamiętać, ŻE filtr w ogóle
+  // jest ustawiony, i odklikać go w dwóch różnych miejscach (select + pill).
+  if (runsFilterIsActive(runsFilter)) {
+    html.push('<button class="filter-pill filter-pill-clear" onclick="clearRunsFilter()">⊗ Wyczyść filtry</button>');
+  }
+  box.innerHTML = html.join('');
+}
+
+// Wybrane zadanie wygrywa nad „Ukryj rutynowe" (tak filtruje baza) — checkbox jest wtedy
+// wyszarzony i nieklikalny, żeby nie wyglądał na zepsuty, gdy kliknięcie nic nie zmienia.
+function syncRunsFilterUI() {
+  const sel = document.getElementById('runs-job-filter');
+  if (sel) sel.value = runsFilter.jobId || '';
+  const cb = document.getElementById('runs-hide-routine');
+  const label = document.getElementById('runs-hide-routine-label');
+  if (cb) {
+    cb.checked = runsFilter.hideRoutine;
+    cb.disabled = !!runsFilter.jobId;
+  }
+  if (label) {
+    label.classList.toggle('is-disabled', !!runsFilter.jobId);
+    label.title = runsFilter.jobId ? 'Przy wybranym zadaniu pokazujemy wszystkie jego runy' : '';
+  }
+  renderStatusFilters();
+}
+
+// Wspólne domknięcie każdej zmiany filtra: zapis, UI, przeładowanie listy.
+// `lastRunsSig = null` jest tu KLUCZOWE — bez tego guard podpisu uznałby, że nic się nie
+// zmieniło (te same runy w odpowiedzi) i pominął re-render.
+function applyRunsFilter() {
+  saveRunsFilter();
+  syncRunsFilterUI();
+  lastRunsSig = null;
+  loadRuns();
+}
+
+function setRunsJobFilter(jobId) {
+  runsFilter.jobId = jobId || '';
+  applyRunsFilter();
+}
+
+function setRunsStatusFilter(status) {
+  // Klik w aktywny pill zdejmuje filtr — bez tego jedyną drogą powrotu jest „Wszystkie".
+  runsFilter.status = runsFilter.status === status ? '' : (status || '');
+  applyRunsFilter();
+}
+
+function setRunsHideRoutine(checked) {
+  runsFilter.hideRoutine = !!checked;
+  applyRunsFilter();
+}
+
+function clearRunsFilter() {
+  runsFilter = { jobId: '', status: '', hideRoutine: true };
+  applyRunsFilter();
+}
+
+// Skok „pokaż historię tego zadania" z listy Zadań (klik w sparkline).
+// Status jest CZYSZCZONY świadomie: klikasz, żeby zobaczyć historię joba, a nie jej wycinek
+// zawężony filtrem ustawionym wcześniej w innym kontekście — inaczej trzy wiersze wyglądałyby
+// jak cała historia. Filtr nadpisuje zapamiętany stan, więc powrót idzie przez pill
+// „⊗ Wyczyść filtry", który pojawia się od razu po skoku.
+function openJobHistory(jobId) {
+  runsFilter.jobId = String(jobId);
+  runsFilter.status = '';
+  activateTab('history');
+  applyRunsFilter();
+}
+
 function renderRuns(runs) {
   const body = document.getElementById('runs-body');
   const empty = document.getElementById('runs-empty');
 
   if (runs.length === 0) {
     body.innerHTML = '';
+    // Pusta lista przy aktywnym filtrze to co innego niż pusta baza — bez tego rozróżnienia
+    // „Brak uruchomień." sugeruje, że job nigdy nie chodził, choć to tylko filtr.
+    const filtered = runsFilter.jobId || runsFilter.status;
+    const text = document.getElementById('runs-empty-text');
+    if (text) text.textContent = filtered ? 'Brak runów pasujących do filtra.' : 'Brak uruchomień.';
     empty.style.display = 'block';
     return;
   }
@@ -1774,14 +1932,14 @@ async function poll() {
 // Guard historii: pomiń re-render gdy podpis (length + id + statusy) bez zmian.
 async function pollRuns() {
   try {
-    const hideRoutine = document.getElementById('runs-hide-routine')?.checked ? '&hide_routine=1' : '';
-    const runs = await API.get(`/api/runs?limit=100${hideRoutine}&fields=meta`);
+    const runs = await API.get(`/api/runs?${runsQuery()}`);
     if (!Array.isArray(runs)) return; // błąd API — poll degraduje cicho, zostają stare dane
     const sig = pollSignature(runs, lastStatus);
     if (sig === lastRunsSig) return;
     lastRunsSig = sig;
     allRuns = runs;
     renderRuns(allRuns);
+    loadRunStats(); // lista się zmieniła → liczniki też mogły; poza tym poll ich nie rusza
   } catch { /* silent — historia degraduje cicho */ }
 }
 
@@ -1806,8 +1964,10 @@ async function init() {
   } catch { /* local only */ }
   applyTabVisibility();
 
+  loadRunsFilter(); // musi być przed loadJobs/loadRuns — obie budują UI z tego stanu
   await loadSkills();
   await loadJobs();
+  syncRunsFilterUI();
   loadStatus();
   loadRuns();
   // Sprawdzenie aktualizacji RAZ przy starcie panelu (nie w poll co 3 s) — publiczne API
