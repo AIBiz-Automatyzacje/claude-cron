@@ -153,7 +153,9 @@
   }
 
   // Indeksuje runy po dniu (YYYY-MM-DD wg czasu lokalnego) i job_id.
-  // Wartość: 'ok' jeśli był sukces danego dnia, inaczej 'err' jeśli był błąd.
+  // Wartość: { status: 'ok'|'err', startedAt } — 'ok' jeśli TEGO DNIA był sukces,
+  // inaczej 'err'. `startedAt` to znacznik runu, który wygrał, czyli realna godzina
+  // wykonania (bywa inna niż godzina z crona — job mógł czekać w kolejce).
   // started_at z API jest UTC (z 'Z' albo bez) — normalizujemy jak formatTime w app.js.
   function indexRunsByDay(runs) {
     const list = Array.isArray(runs) ? runs : [];
@@ -166,32 +168,40 @@
       const dayKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       const key = `${dayKey}|${r.job_id}`;
       const ok = OK_STATUSES.has(r.status);
-      if (map[key] === 'ok') continue; // sukces wygrywa
-      map[key] = ok ? 'ok' : 'err';
+      const prev = map[key];
+      // Sukces wygrywa ze statusem, ale przy równym statusie wygrywa PÓŹNIEJSZY run —
+      // inaczej przy kilku runach tego samego dnia godzina zatrzymałaby się na pierwszym.
+      if (prev) {
+        const prevOk = prev.status === 'ok';
+        if (prevOk && !ok) continue;                            // sukces wygrywa nad błędem
+        if (prevOk === ok && d.getTime() <= prev.at) continue;  // ten sam status → późniejszy run
+      }
+      map[key] = { status: ok ? 'ok' : 'err', startedAt: r.started_at, at: d.getTime() };
     }
     return map;
   }
 
   // Stan kropki eventu: 'ok' (sukces), 'err' (błąd), 'idle' (nieuruchomione/przyszłe).
   function eventStatus(runState) {
-    if (runState === 'ok') return 'ok';
-    if (runState === 'err') return 'err';
-    return 'idle'; // brak runu — niezależnie czy przeszłość bez śladu, czy przyszłość
+    if (!runState) return 'idle'; // brak runu — niezależnie czy przeszłość bez śladu, czy przyszłość
+    return runState.status === 'ok' ? 'ok' : 'err';
   }
 
-  // Liczy occurrences dla bieżącego tygodnia.
+  // Liczy occurrences dla kroczącego okna 7 dni (od `rangeStart`).
   // jobs: lista jobów (id, name, enabled, cron_expr). Tylko enabled + niewysokoczęstotliwe.
   // runs: płaska lista runów (job_id, status, started_at) do oznaczenia kropek.
-  // weekStart: Date — poniedziałek 00:00 lokalnie. now: Date — "teraz" (today + przyszłość/przeszłość).
-  // Zwraca tablicę 7 dni: { date, num, dow(0=niedz..6=sob), isToday, events: [{ time, name, status }] }.
-  function computeWeekOccurrences(jobs, runs, weekStart, now) {
+  // rangeStart: Date — 00:00 pierwszego dnia okna. now: Date — "teraz" (today + przyszłość/przeszłość).
+  // Zwraca tablicę 7 dni: { date, num, dow(0=niedz..6=sob), isToday,
+  //   events: [{ time, name, status, jobId, ranAt }] } — `ranAt` to znacznik runu Z TEGO DNIA
+  //   (null, gdy job tego dnia jeszcze nie chodził; dni przyszłe mają null z definicji).
+  function computeWeekOccurrences(jobs, runs, rangeStart, now) {
     const jobList = Array.isArray(jobs) ? jobs : [];
     const runIndex = indexRunsByDay(runs);
     const nowDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
     const days = [];
     for (let i = 0; i < 7; i++) {
-      const date = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i);
+      const date = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), rangeStart.getDate() + i);
       const dow = date.getDay();
       const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
       const events = [];
@@ -208,6 +218,8 @@
           time: formatHourMinute(parsed.hour, parsed.minute),
           name: job.name,
           status: eventStatus(runState),
+          jobId: job.id,
+          ranAt: runState ? runState.startedAt : null,
         });
       }
 
@@ -223,12 +235,11 @@
     return days;
   }
 
-  // Poniedziałek 00:00 (lokalnie) tygodnia zawierającego `ref`.
-  function startOfWeek(ref) {
-    const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
-    const dow = d.getDay(); // 0=niedz..6=sob
-    const diff = dow === 0 ? -6 : 1 - dow; // cofnij do poniedziałku
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff);
+  // Północ (lokalnie) dnia, w którym leży `ref` — początek kroczącego okna 7 dni.
+  // Kalendarz startuje DZIŚ, nie w poniedziałek: w piątek tydzień kalendarzowy pokazywał
+  // już tylko dwa użyteczne dni, a to okno zawsze niesie pełny tydzień do przodu.
+  function startOfDay(ref) {
+    return new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
   }
 
   // Czy job o danym cron_expr pokrywa się z oknem restartu VPS (R5).
@@ -434,7 +445,7 @@
     shortRevision, revisionsMatch, updateBarView, sysbarView, hostOf, REVISION_PREFIX,
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
     buildRunsQuery, statusFilterPills, runsFilterIsActive,
-    parseCronForCalendar, computeWeekOccurrences, startOfWeek, formatHourMinute,
+    parseCronForCalendar, computeWeekOccurrences, startOfDay, formatHourMinute,
     overlapsMaintenanceWindow,
     runningRunsFrom, formatElapsed, activeRunRows, activeRunsSignature,
     isTabAvailable, resolveVisibleTab, DEFAULT_TAB,

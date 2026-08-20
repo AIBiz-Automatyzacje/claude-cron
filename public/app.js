@@ -3,7 +3,6 @@ let allJobs = [];
 let allSkills = [];
 let allMembers = []; // członkowie skrzynki z /api/inbox/members (tokeny ZAWSZE zamaskowane)
 let allRuns = []; // historia z /api/runs (może być filtrowana przez hide_routine)
-let calendarRuns = []; // runy do kropek kalendarza — NIGDY filtrowane przez hide_routine (osobne od historii)
 let jobsMap = {}; // id -> job
 
 // Filtry historii (zadanie + status + rutynowe). Trzymane w localStorage, bo filtr, który
@@ -68,7 +67,7 @@ let lastStatus = {}; // ostatni payload /api/status (część podpisu poll histo
 
 const { mapStatus, mapTrigger } = EnumMap;
 const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = RenderHelpers;
-const { computeWeekOccurrences, startOfWeek } = RenderHelpers;
+const { computeWeekOccurrences, startOfDay } = RenderHelpers;
 const { buildRunsQuery, statusFilterPills, runsFilterIsActive } = RenderHelpers;
 const { overlapsMaintenanceWindow } = RenderHelpers;
 const { validateMemberName, memberRowData } = RenderHelpers;
@@ -684,19 +683,6 @@ async function loadRunStats(gen = runsFilterGen) {
   renderStatusFilters();
 }
 
-// Runy do kropek kalendarza — osobne źródło od historii.
-// NIE doklejamy hide_routine: kalendarz musi widzieć status WSZYSTKICH enabled jobów
-// (w tym rutynowych), niezależnie od filtra historii. Degraduje cicho do pustej listy.
-async function loadCalendarRuns() {
-  try {
-    // fields=meta: kropki potrzebują tylko statusów i dat.
-    const runs = await API.get('/api/runs?limit=100&fields=meta');
-    calendarRuns = Array.isArray(runs) ? runs : [];
-  } catch {
-    calendarRuns = [];
-  }
-}
-
 async function loadSkills() {
   try {
     allSkills = await API.get('/api/skills');
@@ -797,16 +783,23 @@ function calRangeLabel(days) {
   return `${first.getDate()} – ${last.getDate()} ${CAL_MONTHS[last.getMonth()]} ${last.getFullYear()}`;
 }
 
-// Widok kalendarza: occurrences enabled jobów w bieżącym tygodniu (occurrences liczone w JS).
-// Źródło runów do kropek: calendarRuns (osobne od historii — bez filtra hide_routine).
+// Widok kalendarza: occurrences enabled jobów w kroczącym oknie 7 dni zaczynającym się
+// ZAWSZE od dzisiaj (nie od poniedziałku), occurrences liczone w JS.
+// Źródło runów (kropka + godzina wykonania): recentByJob z /api/runs/recent?per_job=7.
+// NIE /api/runs?limit=100 — ta lista jest globalna, a przy ~124 runach na dobę (watchery
+// godzinowe) setka sięga raptem trzech ostatnich godzin: poranny run wypadał z niej przed
+// południem i kalendarz pokazywał „nie chodził" dla joba, który chodził. `recent` jest
+// per job, a kalendarz i tak pomija joby wysokoczęstotliwe, więc 7 runów to tygodnie zapasu.
+// Bonus: to ta sama odpowiedź, którą karmi się sparkline — zero dodatkowego requestu.
 // Wyłączone i wysokoczęstotliwe joby pominięte w helperze.
 function renderKalendarz() {
   const container = document.getElementById('zadania-kalendarz');
   if (!container) return;
 
   const now = new Date();
-  const weekStart = startOfWeek(now);
-  const days = computeWeekOccurrences(allJobs, calendarRuns, weekStart, now);
+  const rangeStart = startOfDay(now);
+  const runs = Object.values(recentByJob).flat();
+  const days = computeWeekOccurrences(allJobs, runs, rangeStart, now);
 
   const nav = `<div class="cal-nav">
     <div class="cal-nav-left">
@@ -824,6 +817,13 @@ function renderKalendarz() {
         <div class="cal-event ${e.status === 'ok' ? 'done' : ''}">
           <div class="cal-event-time">${calDotFor(e.status)}${esc(e.time)}</div>
           <div class="cal-event-name">${esc(e.name)}</div>
+          <div class="cal-event-last">${e.ranAt ? `<button type="button" class="cal-last-link" onclick="openJobHistory(${e.jobId})" title="Faktyczny start runu — kliknij po historię zadania" aria-label="Pokaż historię zadania ${esc(e.name)}">${esc(formatDateTime(e.ranAt))}</button>` : ''}</div>
+          <div class="cal-event-actions">
+            <button class="act-btn run" onclick="triggerJob(${e.jobId})" title="Uruchom" aria-label="Uruchom ${esc(e.name)}">▶</button>
+            <button class="act-btn" onclick="toggleJob(${e.jobId})" title="Wyłącz" aria-label="Wyłącz ${esc(e.name)}">⏻</button>
+            <button class="act-btn" onclick="openEditModal(${e.jobId})" title="Edytuj" aria-label="Edytuj ${esc(e.name)}">✎</button>
+            <button class="act-btn danger" onclick="deleteJob(${e.jobId})" title="Usuń" aria-label="Usuń ${esc(e.name)}">✕</button>
+          </div>
         </div>`).join('')}</div>
     </div>`).join('')}</div>`;
 
@@ -841,7 +841,7 @@ function switchZadaniaView(view) {
   document.getElementById('zadania-kalendarz').classList.toggle('hidden', isLista);
   if (!isLista) {
     renderKalendarz(); // render natychmiast z tym co mamy
-    loadCalendarRuns().then(renderKalendarz); // dociągnij świeże, niefiltrowane runy i przerysuj kropki
+    loadRecentRuns().then(renderKalendarz); // dociągnij świeże runy i przerysuj kropki/godziny
   }
 }
 
@@ -1952,9 +1952,7 @@ async function poll() {
   await loadStatus();
   const activeTab = document.querySelector('.tab.active')?.dataset.tab;
   if (activeTab === 'jobs') {
-    loadJobs();
-    // Kalendarz ma własne, niefiltrowane źródło runów — odśwież kropki na żywo.
-    if (zadaniaView === 'kalendarz') loadCalendarRuns().then(renderKalendarz);
+    loadJobs(); // ciągnie też /api/runs/recent i sam przerysowuje kalendarz, gdy jest aktywny
   }
   if (activeTab === 'history') pollRuns();
   // Zespół zmienia się rzadko, ale odświeżamy dla spójności — guard podpisu pomija

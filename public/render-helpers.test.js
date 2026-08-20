@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {
   pollSignature, jobsSignature, buildSparkData, groupRecentByJob,
   buildRunsQuery, statusFilterPills, runsFilterIsActive,
-  parseCronForCalendar, computeWeekOccurrences, startOfWeek,
+  parseCronForCalendar, computeWeekOccurrences, startOfDay,
   overlapsMaintenanceWindow,
   validateMemberName, memberRowData, MEMBER_NAME_MAX,
   isTabAvailable, resolveVisibleTab,
@@ -239,20 +239,29 @@ test('parseCronForCalendar: nieobsługiwany kształt (dom/mon != *) → null', (
   assert.equal(parseCronForCalendar('0 9 * 6 *'), null);
 });
 
-// === startOfWeek ===
+// === startOfDay (okno kroczące zamiast tygodnia kalendarzowego) ===
 
-test('startOfWeek: środa → cofa do poniedziałku tego tygodnia', () => {
-  const wed = new Date(2026, 5, 17); // 17 czerwca 2026 = środa
-  const mon = startOfWeek(wed);
-  assert.equal(mon.getDay(), 1, 'poniedziałek');
-  assert.equal(mon.getDate(), 15);
+test('startOfDay: zwraca ten sam dzień, nie cofa do poniedziałku (okno kroczące, nie tydzień kalendarzowy)', () => {
+  const wed = new Date(2026, 5, 17); // środa
+  const d = startOfDay(wed);
+  assert.equal(d.getDay(), 3, 'środa zostaje środą');
+  assert.equal(d.getDate(), 17);
 });
 
-test('startOfWeek: niedziela → cofa do poniedziałku tego samego tygodnia (nie następnego)', () => {
-  const sun = new Date(2026, 5, 21); // 21 czerwca 2026 = niedziela
-  const mon = startOfWeek(sun);
-  assert.equal(mon.getDay(), 1);
-  assert.equal(mon.getDate(), 15, 'poniedziałek 15, nie 22');
+test('startOfDay: niedziela zostaje niedzielą', () => {
+  const sun = new Date(2026, 5, 21);
+  const d = startOfDay(sun);
+  assert.equal(d.getDay(), 0);
+  assert.equal(d.getDate(), 21);
+});
+
+test('startOfDay: ucina godzinę/minuty do lokalnej północy', () => {
+  const withTime = new Date(2026, 5, 17, 14, 37, 22);
+  const d = startOfDay(withTime);
+  assert.equal(d.getHours(), 0);
+  assert.equal(d.getMinutes(), 0);
+  assert.equal(d.getSeconds(), 0);
+  assert.equal(d.getDate(), 17);
 });
 
 // === computeWeekOccurrences ===
@@ -333,6 +342,49 @@ test('computeWeekOccurrences: kropka 3-stanowa — sukces=ok, błąd=err, brak r
   // wtorek — brak runów → idle
   const tueA = days[1].events.find((e) => e.name === 'A');
   assert.equal(tueA.status, 'idle');
+});
+
+test('computeWeekOccurrences: ranAt tylko dla dnia z runem — przyszłe dni zostają puste', () => {
+  const jobs = [{ id: 1, name: 'Daily', enabled: true, cron_expr: '0 8 * * *' }];
+  // Run istnieje WYŁĄCZNIE 15 czerwca (dzień 0 okna). Reszta tygodnia to przyszłość.
+  const runs = [{ job_id: 1, status: 'success', started_at: '2026-06-15T07:12:00Z' }];
+  const days = computeWeekOccurrences(jobs, runs, WEEK_START, NOW);
+  assert.equal(days[0].events[0].ranAt, '2026-06-15T07:12:00Z', 'dzień z runem niesie znacznik');
+  for (let i = 1; i < 7; i++) {
+    assert.equal(days[i].events[0].ranAt, null, `dzień +${i} (przyszłość) musi mieć ranAt = null`);
+  }
+});
+
+test('computeWeekOccurrences: ranAt to run Z TEGO DNIA, nie ostatni run joba w ogóle', () => {
+  const jobs = [{ id: 1, name: 'Weekly', enabled: true, cron_expr: '0 8 * * 1' }];
+  // Job odpalił się w poniedziałek 15.06 (dzień 0). Wystąpienie w oknie jest tylko jedno,
+  // ale gdyby ranAt brało "ostatni run joba", dostałby go też każdy inny dzień tygodnia.
+  const runs = [{ job_id: 1, status: 'success', started_at: '2026-06-15T06:00:00Z' }];
+  const days = computeWeekOccurrences(jobs, runs, WEEK_START, NOW);
+  const withEvents = days.filter(d => d.events.length > 0);
+  assert.equal(withEvents.length, 1);
+  assert.equal(withEvents[0].events[0].ranAt, '2026-06-15T06:00:00Z');
+});
+
+test('computeWeekOccurrences: kilka runów tego samego dnia → ranAt z PÓŹNIEJSZEGO', () => {
+  const jobs = [{ id: 1, name: 'Daily', enabled: true, cron_expr: '0 8 * * *' }];
+  const runs = [
+    { job_id: 1, status: 'success', started_at: '2026-06-15T06:00:00Z' },
+    { job_id: 1, status: 'success', started_at: '2026-06-15T09:30:00Z' },
+  ];
+  const days = computeWeekOccurrences(jobs, runs, WEEK_START, NOW);
+  assert.equal(days[0].events[0].ranAt, '2026-06-15T09:30:00Z');
+});
+
+test('computeWeekOccurrences: przy błędzie i sukcesie tego dnia ranAt idzie za sukcesem', () => {
+  const jobs = [{ id: 1, name: 'Daily', enabled: true, cron_expr: '0 8 * * *' }];
+  const runs = [
+    { job_id: 1, status: 'failed', started_at: '2026-06-15T10:00:00Z' },
+    { job_id: 1, status: 'success', started_at: '2026-06-15T06:00:00Z' },
+  ];
+  const days = computeWeekOccurrences(jobs, runs, WEEK_START, NOW);
+  assert.equal(days[0].events[0].status, 'ok', 'kropka: sukces wygrywa');
+  assert.equal(days[0].events[0].ranAt, '2026-06-15T06:00:00Z', 'znacznik z tego samego runu co kropka');
 });
 
 test('computeWeekOccurrences: eventy posortowane po godzinie rosnąco', () => {
