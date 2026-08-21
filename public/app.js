@@ -3,8 +3,46 @@ let allJobs = [];
 let allSkills = [];
 let allMembers = []; // członkowie skrzynki z /api/inbox/members (tokeny ZAWSZE zamaskowane)
 let allRuns = []; // historia z /api/runs (może być filtrowana przez hide_routine)
-let calendarRuns = []; // runy do kropek kalendarza — NIGDY filtrowane przez hide_routine (osobne od historii)
 let jobsMap = {}; // id -> job
+
+// Filtry historii (zadanie + status + rutynowe). Trzymane w localStorage, bo filtr, który
+// resetuje się przy każdym odświeżeniu panelu, w praktyce nie istnieje — a Puls chodzi
+// w karcie otwartej całymi dniami i przeżywa restarty przeglądarki.
+const RUNS_FILTER_KEY = 'puls.runsFilter';
+let runsFilter = { jobId: '', status: '', hideRoutine: true };
+let runStats = { total: 0, by_status: {} };
+let runsJobOptionsSig = null;
+// Numer generacji filtra. Każda zmiana filtra go podbija, a odpowiedź API, która wróciła
+// z innym numerem niż aktualny, jest odrzucana — inaczej wolniejsza odpowiedź dla
+// POPRZEDNIEGO filtra nadpisuje listę i liczniki już przefiltrowane na nowo.
+let runsFilterGen = 0;
+
+function loadRunsFilter() {
+  try {
+    const raw = localStorage.getItem(RUNS_FILTER_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    // Czytamy pole po polu: śmieć w storage (ręczna edycja, starszy format) nie może
+    // wysypać startu panelu ani wysłać do API czegoś, czego whitelista nie zna.
+    runsFilter = {
+      jobId: saved && saved.jobId ? String(saved.jobId) : '',
+      status: saved && typeof saved.status === 'string' ? saved.status : '',
+      hideRoutine: saved ? saved.hideRoutine !== false : true,
+    };
+    if (runsFilter.status && !EnumMap.STATUS_ORDER.includes(runsFilter.status)) runsFilter.status = '';
+  } catch (e) {
+    console.warn(`Nie udało się odczytać zapamiętanych filtrów historii: ${e.message}`);
+  }
+}
+
+function saveRunsFilter() {
+  try {
+    localStorage.setItem(RUNS_FILTER_KEY, JSON.stringify(runsFilter));
+  } catch (e) {
+    // Prywatne okno albo brak quoty — filtr działa, po prostu się nie zapamięta.
+    console.warn(`Nie udało się zapisać filtrów historii: ${e.message}`);
+  }
+}
 let recentByJob = {}; // job_id -> [recent runs] z /api/runs/recent (sparkline + ostatni run)
 let expandedRuns = new Set(); // track expanded run details
 // Logi runów dociągane leniwie z /api/runs/:id (lista wozi same metadane). id -> pełny run.
@@ -29,13 +67,22 @@ let lastStatus = {}; // ostatni payload /api/status (część podpisu poll histo
 
 const { mapStatus, mapTrigger } = EnumMap;
 const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = RenderHelpers;
-const { computeWeekOccurrences, startOfWeek } = RenderHelpers;
+const { computeWeekOccurrences, startOfDay } = RenderHelpers;
+const { buildRunsQuery, statusFilterPills, runsFilterIsActive } = RenderHelpers;
+const { vaultNames, vaultFilterPills, filterJobsByVault, vaultHue } = RenderHelpers;
+const { vaultFilterOf, vaultFilterEquals, VAULT_KIND, VAULT_ALL_FILTER } = RenderHelpers;
 const { overlapsMaintenanceWindow } = RenderHelpers;
 const { validateMemberName, memberRowData } = RenderHelpers;
 const { runningRunsFrom, activeRunRows, activeRunsSignature } = RenderHelpers;
 const { shortRevision, revisionsMatch, updateBarView, sysbarView } = RenderHelpers;
 
 let zadaniaView = 'lista'; // 'lista' | 'kalendarz'
+// Filtr sejfu (vault) — wspólny dla listy i kalendarza. Para { kind, name }: „wszystkie",
+// konkretny sejf albo „bez sejfu" (zadania bez przypisania). Rodzaj i nazwa są w OSOBNYCH
+// polach, bo nazwa sejfu to dowolny tekst od użytkownika i każdy wartownik trzymany w tej
+// samej przestrzeni prędzej czy później z nią koliduje. Pasek filtrów pokazuje się dopiero
+// wtedy, gdy jakiekolwiek zadanie ma sejf ustawiony.
+let currentVaultFilter = VAULT_ALL_FILTER;
 
 // UI pokazuje timeouty w minutach (czytelniej niż ms), baza/executor trzymają ms.
 const MS_PER_MIN = 60000;
@@ -587,6 +634,7 @@ async function loadJobs() {
     allJobs = await API.get('/api/jobs');
     jobsMap = {};
     allJobs.forEach(j => jobsMap[j.id] = j);
+    syncRunsJobOptions();
     await loadRecentRuns();
     renderJobs();
   } catch (e) {
@@ -605,32 +653,42 @@ async function loadRecentRuns() {
   }
 }
 
+// Query listy runów — JEDNO źródło dla loadRuns i pollRuns (patrz buildRunsQuery).
+function runsQuery(statsOnly = false) {
+  return buildRunsQuery({ ...runsFilter, limit: 100 }, statsOnly);
+}
+
 async function loadRuns() {
+  const gen = runsFilterGen;
   try {
-    const hideRoutine = document.getElementById('runs-hide-routine')?.checked ? '&hide_routine=1' : '';
-    const runs = await API.get(`/api/runs?limit=100${hideRoutine}&fields=meta`);
+    const runs = await API.get(`/api/runs?${runsQuery()}`);
+    if (gen !== runsFilterGen) return; // filtr zmienił się w trakcie żądania
     // Odpowiedź błędu ({error:…} z proxy/serwera) nie jest tablicą — pokaż JEJ treść.
     // Gołe „Błąd ładowania historii" po TypeError z .map() kosztowało godzinę diagnozy.
     if (!Array.isArray(runs)) throw new Error(runs?.error || 'nieoczekiwana odpowiedź API');
     allRuns = runs;
     lastRunsSig = pollSignature(allRuns, lastStatus); // sync guard po jawnym odświeżeniu
     renderRuns(allRuns);
+    loadRunStats(gen);
   } catch (e) {
     toast(`Błąd ładowania historii: ${e.message}`, true);
   }
 }
 
-// Runy do kropek kalendarza — osobne źródło od historii.
-// NIE doklejamy hide_routine: kalendarz musi widzieć status WSZYSTKICH enabled jobów
-// (w tym rutynowych), niezależnie od filtra historii. Degraduje cicho do pustej listy.
-async function loadCalendarRuns() {
+// Liczniki na pill-ach — z CAŁEJ bazy, nie z okna 100 runów. Degraduje cicho: przy błędzie
+// zostają poprzednie liczby, bo pill bez licznika jest mniej mylący niż pill z zerem.
+async function loadRunStats(gen = runsFilterGen) {
   try {
-    // fields=meta: kropki potrzebują tylko statusów i dat.
-    const runs = await API.get('/api/runs?limit=100&fields=meta');
-    calendarRuns = Array.isArray(runs) ? runs : [];
-  } catch {
-    calendarRuns = [];
+    const stats = await API.get(`/api/runs/stats?${runsQuery(true)}`);
+    if (gen !== runsFilterGen) return; // liczniki dla filtra, którego już nie ma
+    if (stats && typeof stats.total === 'number') runStats = stats;
+  } catch (e) {
+    // Degradacja jest celowa (pill bez licznika myli mniej niż pill z zerem), ale bez
+    // śladu w konsoli awaria endpointu byłaby nierozpoznawalna — liczniki po prostu
+    // zamarzłyby na starych wartościach.
+    console.warn(`Nie udało się pobrać liczników historii: ${e.message}`);
   }
+  renderStatusFilters();
 }
 
 async function loadSkills() {
@@ -650,13 +708,72 @@ function jobTypePill(j) {
   return '<span class="task-tag tag-type">prompt</span>';
 }
 
+// Plakietka sejfu przy nazwie zadania. Zadania bez przypisania nie dostają nic — pusta
+// etykieta niosłaby zero informacji, a zabierała miejsce w każdym wierszu.
+function vaultPill(j) {
+  const vault = (j && j.vault) || '';
+  if (!vault) return '';
+  return `<span class="task-tag tag-vault" style="--vault-hue:${vaultHue(vault)}">${esc(vault)}</span>`;
+}
+
+// Pasek filtrów sejfu. Buduje się z danych, nie z listy zaszytej w HTML — nazwy sejfów
+// wymyśla właściciel instalacji, a jest ich tyle, ile sam założy.
+function renderVaultFilters() {
+  const box = document.getElementById('vault-filters');
+  if (!box) return;
+  const pills = vaultFilterPills(allJobs, currentVaultFilter);
+
+  // Aktywny filtr mógł zniknąć razem z ostatnim zadaniem, które go używało — bez tego
+  // lista zostałaby pusta, a jedyny pill zdejmujący filtr już by się nie renderował.
+  if (currentVaultFilter.kind !== VAULT_KIND.ALL && !pills.some((p) => p.active)) {
+    currentVaultFilter = VAULT_ALL_FILTER;
+    return renderVaultFilters();
+  }
+
+  box.innerHTML = pills.map((p) => {
+    const hue = p.kind === VAULT_KIND.VAULT ? ` style="--vault-hue:${vaultHue(p.name)}"` : '';
+    const label = p.kind === VAULT_KIND.ALL ? '⊞ Wszystkie' : esc(p.label);
+    // Nazwa sejfu pochodzi od użytkownika, więc NIE może trafić do treści inline handlera:
+    // atrybut zdarzenia jest dekodowany jako HTML przed wykonaniem, więc apostrof wróciłby
+    // i zamknął literał w `onclick="filterVault('…')"` — czyli dowolny kod z nazwy sejfu.
+    // Rodzaj i nazwa idą w OSOBNYCH data-atrybutach (tam escAttr wystarcza), klik obsługuje
+    // delegacja — dzięki temu sejf nazwany „all" nie udaje pilla „Wszystkie".
+    return `<button class="filter-pill vault-filter${p.active ? ' active' : ''}" data-kind="${escAttr(p.kind)}" data-name="${escAttr(p.name)}"${hue} aria-pressed="${p.active}">${label} <span class="fc">${p.count}</span></button>`;
+  }).join('');
+  box.onclick = (ev) => {
+    const btn = ev.target.closest('.vault-filter');
+    if (btn) filterVault(vaultFilterOf(btn.dataset.kind, btn.dataset.name));
+  };
+  box.classList.toggle('hidden', pills.length === 0);
+}
+
+function filterVault(filter) {
+  if (vaultFilterEquals(currentVaultFilter, filter)) return; // ten sam filtr = zero pracy
+  currentVaultFilter = filter;
+  lastJobsSig = null; // wymuś re-render mimo guardu sygnaturowego (filtr nie zmienia danych zadań)
+  renderJobs(); // renderJobs() sam odświeży też kalendarz, jeśli jest aktywny
+}
+
+// Wspólny filtr — używany przez listę (renderJobs) I kalendarz (renderKalendarz),
+// żeby oba widoki Zadań pokazywały ten sam podzbiór.
+function getFilteredJobs() {
+  return filterJobsByVault(allJobs, currentVaultFilter);
+}
+
 // Sparkline 7 RUN z recentByJob (chronologicznie, kolor wg statusu).
 function sparklineHtml(jobId) {
   const spark = buildSparkData(recentByJob[jobId]);
+  // Brak runów → myślnik BEZ linku: historia tego joba i tak byłaby pusta.
   if (spark.length === 0) return '<span class="cell-mute">—</span>';
-  return `<div class="spark">${spark.map(s =>
+  const job = jobsMap[jobId];
+  // escAttr, nie esc: wartość ląduje w atrybutach (title/aria-label), a esc()
+  // przepuszcza cudzysłowy — nazwa z `"` zamknęłaby atrybut i wpuściła handler.
+  const name = job ? escAttr(job.name) : `Job #${jobId}`;
+  // Klikalny jest CAŁY sparkline (61×18 px), nie pojedynczy słupek: słupek ma 7×16 px,
+  // czyli poniżej minimum celu dotykowego, a hitbox 24 px zachodziłby na sąsiadów.
+  return `<button type="button" class="spark spark-link" onclick="event.stopPropagation(); openJobHistory(${jobId})" title="Pokaż historię: ${name}" aria-label="Pokaż historię zadania ${name}">${spark.map(s =>
     `<i style="height:${s.ok ? 16 : 11}px;background:${s.ok ? 'var(--green)' : 'var(--red)'}"></i>`
-  ).join('')}</div>`;
+  ).join('')}</button>`;
 }
 
 function renderJobs() {
@@ -672,35 +789,38 @@ function renderJobs() {
   const body = document.getElementById('jobs-body');
   const empty = document.getElementById('jobs-empty');
 
-  if (allJobs.length === 0) {
+  renderVaultFilters();
+  const filteredJobs = getFilteredJobs();
+
+  if (filteredJobs.length === 0) {
     body.innerHTML = '';
     empty.style.display = 'block';
     return;
   }
 
   empty.style.display = 'none';
-  body.innerHTML = allJobs.map(j => {
+  body.innerHTML = filteredJobs.map(j => {
     const ico = j.job_type === 'script' ? '›_' : '◷';
     const sched = j.cron_expr ? esc(cronToHuman(j.cron_expr)) : '<span class="cell-mute">tylko webhook</span>';
     return `
     <div class="trow grid-zadania ${j.enabled ? '' : 'disabled'}">
       <div class="task-cell">
         <span class="task-ico">${ico}</span>
-        <span><span class="task-name">${esc(j.name)}</span>${jobTypePill(j)}</span>
+        <span><span class="task-name">${esc(j.name)}</span>${vaultPill(j)}${jobTypePill(j)}</span>
       </div>
       <div class="cell-dim">${sched}</div>
       <div>${sparklineHtml(j.id)}</div>
       <div>
         <label class="switch">
-          <input type="checkbox" ${j.enabled ? 'checked' : ''} onchange="toggleJob(${j.id})" aria-label="Przełącz ${esc(j.name)}" />
+          <input type="checkbox" ${j.enabled ? 'checked' : ''} onchange="toggleJob(${j.id})" aria-label="Przełącz ${escAttr(j.name)}" />
           <span class="track"><span class="thumb"></span></span>
         </label>
       </div>
       <div class="actions">
-        <button class="act-btn run" onclick="triggerJob(${j.id})" title="Uruchom" aria-label="Uruchom ${esc(j.name)}">▶</button>
-        <button class="act-btn" onclick="toggleJob(${j.id})" title="${j.enabled ? 'Wyłącz' : 'Włącz'}" aria-label="${j.enabled ? 'Wyłącz' : 'Włącz'} ${esc(j.name)}">⏻</button>
-        <button class="act-btn" onclick="openEditModal(${j.id})" title="Edytuj" aria-label="Edytuj ${esc(j.name)}">✎</button>
-        <button class="act-btn danger" onclick="deleteJob(${j.id})" title="Usuń" aria-label="Usuń ${esc(j.name)}">✕</button>
+        <button class="act-btn run" onclick="triggerJob(${j.id})" title="Uruchom" aria-label="Uruchom ${escAttr(j.name)}">▶</button>
+        <button class="act-btn" onclick="toggleJob(${j.id})" title="${j.enabled ? 'Wyłącz' : 'Włącz'}" aria-label="${j.enabled ? 'Wyłącz' : 'Włącz'} ${escAttr(j.name)}">⏻</button>
+        <button class="act-btn" onclick="openEditModal(${j.id})" title="Edytuj" aria-label="Edytuj ${escAttr(j.name)}">✎</button>
+        <button class="act-btn danger" onclick="deleteJob(${j.id})" title="Usuń" aria-label="Usuń ${escAttr(j.name)}">✕</button>
       </div>
     </div>
   `}).join('');
@@ -726,16 +846,23 @@ function calRangeLabel(days) {
   return `${first.getDate()} – ${last.getDate()} ${CAL_MONTHS[last.getMonth()]} ${last.getFullYear()}`;
 }
 
-// Widok kalendarza: occurrences enabled jobów w bieżącym tygodniu (occurrences liczone w JS).
-// Źródło runów do kropek: calendarRuns (osobne od historii — bez filtra hide_routine).
+// Widok kalendarza: occurrences enabled jobów w kroczącym oknie 7 dni zaczynającym się
+// ZAWSZE od dzisiaj (nie od poniedziałku), occurrences liczone w JS.
+// Źródło runów (kropka + godzina wykonania): recentByJob z /api/runs/recent?per_job=7.
+// NIE /api/runs?limit=100 — ta lista jest globalna, a przy ~124 runach na dobę (watchery
+// godzinowe) setka sięga raptem trzech ostatnich godzin: poranny run wypadał z niej przed
+// południem i kalendarz pokazywał „nie chodził" dla joba, który chodził. `recent` jest
+// per job, a kalendarz i tak pomija joby wysokoczęstotliwe, więc 7 runów to tygodnie zapasu.
+// Bonus: to ta sama odpowiedź, którą karmi się sparkline — zero dodatkowego requestu.
 // Wyłączone i wysokoczęstotliwe joby pominięte w helperze.
 function renderKalendarz() {
   const container = document.getElementById('zadania-kalendarz');
   if (!container) return;
 
   const now = new Date();
-  const weekStart = startOfWeek(now);
-  const days = computeWeekOccurrences(allJobs, calendarRuns, weekStart, now);
+  const rangeStart = startOfDay(now);
+  const runs = Object.values(recentByJob).flat();
+  const days = computeWeekOccurrences(getFilteredJobs(), runs, rangeStart, now);
 
   const nav = `<div class="cal-nav">
     <div class="cal-nav-left">
@@ -753,6 +880,13 @@ function renderKalendarz() {
         <div class="cal-event ${e.status === 'ok' ? 'done' : ''}">
           <div class="cal-event-time">${calDotFor(e.status)}${esc(e.time)}</div>
           <div class="cal-event-name">${esc(e.name)}</div>
+          <div class="cal-event-last">${e.ranAt ? `<button type="button" class="cal-last-link" onclick="openJobHistory(${e.jobId})" title="Faktyczny start runu — kliknij po historię zadania" aria-label="Pokaż historię zadania ${escAttr(e.name)}">${esc(formatDateTime(e.ranAt))}</button>` : ''}</div>
+          <div class="cal-event-actions">
+            <button class="act-btn run" onclick="triggerJob(${e.jobId})" title="Uruchom" aria-label="Uruchom ${escAttr(e.name)}">▶</button>
+            <button class="act-btn" onclick="toggleJob(${e.jobId})" title="Wyłącz" aria-label="Wyłącz ${escAttr(e.name)}">⏻</button>
+            <button class="act-btn" onclick="openEditModal(${e.jobId})" title="Edytuj" aria-label="Edytuj ${escAttr(e.name)}">✎</button>
+            <button class="act-btn danger" onclick="deleteJob(${e.jobId})" title="Usuń" aria-label="Usuń ${escAttr(e.name)}">✕</button>
+          </div>
         </div>`).join('')}</div>
     </div>`).join('')}</div>`;
 
@@ -770,7 +904,7 @@ function switchZadaniaView(view) {
   document.getElementById('zadania-kalendarz').classList.toggle('hidden', isLista);
   if (!isLista) {
     renderKalendarz(); // render natychmiast z tym co mamy
-    loadCalendarRuns().then(renderKalendarz); // dociągnij świeże, niefiltrowane runy i przerysuj kropki
+    loadRecentRuns().then(renderKalendarz); // dociągnij świeże runy i przerysuj kropki/godziny
   }
 }
 
@@ -810,12 +944,133 @@ function logPlaceholderHtml(r) {
   return `<div class="log-line"><span class="log-ts"></span><span class="log-msg cell-mute">Ładowanie logu…${size}</span></div>`;
 }
 
+// === Filtry historii (zadanie + status) ===
+
+// Opcje selecta zadań. Przebudowa TYLKO przy realnej zmianie listy jobów — poll leci co 3 s,
+// a odtwarzanie <select> pod otwartą listą rozwaliłoby wybór w trakcie klikania.
+function syncRunsJobOptions() {
+  const sel = document.getElementById('runs-job-filter');
+  if (!sel) return;
+  const sig = allJobs.map(j => `${j.id}:${j.name}`).join('|');
+  if (sig === runsJobOptionsSig) return;
+  runsJobOptionsSig = sig;
+
+  const options = ['<option value="">Wszystkie zadania</option>']
+    .concat(allJobs.map(j => `<option value="${j.id}">${esc(j.name)}</option>`));
+  sel.innerHTML = options.join('');
+  // Job mógł zostać usunięty, gdy filtr na niego wskazywał — wtedy wracamy do „wszystkich",
+  // zamiast zostawiać select z pustym wyborem i listę z niczym.
+  if (runsFilter.jobId && !allJobs.some(j => String(j.id) === String(runsFilter.jobId))) {
+    // Wspólna ścieżka, nie własna kopia zapisu i przeładowania: applyRunsFilter podbija
+    // generację filtra, więc odpowiedź w locie dla SKASOWANEGO joba nie nadpisze już listy.
+    runsFilter.jobId = '';
+    applyRunsFilter();
+  }
+  sel.value = runsFilter.jobId || '';
+}
+
+function renderStatusFilters() {
+  const box = document.getElementById('runs-status-filters');
+  if (!box) return;
+  const pills = statusFilterPills(runStats, runsFilter.status, EnumMap.STATUS_ORDER);
+  const html = pills.map(p => {
+    const label = p.status === '' ? '⊞ Wszystkie' : esc(mapStatus(p.status).label);
+    // Wartość idzie do data-atrybutu, nie w treść inline handlera. Dziś statusy pochodzą
+    // z zamkniętej listy, ale wklejanie WARTOŚCI w `onclick="fn('…')"` to wzorzec, który
+    // przy pierwszym polu wypełnianym przez człowieka staje się wykonaniem obcego kodu:
+    // atrybut zdarzenia jest najpierw dekodowany jako HTML, więc żadne escapowanie
+    // encjami nie ochroni stringa JS w środku.
+    return `<button class="filter-pill${p.active ? ' active' : ''}" data-status="${escAttr(p.status)}" aria-pressed="${p.active}">${label} <span class="fc">${p.count}</span></button>`;
+  });
+  // Droga powrotna po skoku z Zadań/kalendarza: bez niej trzeba pamiętać, ŻE filtr w ogóle
+  // jest ustawiony, i odklikać go w dwóch różnych miejscach (select + pill).
+  if (runsFilterIsActive(runsFilter)) {
+    html.push('<button class="filter-pill filter-pill-clear" data-clear-filters="1">⊗ Wyczyść filtry</button>');
+  }
+  box.innerHTML = html.join('');
+  // Delegacja: jeden handler na kontenerze, podmieniany przy każdym renderze (przypisanie
+  // przez `onclick` nadpisuje poprzedni, więc listenery się nie kumulują).
+  box.onclick = (ev) => {
+    const btn = ev.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.clearFilters) return clearRunsFilter();
+    if (btn.dataset.status !== undefined) setRunsStatusFilter(btn.dataset.status);
+  };
+}
+
+// Wybrane zadanie wygrywa nad „Ukryj rutynowe" (tak filtruje baza) — checkbox jest wtedy
+// wyszarzony i nieklikalny, żeby nie wyglądał na zepsuty, gdy kliknięcie nic nie zmienia.
+function syncRunsFilterUI() {
+  const sel = document.getElementById('runs-job-filter');
+  if (sel) sel.value = runsFilter.jobId || '';
+  const cb = document.getElementById('runs-hide-routine');
+  const label = document.getElementById('runs-hide-routine-label');
+  if (cb) {
+    cb.checked = runsFilter.hideRoutine;
+    cb.disabled = !!runsFilter.jobId;
+  }
+  if (label) {
+    label.classList.toggle('is-disabled', !!runsFilter.jobId);
+    label.title = runsFilter.jobId ? 'Przy wybranym zadaniu pokazujemy wszystkie jego runy' : '';
+  }
+  renderStatusFilters();
+}
+
+// Wspólne domknięcie każdej zmiany filtra: zapis, UI, przeładowanie listy.
+// `lastRunsSig = null` jest tu KLUCZOWE — bez tego guard podpisu uznałby, że nic się nie
+// zmieniło (te same runy w odpowiedzi) i pominął re-render.
+function applyRunsFilter() {
+  runsFilterGen += 1; // odpowiedzi w locie dla poprzedniego filtra przestają się liczyć
+  saveRunsFilter();
+  syncRunsFilterUI();
+  lastRunsSig = null;
+  loadRuns();
+}
+
+function setRunsJobFilter(jobId) {
+  runsFilter.jobId = jobId || '';
+  applyRunsFilter();
+}
+
+function setRunsStatusFilter(status) {
+  // Klik w aktywny pill zdejmuje filtr — bez tego jedyną drogą powrotu jest „Wszystkie".
+  runsFilter.status = runsFilter.status === status ? '' : (status || '');
+  applyRunsFilter();
+}
+
+function setRunsHideRoutine(checked) {
+  runsFilter.hideRoutine = !!checked;
+  applyRunsFilter();
+}
+
+function clearRunsFilter() {
+  runsFilter = { jobId: '', status: '', hideRoutine: true };
+  applyRunsFilter();
+}
+
+// Skok „pokaż historię tego zadania" z listy Zadań (klik w sparkline).
+// Status jest CZYSZCZONY świadomie: klikasz, żeby zobaczyć historię joba, a nie jej wycinek
+// zawężony filtrem ustawionym wcześniej w innym kontekście — inaczej trzy wiersze wyglądałyby
+// jak cała historia. Filtr nadpisuje zapamiętany stan, więc powrót idzie przez pill
+// „⊗ Wyczyść filtry", który pojawia się od razu po skoku.
+function openJobHistory(jobId) {
+  runsFilter.jobId = String(jobId);
+  runsFilter.status = '';
+  activateTab('history');
+  applyRunsFilter();
+}
+
 function renderRuns(runs) {
   const body = document.getElementById('runs-body');
   const empty = document.getElementById('runs-empty');
 
   if (runs.length === 0) {
     body.innerHTML = '';
+    // Pusta lista przy aktywnym filtrze to co innego niż pusta baza — bez tego rozróżnienia
+    // „Brak uruchomień." sugeruje, że job nigdy nie chodził, choć to tylko filtr.
+    const filtered = runsFilter.jobId || runsFilter.status;
+    const text = document.getElementById('runs-empty-text');
+    if (text) text.textContent = filtered ? 'Brak runów pasujących do filtra.' : 'Brak uruchomień.';
     empty.style.display = 'block';
     return;
   }
@@ -1079,10 +1334,22 @@ async function killRun(runId) {
 }
 
 // === Modal ===
+// Podpowiedzi sejfów w formularzu: istniejące nazwy jako datalist, ale pole zostaje
+// tekstowe — nowy sejf zakłada się wpisaniem nazwy, bez osobnego ekranu zarządzania.
+function syncVaultDatalist() {
+  const list = document.getElementById('vault-options');
+  if (!list) return;
+  list.innerHTML = vaultNames(allJobs).map((v) => `<option value="${escAttr(v)}"></option>`).join('');
+}
+
 function openCreateModal() {
   document.getElementById('modal-title').textContent = 'NOWY JOB';
   document.getElementById('form-id').value = '';
   document.getElementById('form-name').value = '';
+  // Nowe zadanie dziedziczy aktywny filtr: jeśli przeglądasz jeden sejf, prawie zawsze
+  // właśnie do niego dokładasz zadanie.
+  syncVaultDatalist();
+  document.getElementById('form-vault').value = currentVaultFilter.kind === VAULT_KIND.VAULT ? currentVaultFilter.name : '';
   document.getElementById('form-skill').value = '';
   document.getElementById('form-freq').value = 'daily';
   document.getElementById('form-time').value = '09:00';
@@ -1132,6 +1399,8 @@ function openEditModal(id) {
   document.getElementById('modal-title').textContent = 'EDYTUJ JOB';
   document.getElementById('form-id').value = job.id;
   document.getElementById('form-name').value = job.name;
+  syncVaultDatalist();
+  document.getElementById('form-vault').value = job.vault || '';
   document.getElementById('form-args').value = job.arguments || '';
   document.getElementById('form-timeout').value = msToMin(job.timeout_ms);
   document.getElementById('form-idle-timeout').value = msToMin(job.idle_timeout_ms ?? 300000);
@@ -1188,6 +1457,7 @@ async function saveJob(e) {
   const lockGroup = document.getElementById('form-lock-group').value.trim();
   const body = {
     name: document.getElementById('form-name').value,
+    vault: document.getElementById('form-vault').value.trim(),
     job_type: jobType,
     skill_name: jobType === 'script' ? '' : document.getElementById('form-skill').value,
     command: jobType === 'script' ? document.getElementById('form-command').value : null,
@@ -1761,9 +2031,7 @@ async function poll() {
   await loadStatus();
   const activeTab = document.querySelector('.tab.active')?.dataset.tab;
   if (activeTab === 'jobs') {
-    loadJobs();
-    // Kalendarz ma własne, niefiltrowane źródło runów — odśwież kropki na żywo.
-    if (zadaniaView === 'kalendarz') loadCalendarRuns().then(renderKalendarz);
+    loadJobs(); // ciągnie też /api/runs/recent i sam przerysowuje kalendarz, gdy jest aktywny
   }
   if (activeTab === 'history') pollRuns();
   // Zespół zmienia się rzadko, ale odświeżamy dla spójności — guard podpisu pomija
@@ -1773,15 +2041,17 @@ async function poll() {
 
 // Guard historii: pomiń re-render gdy podpis (length + id + statusy) bez zmian.
 async function pollRuns() {
+  const gen = runsFilterGen;
   try {
-    const hideRoutine = document.getElementById('runs-hide-routine')?.checked ? '&hide_routine=1' : '';
-    const runs = await API.get(`/api/runs?limit=100${hideRoutine}&fields=meta`);
+    const runs = await API.get(`/api/runs?${runsQuery()}`);
+    if (gen !== runsFilterGen) return; // filtr zmienił się, zanim poll wrócił
     if (!Array.isArray(runs)) return; // błąd API — poll degraduje cicho, zostają stare dane
     const sig = pollSignature(runs, lastStatus);
     if (sig === lastRunsSig) return;
     lastRunsSig = sig;
     allRuns = runs;
     renderRuns(allRuns);
+    loadRunStats(gen); // lista się zmieniła → liczniki też mogły; poza tym poll ich nie rusza
   } catch { /* silent — historia degraduje cicho */ }
 }
 
@@ -1806,8 +2076,10 @@ async function init() {
   } catch { /* local only */ }
   applyTabVisibility();
 
+  loadRunsFilter(); // musi być przed loadJobs/loadRuns — obie budują UI z tego stanu
   await loadSkills();
   await loadJobs();
+  syncRunsFilterUI();
   loadStatus();
   loadRuns();
   // Sprawdzenie aktualizacji RAZ przy starcie panelu (nie w poll co 3 s) — publiczne API

@@ -6,6 +6,7 @@ const { randomUUID } = require('node:crypto');
 const { PORT, PUBLIC_DIR, VPS_API_URL, WEBHOOK_ENABLED, WEBHOOK_BASE_URL, MAINTENANCE_WINDOW, ASK_ENABLED } = require('./lib/config');
 const ask = require('./lib/ask');
 const db = require('./lib/db');
+const { RUN_STATUSES } = db;
 const computeNextRun = require('./lib/next-run');
 const scheduler = require('./lib/scheduler');
 const executor = require('./lib/executor');
@@ -217,6 +218,48 @@ function proxyToVps(req, res, targetPath) {
   } else {
     proxy.end();
   }
+}
+
+// Parsowanie `job_id` z query stringa. `parseInt('12x', 10)` zwraca 12, a `parseInt('x', 10)`
+// daje NaN, które warstwa filtrów traktuje jak brak filtra — odpowiedź wygląda wtedy na
+// poprawną (200 i pełna lista), choć pytanie było o konkretne zadanie. Zwraca `undefined`
+// (brak parametru), liczbę albo `null` (wartość nie do przyjęcia → 400 po stronie routingu).
+function parseJobIdParam(params) {
+  const raw = params.get('job_id');
+  if (raw === null || raw === '') return undefined;
+  const id = Number(raw);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+// Parsowanie okna listy (`limit`/`offset`). Bez tego `?limit=abc` szło do SQLite jako NaN
+// i kończyło się wyjątkiem (500 „coś się zepsuło") zamiast 400 z nazwą złego parametru.
+// Zwraca `undefined` (brak parametru → domyślna wartość dzwoniącego) albo liczbę, albo
+// `null` (wartość nie do przyjęcia → 400 po stronie routingu). Świadomie BEZ górnego
+// sufitu: poprawne wartości zachowują się dokładnie jak dotąd, także te duże.
+function parseWindowParam(params, name, { min }) {
+  const raw = params.get(name);
+  if (raw === null || raw === '') return undefined;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= min ? value : null;
+}
+
+// Lista runów — JEDNO ciało dla `/api/runs` i wariantu z ukośnikiem na końcu. Dwie kopie
+// rozjechały się już raz: wariant z ukośnikiem nie znał filtra `status`, więc ten sam adres
+// z `/` cicho zwracał listę bez filtrowania.
+function handleRunsList(res, params) {
+  const limit = parseWindowParam(params, 'limit', { min: 1 });
+  if (limit === null) return error(res, 'Invalid limit');
+  const offset = parseWindowParam(params, 'offset', { min: 0 });
+  if (offset === null) return error(res, 'Invalid offset');
+  const job_id = parseJobIdParam(params);
+  if (job_id === null) return error(res, 'Invalid job ID');
+  const hideRoutine = params.get('hide_routine') === '1';
+  const fields = params.get('fields') || undefined;
+  // Status z whitelisty: literówka („succes") ma dać 400, nie cichą pustą listę
+  // udającą „nic takiego nie ma". Brak parametru = bez filtra, jak dotąd.
+  const status = params.get('status') || undefined;
+  if (status && !RUN_STATUSES.includes(status)) return error(res, `Invalid status: ${status}`);
+  return json(res, db.getRuns({ limit: limit ?? 50, offset: offset ?? 0, job_id, status, hideRoutine, fields }));
 }
 
 async function handleApi(req, res) {
@@ -490,12 +533,7 @@ async function handleApi(req, res) {
 
   // GET /api/runs — `fields=meta` (opt-in) zwraca wiersze bez stdout/stderr/webhook_payload.
   if (method === 'GET' && urlPath === '/api/runs') {
-    const limit = parseInt(params.get('limit') || '50', 10);
-    const offset = parseInt(params.get('offset') || '0', 10);
-    const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
-    const hideRoutine = params.get('hide_routine') === '1';
-    const fields = params.get('fields') || undefined;
-    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine, fields }));
+    return handleRunsList(res, params);
   }
 
   // GET /api/runs/current
@@ -547,6 +585,16 @@ async function handleApi(req, res) {
     return json(res, db.getRecentRunsPerJob(perJob));
   }
 
+  // GET /api/runs/stats?job_id=&hide_routine=1 — liczniki runów per status (pill-e filtra
+  // w historii). Ta sama uwaga o kolejności co przy /recent: literał musi stać przed
+  // matcherem /api/runs/:id, bo 'stats' nie jest liczbą.
+  if (method === 'GET' && urlPath === '/api/runs/stats') {
+    const job_id = parseJobIdParam(params);
+    if (job_id === null) return error(res, 'Invalid job ID');
+    const hideRoutine = params.get('hide_routine') === '1';
+    return json(res, db.getRunStatusCounts({ job_id, hideRoutine }));
+  }
+
   // GET /api/runs/:id — pełny wiersz JEDNEGO runu (z logami), do lazy-loadu w historii.
   // MUSI stać PO literałach /api/runs/current i /api/runs/recent (nie są liczbami, więc
   // parseInt dałby tu NaN → 400 zamiast ich odpowiedzi) i PRZED ogólnym matcherem niżej,
@@ -559,14 +607,13 @@ async function handleApi(req, res) {
     return json(res, run);
   }
 
-  // /api/runs with query params
-  if (method === 'GET' && segments[0] === 'api' && segments[1] === 'runs') {
-    const limit = parseInt(params.get('limit') || '50', 10);
-    const offset = parseInt(params.get('offset') || '0', 10);
-    const job_id = params.get('job_id') ? parseInt(params.get('job_id'), 10) : undefined;
-    const hideRoutine = params.get('hide_routine') === '1';
-    const fields = params.get('fields') || undefined;
-    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine, fields }));
+  // /api/runs z ukośnikiem na końcu — to samo ciało co wyżej, żeby filtry działały tak samo.
+  // `segments.length === 2` jest tu istotne: bez tego warunek łapie KAŻDY ogon (np.
+  // /api/runs/123/extra) i odpowiada listą runów zamiast 404, czyli literówka w adresie
+  // wygląda jak poprawne zapytanie. Oba prawidłowe warianty — z ukośnikiem i bez — mają
+  // po odfiltrowaniu pustych segmentów dokładnie dwa.
+  if (method === 'GET' && segments.length === 2 && segments[0] === 'api' && segments[1] === 'runs') {
+    return handleRunsList(res, params);
   }
 
   // === Inbox (Team OS Hub) — administracja członkami ===

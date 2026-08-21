@@ -35,7 +35,11 @@
     return TRIGGER_MAP[trigger] || TRIGGER_FALLBACK;
   }
 
-  const api = { mapStatus, mapTrigger };
+  // Kolejność statusów w UI (pill-e filtra historii). Wyprowadzona z STATUS_MAP, żeby
+  // dołożenie statusu do mapy etykiet nie wymagało pamiętania o drugiej liście obok.
+  const STATUS_ORDER = Object.keys(STATUS_MAP);
+
+  const api = { mapStatus, mapTrigger, STATUS_ORDER };
 
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = api;

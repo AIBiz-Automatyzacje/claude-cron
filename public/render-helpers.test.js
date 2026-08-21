@@ -3,7 +3,10 @@ const assert = require('node:assert/strict');
 
 const {
   pollSignature, jobsSignature, buildSparkData, groupRecentByJob,
-  parseCronForCalendar, computeWeekOccurrences, startOfWeek,
+  buildRunsQuery, statusFilterPills, runsFilterIsActive,
+  vaultNames, vaultFilterPills, filterJobsByVault, vaultHue,
+  vaultFilterOf, vaultFilterEquals, VAULT_KIND, VAULT_ALL_FILTER,
+  parseCronForCalendar, computeWeekOccurrences, startOfDay,
   overlapsMaintenanceWindow,
   validateMemberName, memberRowData, MEMBER_NAME_MAX,
   isTabAvailable, resolveVisibleTab,
@@ -69,6 +72,12 @@ test('jobsSignature: toggle enabled zmienia podpis', () => {
   assert.notEqual(before, after);
 });
 
+test('jobsSignature: zmiana sejfu zmienia podpis (edycja bez innych zmian musi odświeżyć widok)', () => {
+  const before = jobsSignature([{ id: 1, enabled: true, next_run: 'x', vault: 'praca' }]);
+  const after = jobsSignature([{ id: 1, enabled: true, next_run: 'x', vault: 'dom' }]);
+  assert.notEqual(before, after);
+});
+
 test('jobsSignature: brak jobów → pusty string, nie rzuca', () => {
   assert.equal(jobsSignature([]), '');
   assert.doesNotThrow(() => jobsSignature(undefined));
@@ -117,6 +126,189 @@ test('groupRecentByJob: pusta/nullowa lista → pusty obiekt, nie rzuca', () => 
   assert.doesNotThrow(() => groupRecentByJob(null));
 });
 
+// === Sejfy (vault) ===
+
+const VJOBS = [
+  { id: 1, name: 'a', vault: 'praca' },
+  { id: 2, name: 'b', vault: '' },
+  { id: 3, name: 'c', vault: 'dom' },
+  { id: 4, name: 'd', vault: 'praca' },
+];
+
+const ALL = VAULT_ALL_FILTER;
+const NONE = { kind: VAULT_KIND.NONE, name: '' };
+const named = (name) => ({ kind: VAULT_KIND.VAULT, name });
+// Podpis pilla do porównań: rodzaj I nazwa, bo sam rodzaj nie odróżnia dwóch sejfów,
+// a sama nazwa nie odróżnia sejfu od wartownika.
+const sig = (p) => `${p.kind}:${p.name}`;
+
+test('vaultNames: unikalne, alfabetycznie, bez pustych', () => {
+  assert.deepEqual(vaultNames(VJOBS), ['dom', 'praca']);
+});
+
+test('vaultNames: nikt nie używa etykiety → pusta lista (UI ukrywa pasek filtrów)', () => {
+  assert.deepEqual(vaultNames([{ id: 1 }, { id: 2, vault: '' }]), []);
+  assert.doesNotThrow(() => vaultNames(null));
+});
+
+test('vaultFilterPills: „wszystkie" pierwsze, sejfy alfabetycznie, „bez sejfu" na końcu', () => {
+  const pills = vaultFilterPills(VJOBS, ALL);
+  assert.deepEqual(pills.map(sig), ['all:', 'vault:dom', 'vault:praca', 'none:']);
+  assert.deepEqual(pills.map(p => p.count), [4, 1, 2, 1]);
+  assert.equal(pills[0].active, true);
+});
+
+test('vaultFilterPills: bez zadań osieroconych nie ma pill-a „bez sejfu"', () => {
+  const pills = vaultFilterPills([{ id: 1, vault: 'praca' }], ALL);
+  assert.deepEqual(pills.map(sig), ['all:', 'vault:praca']);
+});
+
+test('vaultFilterPills: żaden zadanie nie ma sejfu → ZERO pill-ów, nie samo „wszystkie"', () => {
+  // Funkcja, której nie włączyłeś, nie ma prawa zabierać miejsca w widoku.
+  assert.deepEqual(vaultFilterPills([{ id: 1, vault: '' }], ALL), []);
+});
+
+test('vaultFilterPills: liczniki są z PEŁNEJ listy, nie z aktywnego filtra', () => {
+  const pills = vaultFilterPills(VJOBS, named('dom'));
+  assert.equal(pills.find(p => p.name === 'praca').count, 2, 'inaczej po kliknięciu reszta pokazałaby zera');
+});
+
+test('filterJobsByVault: nazwa, „bez sejfu" i „wszystkie"', () => {
+  assert.deepEqual(filterJobsByVault(VJOBS, named('praca')).map(j => j.id), [1, 4]);
+  assert.deepEqual(filterJobsByVault(VJOBS, NONE).map(j => j.id), [2]);
+  assert.equal(filterJobsByVault(VJOBS, ALL).length, 4);
+  assert.equal(filterJobsByVault(VJOBS, null).length, 4, 'brak filtra = wszystko, nie nic');
+});
+
+// Regresja: nazwa sejfu to dowolny tekst od użytkownika, więc kiedyś trafi się dokładnie
+// taka, jaką kod używa jako wartownika. Póki rodzaj i nazwa leżały w jednym stringu, sejf
+// „all" przejmował znaczenie „pokaż wszystkie" i jego pill pokazywał całą listę.
+const KOLIZYJNE = ['all', 'none', 'vault', '__none__', '__all__'];
+
+test('sejf o nazwie kolidującej z wartownikiem filtruje po SOBIE, nie udaje „wszystkich"', () => {
+  for (const name of KOLIZYJNE) {
+    const jobs = [{ id: 1, vault: name }, { id: 2, vault: 'praca' }, { id: 3, vault: '' }];
+    assert.deepEqual(
+      filterJobsByVault(jobs, named(name)).map(j => j.id), [1],
+      `sejf „${name}" pokazał cudze zadania`,
+    );
+  }
+});
+
+test('pill sejfu o kolizyjnej nazwie jest odrębny od pill-a „wszystkie" i „bez sejfu"', () => {
+  const jobs = [{ id: 1, vault: 'all' }, { id: 2, vault: 'none' }, { id: 3, vault: '' }];
+  const pills = vaultFilterPills(jobs, named('all'));
+  assert.deepEqual(pills.map(sig), ['all:', 'vault:all', 'vault:none', 'none:']);
+  assert.deepEqual(pills.map(p => p.active), [false, true, false, false],
+    'aktywny ma być WYŁĄCZNIE sejf „all", nigdy wartownik o tej samej nazwie');
+  assert.deepEqual(pills.map(p => p.count), [3, 1, 1, 1]);
+});
+
+test('vaultFilterOf: śmieć i nieznany rodzaj → „wszystkie" (nigdy pusta lista zadań)', () => {
+  assert.deepEqual(vaultFilterOf('bzdura', 'praca'), { kind: VAULT_KIND.ALL, name: '' });
+  assert.deepEqual(vaultFilterOf(undefined, undefined), { kind: VAULT_KIND.ALL, name: '' });
+  // Rodzaj „konkretny sejf" bez nazwy jest sprzeczny — też schodzi do „wszystkich".
+  assert.deepEqual(vaultFilterOf(VAULT_KIND.VAULT, ''), { kind: VAULT_KIND.ALL, name: '' });
+  assert.deepEqual(vaultFilterOf(VAULT_KIND.NONE, 'ignorowane'), { kind: VAULT_KIND.NONE, name: '' });
+});
+
+test('vaultFilterEquals: porównuje parę, nie samą nazwę', () => {
+  assert.equal(vaultFilterEquals(named('praca'), named('praca')), true);
+  assert.equal(vaultFilterEquals(named('praca'), named('dom')), false);
+  assert.equal(vaultFilterEquals(ALL, named('all')), false, 'wartownik ≠ sejf o tej nazwie');
+  assert.equal(vaultFilterEquals(NONE, named('none')), false);
+});
+
+test('vaultHue: ta sama nazwa → ten sam odcień, zawsze w zakresie 0-359', () => {
+  assert.equal(vaultHue('praca'), vaultHue('praca'));
+  assert.notEqual(vaultHue('praca'), vaultHue('dom'));
+  for (const n of ['', 'a', 'bardzo-długa-nazwa-sejfu', 'Projekt Alfa 2026']) {
+    const h = vaultHue(n);
+    assert.ok(h >= 0 && h < 360, `${n} → ${h}`);
+  }
+});
+
+// === buildRunsQuery (filtry historii) ===
+
+const STATUS_ORDER = require('./enum-map.js').STATUS_ORDER;
+
+test('buildRunsQuery: brak filtrów → samo okno i lekki payload', () => {
+  assert.equal(buildRunsQuery({ limit: 100 }), 'limit=100&fields=meta');
+});
+
+test('buildRunsQuery: job_id WYPIERA hide_routine (tak filtruje baza)', () => {
+  const q = buildRunsQuery({ jobId: 7, hideRoutine: true, limit: 100 });
+  assert.ok(q.includes('job_id=7'));
+  assert.ok(!q.includes('hide_routine'), 'wysyłanie obu naraz obiecywałoby filtr, którego baza nie zastosuje');
+});
+
+test('buildRunsQuery: status i hide_routine składają się', () => {
+  const q = buildRunsQuery({ status: 'failed', hideRoutine: true, limit: 100 });
+  assert.ok(q.includes('status=failed'));
+  assert.ok(q.includes('hide_routine=1'));
+});
+
+test('buildRunsQuery: statsOnly pomija status, limit i fields', () => {
+  // Endpoint liczników celowo nie filtruje po statusie — inaczej po kliknięciu „Błąd"
+  // wszystkie pozostałe pill-e pokazałyby 0.
+  const q = buildRunsQuery({ jobId: 3, status: 'failed', hideRoutine: true, limit: 100 }, true);
+  assert.equal(q, 'job_id=3');
+});
+
+test('buildRunsQuery: ta sama funkcja karmi listę i poll — identyczne wejście, identyczny URL', () => {
+  // Porównanie buildRunsQuery(x) z buildRunsQuery(x) jest tautologią (funkcja jest czysta) —
+  // przechodzi także wtedy, gdy budowany URL jest błędny. Kontraktem jest KONKRETNY ciąg,
+  // bo to on decyduje, czy poll co 3 s nie nadpisze przefiltrowanej listy pełną.
+  const filter = { jobId: 4, status: 'timeout', limit: 100 };
+  assert.equal(buildRunsQuery(filter), 'job_id=4&status=timeout&limit=100&fields=meta');
+});
+
+// === statusFilterPills ===
+
+test('statusFilterPills: „Wszystkie" zawsze pierwsze, statusy w kolejności z enum-map', () => {
+  const stats = { total: 10, by_status: { failed: 3, success: 7 } };
+  const pills = statusFilterPills(stats, '', STATUS_ORDER);
+  assert.deepEqual(pills.map(p => p.status), ['', 'success', 'failed']);
+  assert.equal(pills[0].count, 10);
+  assert.equal(pills[0].active, true);
+});
+
+test('statusFilterPills: status bez runów nie zaśmieca paska', () => {
+  const stats = { total: 7, by_status: { success: 7 } };
+  const pills = statusFilterPills(stats, '', STATUS_ORDER);
+  assert.deepEqual(pills.map(p => p.status), ['', 'success'], 'killed/running/queued z zerem odpadają');
+});
+
+test('statusFilterPills: AKTYWNY status zostaje widoczny nawet przy zerze', () => {
+  // Inaczej pill znikałby po kliknięciu i UI nie mówiłoby, czym lista jest przefiltrowana.
+  const stats = { total: 0, by_status: {} };
+  const pills = statusFilterPills(stats, 'killed', STATUS_ORDER);
+  assert.deepEqual(pills.map(p => p.status), ['', 'killed']);
+  assert.equal(pills[1].count, 0);
+  assert.equal(pills[1].active, true);
+  assert.equal(pills[0].active, false);
+});
+
+test('statusFilterPills: brak statystyk nie rzuca i daje sam pill „Wszystkie"', () => {
+  assert.deepEqual(statusFilterPills(null, '', STATUS_ORDER), [{ status: '', count: 0, active: true }]);
+  assert.doesNotThrow(() => statusFilterPills({ total: 1, by_status: { success: 1 } }, '', null));
+});
+
+// === runsFilterIsActive (pill „Wyczyść filtry") ===
+
+test('runsFilterIsActive: stan domyślny NIE jest filtrem do wyczyszczenia', () => {
+  // hideRoutine:true to widok, który dostajesz po wejściu — pill powrotny byłby wtedy szumem.
+  assert.equal(runsFilterIsActive({ jobId: '', status: '', hideRoutine: true }), false);
+  assert.equal(runsFilterIsActive({}), false);
+  assert.equal(runsFilterIsActive(null), false);
+});
+
+test('runsFilterIsActive: każdy z trzech filtrów z osobna włącza pill', () => {
+  assert.equal(runsFilterIsActive({ jobId: '7', status: '', hideRoutine: true }), true, 'wybrane zadanie');
+  assert.equal(runsFilterIsActive({ jobId: '', status: 'failed', hideRoutine: true }), true, 'wybrany status');
+  assert.equal(runsFilterIsActive({ jobId: '', status: '', hideRoutine: false }), true, 'odznaczone rutynowe');
+});
+
 // === parseCronForCalendar ===
 
 test('parseCronForCalendar: daily → all days, godzina/minuta', () => {
@@ -160,20 +352,29 @@ test('parseCronForCalendar: nieobsługiwany kształt (dom/mon != *) → null', (
   assert.equal(parseCronForCalendar('0 9 * 6 *'), null);
 });
 
-// === startOfWeek ===
+// === startOfDay (okno kroczące zamiast tygodnia kalendarzowego) ===
 
-test('startOfWeek: środa → cofa do poniedziałku tego tygodnia', () => {
-  const wed = new Date(2026, 5, 17); // 17 czerwca 2026 = środa
-  const mon = startOfWeek(wed);
-  assert.equal(mon.getDay(), 1, 'poniedziałek');
-  assert.equal(mon.getDate(), 15);
+test('startOfDay: zwraca ten sam dzień, nie cofa do poniedziałku (okno kroczące, nie tydzień kalendarzowy)', () => {
+  const wed = new Date(2026, 5, 17); // środa
+  const d = startOfDay(wed);
+  assert.equal(d.getDay(), 3, 'środa zostaje środą');
+  assert.equal(d.getDate(), 17);
 });
 
-test('startOfWeek: niedziela → cofa do poniedziałku tego samego tygodnia (nie następnego)', () => {
-  const sun = new Date(2026, 5, 21); // 21 czerwca 2026 = niedziela
-  const mon = startOfWeek(sun);
-  assert.equal(mon.getDay(), 1);
-  assert.equal(mon.getDate(), 15, 'poniedziałek 15, nie 22');
+test('startOfDay: niedziela zostaje niedzielą', () => {
+  const sun = new Date(2026, 5, 21);
+  const d = startOfDay(sun);
+  assert.equal(d.getDay(), 0);
+  assert.equal(d.getDate(), 21);
+});
+
+test('startOfDay: ucina godzinę/minuty do lokalnej północy', () => {
+  const withTime = new Date(2026, 5, 17, 14, 37, 22);
+  const d = startOfDay(withTime);
+  assert.equal(d.getHours(), 0);
+  assert.equal(d.getMinutes(), 0);
+  assert.equal(d.getSeconds(), 0);
+  assert.equal(d.getDate(), 17);
 });
 
 // === computeWeekOccurrences ===
@@ -254,6 +455,49 @@ test('computeWeekOccurrences: kropka 3-stanowa — sukces=ok, błąd=err, brak r
   // wtorek — brak runów → idle
   const tueA = days[1].events.find((e) => e.name === 'A');
   assert.equal(tueA.status, 'idle');
+});
+
+test('computeWeekOccurrences: ranAt tylko dla dnia z runem — przyszłe dni zostają puste', () => {
+  const jobs = [{ id: 1, name: 'Daily', enabled: true, cron_expr: '0 8 * * *' }];
+  // Run istnieje WYŁĄCZNIE 15 czerwca (dzień 0 okna). Reszta tygodnia to przyszłość.
+  const runs = [{ job_id: 1, status: 'success', started_at: '2026-06-15T07:12:00Z' }];
+  const days = computeWeekOccurrences(jobs, runs, WEEK_START, NOW);
+  assert.equal(days[0].events[0].ranAt, '2026-06-15T07:12:00Z', 'dzień z runem niesie znacznik');
+  for (let i = 1; i < 7; i++) {
+    assert.equal(days[i].events[0].ranAt, null, `dzień +${i} (przyszłość) musi mieć ranAt = null`);
+  }
+});
+
+test('computeWeekOccurrences: ranAt to run Z TEGO DNIA, nie ostatni run joba w ogóle', () => {
+  const jobs = [{ id: 1, name: 'Weekly', enabled: true, cron_expr: '0 8 * * 1' }];
+  // Job odpalił się w poniedziałek 15.06 (dzień 0). Wystąpienie w oknie jest tylko jedno,
+  // ale gdyby ranAt brało "ostatni run joba", dostałby go też każdy inny dzień tygodnia.
+  const runs = [{ job_id: 1, status: 'success', started_at: '2026-06-15T06:00:00Z' }];
+  const days = computeWeekOccurrences(jobs, runs, WEEK_START, NOW);
+  const withEvents = days.filter(d => d.events.length > 0);
+  assert.equal(withEvents.length, 1);
+  assert.equal(withEvents[0].events[0].ranAt, '2026-06-15T06:00:00Z');
+});
+
+test('computeWeekOccurrences: kilka runów tego samego dnia → ranAt z PÓŹNIEJSZEGO', () => {
+  const jobs = [{ id: 1, name: 'Daily', enabled: true, cron_expr: '0 8 * * *' }];
+  const runs = [
+    { job_id: 1, status: 'success', started_at: '2026-06-15T06:00:00Z' },
+    { job_id: 1, status: 'success', started_at: '2026-06-15T09:30:00Z' },
+  ];
+  const days = computeWeekOccurrences(jobs, runs, WEEK_START, NOW);
+  assert.equal(days[0].events[0].ranAt, '2026-06-15T09:30:00Z');
+});
+
+test('computeWeekOccurrences: przy błędzie i sukcesie tego dnia ranAt idzie za sukcesem', () => {
+  const jobs = [{ id: 1, name: 'Daily', enabled: true, cron_expr: '0 8 * * *' }];
+  const runs = [
+    { job_id: 1, status: 'failed', started_at: '2026-06-15T10:00:00Z' },
+    { job_id: 1, status: 'success', started_at: '2026-06-15T06:00:00Z' },
+  ];
+  const days = computeWeekOccurrences(jobs, runs, WEEK_START, NOW);
+  assert.equal(days[0].events[0].status, 'ok', 'kropka: sukces wygrywa');
+  assert.equal(days[0].events[0].ranAt, '2026-06-15T06:00:00Z', 'znacznik z tego samego runu co kropka');
 });
 
 test('computeWeekOccurrences: eventy posortowane po godzinie rosnąco', () => {

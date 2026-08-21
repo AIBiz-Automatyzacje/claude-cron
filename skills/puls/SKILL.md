@@ -31,7 +31,8 @@ Domyślnie działaj na instancji lokalnej — VPS tylko gdy user o to prosi.
 | POST | `/api/jobs/:id/webhook` | Wygeneruj/zregeneruj token webhooka (pole `webhook_token` w jobie) |
 | DELETE | `/api/jobs/:id/webhook` | Usuń token webhooka |
 | POST | `/webhook/:token` | Publiczny trigger joba — body JSON trafia do promptu jako `webhook_payload` |
-| GET | `/api/runs?job_id=&limit=&offset=` | Historia runów (pełne wiersze ze `stdout`/`stderr`); `hide_routine=1` chowa udane runy jobów rutynowych |
+| GET | `/api/runs?job_id=&status=&limit=&offset=` | Historia runów (pełne wiersze ze `stdout`/`stderr`); `hide_routine=1` chowa udane runy jobów rutynowych. `status` z listy `success`/`failed`/`timeout`/`killed`/`running`/`queued` — wartość spoza niej daje **400**, nie pustą listę udającą „nic takiego nie ma". `job_id` wygrywa nad `hide_routine`. Śmieć w `job_id`/`limit`/`offset` też daje **400** |
+| GET | `/api/runs/stats?job_id=&hide_routine=1` | Liczniki runów per status: `{ total, by_status: { success: n, … } }`. Liczone na CAŁEJ bazie, nie na oknie `limit`. Świadomie bez filtra `status` — endpoint odpowiada na pytanie „ile czego JEST", nie „ile jest tego, co właśnie oglądam" |
 | GET | `/api/runs/current` | Pierwszy z biegnących runów (`status: running`) albo `null` — same metadane, bez `stdout`/`stderr`/`webhook_payload`; pełną listę daje `current_runs` z `/api/status`, a pełny wiersz z logami `GET /api/runs/:id` |
 | GET | `/api/runs/:id` | Pełny wiersz JEDNEGO runu (ze `stdout`/`stderr` **oraz** `webhook_payload`) — tędy dociągasz log konkretnego runu |
 | POST | `/api/runs/current/kill` | Zabij bieżący run → `{ "killed": true/false }`. **409** gdy biegnie kilka runów (patrz niżej) |
@@ -65,6 +66,7 @@ Serwer przyjmuje TYLKO te pola (reszta jest ignorowana):
 | `discord_notify` | `0` | 0/1 — powiadomienie Discord po runie |
 | `telegram_notify` | `0` | 0/1 — powiadomienie Telegram po runie |
 | `routine` | `0` | 0/1 — job rutynowy: udane runy chowane w UI i kasowane po 24 h |
+| `vault` | `""` | Opcjonalna etykieta przestrzeni roboczej (sejf/vault/projekt) — filtruje listę zadań i kalendarz w UI. Dowolny tekst; nowa nazwa zakłada nowy sejf. Puste = zadanie bez przypisania |
 | `lock_group` | `null` | **Grupa wyłączności** — dwa joby z tą samą niepustą wartością nigdy nie biegną równolegle (patrz „Równoległość"). Pusty string/`null` = job do żadnej grupy nie należy |
 
 Reguły walidacji (serwer odrzuca z `{ "error": ... }`):

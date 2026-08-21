@@ -33,7 +33,7 @@
   function jobsSignature(jobs) {
     const list = Array.isArray(jobs) ? jobs : [];
     return list
-      .map((j) => `${j.id}:${j.enabled ? 1 : 0}:${j.next_run || ''}:${j.cron_expr || ''}:${j.webhook_token ? 1 : 0}`)
+      .map((j) => `${j.id}:${j.enabled ? 1 : 0}:${j.next_run || ''}:${j.cron_expr || ''}:${j.webhook_token ? 1 : 0}:${j.vault || ''}`)
       .join(',');
   }
 
@@ -58,6 +58,127 @@
       map[r.job_id].push(r);
     }
     return map;
+  }
+
+  // === Historia: filtry (zadanie + status) ===
+
+  // JEDNO miejsce budujące query listy runów. Wcześniej `loadRuns` i `pollRuns` miały
+  // po własnej kopii — przy filtrach oznaczałoby to, że poll co 3 s cicho nadpisuje
+  // przefiltrowaną listę pełną, bo zbudował URL bez filtrów.
+  // `statsOnly` pomija limit/fields: endpoint liczników przyjmuje tylko job_id + hide_routine
+  // (liczy CAŁĄ bazę, a filtr statusu pominięty świadomie — patrz getRunStatusCounts).
+  function buildRunsQuery({ jobId, status, hideRoutine, limit } = {}, statsOnly = false) {
+    const q = [];
+    // job_id wygrywa nad hide_routine już w warstwie bazy — nie wysyłamy obu naraz,
+    // żeby URL odzwierciedlał to, co realnie zadziała (UI wyszarza wtedy checkbox).
+    if (jobId) q.push(`job_id=${encodeURIComponent(jobId)}`);
+    else if (hideRoutine) q.push('hide_routine=1');
+    if (!statsOnly) {
+      if (status) q.push(`status=${encodeURIComponent(status)}`);
+      q.push(`limit=${limit || 100}`);
+      q.push('fields=meta');
+    }
+    return q.join('&');
+  }
+
+  // Czy historia jest w ogóle przefiltrowana (→ pokazać pill „Wyczyść filtry").
+  // `hideRoutine: true` to stan DOMYŚLNY, więc sam z siebie nie jest filtrem do czyszczenia;
+  // liczy się dopiero jego wyłączenie, bo wtedy widok odbiega od tego, co dostajesz po wejściu.
+  function runsFilterIsActive(filter) {
+    const f = filter || {};
+    return Boolean(f.jobId) || Boolean(f.status) || f.hideRoutine === false;
+  }
+
+  // Pill-e filtra statusu: zawsze „Wszystkie", potem statusy w kolejności `order`.
+  // Pokazujemy status, który MA runy — plus aktywny nawet przy zerze, bo pill, który
+  // znika po kliknięciu, zostawia UI bez wskazania, czym właściwie jest przefiltrowane.
+  function statusFilterPills(stats, activeStatus, order) {
+    const counts = (stats && stats.by_status) || {};
+    const total = (stats && stats.total) || 0;
+    const active = activeStatus || '';
+    const pills = [{ status: '', count: total, active: active === '' }];
+    for (const status of Array.isArray(order) ? order : []) {
+      const count = counts[status] || 0;
+      if (count === 0 && active !== status) continue;
+      pills.push({ status, count, active: active === status });
+    }
+    return pills;
+  }
+
+  // === Sejfy (vault) — opcjonalna etykieta przestrzeni roboczej ===
+
+  // Nazwy sejfów obecne w zadaniach, alfabetycznie. Pusta lista = nikt tej etykiety
+  // nie używa, więc UI w ogóle nie pokazuje paska filtrów (funkcja, której nie włączyłeś,
+  // nie ma prawa zabierać miejsca w widoku).
+  function vaultNames(jobs) {
+    const list = Array.isArray(jobs) ? jobs : [];
+    const names = new Set();
+    for (const j of list) {
+      const v = (j && j.vault) || '';
+      if (v) names.add(v);
+    }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }
+
+  // Filtr sejfu to PARA (rodzaj, nazwa), nie goły string. Nazwa sejfu jest dowolnym tekstem
+  // od użytkownika, więc każda wartość-wartownik trzymana w tej samej przestrzeni prędzej czy
+  // później z nią koliduje: sejf nazwany dosłownie „all" wygrywał z wartownikiem „wszystkie"
+  // i jego pill pokazywał całą listę. Rodzaj żyje w osobnym polu, więc kolizja jest
+  // niemożliwa z definicji — a nie tylko nieprawdopodobna po dobraniu dziwnego wartownika.
+  const VAULT_KIND = { ALL: 'all', VAULT: 'vault', NONE: 'none' };
+  const VAULT_ALL_FILTER = Object.freeze({ kind: VAULT_KIND.ALL, name: '' });
+
+  // Normalizacja wejścia (stan z pamięci, atrybuty DOM): cokolwiek nieznanego → „wszystkie".
+  function vaultFilterOf(kind, name = '') {
+    if (kind === VAULT_KIND.NONE) return { kind: VAULT_KIND.NONE, name: '' };
+    if (kind === VAULT_KIND.VAULT && name) return { kind: VAULT_KIND.VAULT, name: String(name) };
+    return { kind: VAULT_KIND.ALL, name: '' };
+  }
+
+  function vaultFilterEquals(a, b) {
+    const x = vaultFilterOf(a && a.kind, a && a.name);
+    const y = vaultFilterOf(b && b.kind, b && b.name);
+    return x.kind === y.kind && x.name === y.name;
+  }
+
+  // Pill-e filtra: „wszystkie", każdy sejf z osobna, a na końcu „bez sejfu" — ten ostatni
+  // TYLKO gdy takie zadania faktycznie są. Liczniki zawsze z pełnej listy, nie z aktywnego
+  // filtra, inaczej po pierwszym kliknięciu reszta pokazałaby zera.
+  function vaultFilterPills(jobs, activeFilter) {
+    const list = Array.isArray(jobs) ? jobs : [];
+    const names = vaultNames(list);
+    if (names.length === 0) return [];
+
+    const active = vaultFilterOf(activeFilter && activeFilter.kind, activeFilter && activeFilter.name);
+    const pill = (kind, name, label, count) => ({
+      kind, name, label, count, active: vaultFilterEquals(active, { kind, name }),
+    });
+
+    const pills = [pill(VAULT_KIND.ALL, '', 'Wszystkie', list.length)];
+    for (const name of names) {
+      pills.push(pill(VAULT_KIND.VAULT, name, name, list.filter((j) => (j.vault || '') === name).length));
+    }
+    const orphans = list.filter((j) => !(j.vault || '')).length;
+    if (orphans > 0) pills.push(pill(VAULT_KIND.NONE, '', 'bez sejfu', orphans));
+    return pills;
+  }
+
+  function filterJobsByVault(jobs, filter) {
+    const list = Array.isArray(jobs) ? jobs : [];
+    const f = vaultFilterOf(filter && filter.kind, filter && filter.name);
+    if (f.kind === VAULT_KIND.ALL) return list;
+    if (f.kind === VAULT_KIND.NONE) return list.filter((j) => !(j.vault || ''));
+    return list.filter((j) => (j.vault || '') === f.name);
+  }
+
+  // Kolor plakietki wyprowadzony z nazwy, nie z listy zaszytej w kodzie: dowolna nazwa
+  // sejfu dostaje własny, ZAWSZE ten sam odcień. Nasycenie i jasność są stałe, więc każdy
+  // wariant zostaje czytelny na ciemnym tle — losowy jest wyłącznie odcień.
+  function vaultHue(name) {
+    const text = String(name || '');
+    let hash = 0;
+    for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) % 360;
+    return hash;
   }
 
   // === Kalendarz: occurrences w JS (R10) ===
@@ -108,7 +229,9 @@
   }
 
   // Indeksuje runy po dniu (YYYY-MM-DD wg czasu lokalnego) i job_id.
-  // Wartość: 'ok' jeśli był sukces danego dnia, inaczej 'err' jeśli był błąd.
+  // Wartość: { status: 'ok'|'err', startedAt } — 'ok' jeśli TEGO DNIA był sukces,
+  // inaczej 'err'. `startedAt` to znacznik runu, który wygrał, czyli realna godzina
+  // wykonania (bywa inna niż godzina z crona — job mógł czekać w kolejce).
   // started_at z API jest UTC (z 'Z' albo bez) — normalizujemy jak formatTime w app.js.
   function indexRunsByDay(runs) {
     const list = Array.isArray(runs) ? runs : [];
@@ -121,32 +244,40 @@
       const dayKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       const key = `${dayKey}|${r.job_id}`;
       const ok = OK_STATUSES.has(r.status);
-      if (map[key] === 'ok') continue; // sukces wygrywa
-      map[key] = ok ? 'ok' : 'err';
+      const prev = map[key];
+      // Sukces wygrywa ze statusem, ale przy równym statusie wygrywa PÓŹNIEJSZY run —
+      // inaczej przy kilku runach tego samego dnia godzina zatrzymałaby się na pierwszym.
+      if (prev) {
+        const prevOk = prev.status === 'ok';
+        if (prevOk && !ok) continue;                            // sukces wygrywa nad błędem
+        if (prevOk === ok && d.getTime() <= prev.at) continue;  // ten sam status → późniejszy run
+      }
+      map[key] = { status: ok ? 'ok' : 'err', startedAt: r.started_at, at: d.getTime() };
     }
     return map;
   }
 
   // Stan kropki eventu: 'ok' (sukces), 'err' (błąd), 'idle' (nieuruchomione/przyszłe).
   function eventStatus(runState) {
-    if (runState === 'ok') return 'ok';
-    if (runState === 'err') return 'err';
-    return 'idle'; // brak runu — niezależnie czy przeszłość bez śladu, czy przyszłość
+    if (!runState) return 'idle'; // brak runu — niezależnie czy przeszłość bez śladu, czy przyszłość
+    return runState.status === 'ok' ? 'ok' : 'err';
   }
 
-  // Liczy occurrences dla bieżącego tygodnia.
+  // Liczy occurrences dla kroczącego okna 7 dni (od `rangeStart`).
   // jobs: lista jobów (id, name, enabled, cron_expr). Tylko enabled + niewysokoczęstotliwe.
   // runs: płaska lista runów (job_id, status, started_at) do oznaczenia kropek.
-  // weekStart: Date — poniedziałek 00:00 lokalnie. now: Date — "teraz" (today + przyszłość/przeszłość).
-  // Zwraca tablicę 7 dni: { date, num, dow(0=niedz..6=sob), isToday, events: [{ time, name, status }] }.
-  function computeWeekOccurrences(jobs, runs, weekStart, now) {
+  // rangeStart: Date — 00:00 pierwszego dnia okna. now: Date — "teraz" (today + przyszłość/przeszłość).
+  // Zwraca tablicę 7 dni: { date, num, dow(0=niedz..6=sob), isToday,
+  //   events: [{ time, name, status, jobId, ranAt }] } — `ranAt` to znacznik runu Z TEGO DNIA
+  //   (null, gdy job tego dnia jeszcze nie chodził; dni przyszłe mają null z definicji).
+  function computeWeekOccurrences(jobs, runs, rangeStart, now) {
     const jobList = Array.isArray(jobs) ? jobs : [];
     const runIndex = indexRunsByDay(runs);
     const nowDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
     const days = [];
     for (let i = 0; i < 7; i++) {
-      const date = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + i);
+      const date = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), rangeStart.getDate() + i);
       const dow = date.getDay();
       const dayKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
       const events = [];
@@ -163,6 +294,8 @@
           time: formatHourMinute(parsed.hour, parsed.minute),
           name: job.name,
           status: eventStatus(runState),
+          jobId: job.id,
+          ranAt: runState ? runState.startedAt : null,
         });
       }
 
@@ -178,12 +311,11 @@
     return days;
   }
 
-  // Poniedziałek 00:00 (lokalnie) tygodnia zawierającego `ref`.
-  function startOfWeek(ref) {
-    const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
-    const dow = d.getDay(); // 0=niedz..6=sob
-    const diff = dow === 0 ? -6 : 1 - dow; // cofnij do poniedziałku
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff);
+  // Północ (lokalnie) dnia, w którym leży `ref` — początek kroczącego okna 7 dni.
+  // Kalendarz startuje DZIŚ, nie w poniedziałek: w piątek tydzień kalendarzowy pokazywał
+  // już tylko dwa użyteczne dni, a to okno zawsze niesie pełny tydzień do przodu.
+  function startOfDay(ref) {
+    return new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
   }
 
   // Czy job o danym cron_expr pokrywa się z oknem restartu VPS (R5).
@@ -388,7 +520,10 @@
   const api = {
     shortRevision, revisionsMatch, updateBarView, sysbarView, hostOf, REVISION_PREFIX,
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
-    parseCronForCalendar, computeWeekOccurrences, startOfWeek, formatHourMinute,
+    buildRunsQuery, statusFilterPills, runsFilterIsActive,
+    vaultNames, vaultFilterPills, filterJobsByVault, vaultHue,
+    vaultFilterOf, vaultFilterEquals, VAULT_KIND, VAULT_ALL_FILTER,
+    parseCronForCalendar, computeWeekOccurrences, startOfDay, formatHourMinute,
     overlapsMaintenanceWindow,
     runningRunsFrom, formatElapsed, activeRunRows, activeRunsSignature,
     isTabAvailable, resolveVisibleTab, DEFAULT_TAB,

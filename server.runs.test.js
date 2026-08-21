@@ -487,3 +487,61 @@ test('GET /api/runs/:id jest prywatny: X-Forwarded-For → 403', async () => {
   const res = await api('/api/runs/1', { headers: { 'X-Forwarded-For': '1.2.3.4' } });
   assert.equal(res.status, 403);
 });
+
+test('job_id ze śmieciem daje 400 na liście i licznikach — nie cichą odpowiedź bez filtra', async () => {
+  // parseInt('12x') = 12, parseInt('x') = NaN. NaN wchodził dalej jako „brak filtra", więc
+  // pytanie o konkretne zadanie dostawało 200 i dane WSZYSTKICH zadań.
+  // /api/runs/recent świadomie pominięty — ten endpoint nie zna parametru job_id (tylko per_job).
+  for (const path of ['/api/runs', '/api/runs/stats']) {
+    for (const bad of ['x', '12x', '0', '-3', '1.5', '99999999999999999999']) {
+      const res = await api(`${path}?job_id=${encodeURIComponent(bad)}`);
+      assert.equal(res.status, 400, `${path}?job_id=${bad} musi być odrzucone`);
+    }
+  }
+
+  // Poprawne id dalej działa, brak parametru też (filtr nieobowiązkowy).
+  assert.equal((await api(`/api/runs/stats?job_id=${jobA.id}`)).status, 200);
+  assert.equal((await api('/api/runs/stats')).status, 200);
+});
+
+test('limit/offset ze śmieciem daje 400, nie wyjątek SQLite (500)', async () => {
+  // parseInt('abc') = NaN, a NaN w LIMIT to ERR_SQLITE_ERROR — użytkownik dostawał 500
+  // „coś się zepsuło" zamiast nazwy złego parametru.
+  for (const bad of ['abc', '-1', '1.5', '']) {
+    if (bad !== '') assert.equal((await api(`/api/runs?limit=${encodeURIComponent(bad)}`)).status, 400, `limit=${bad}`);
+  }
+  assert.equal((await api('/api/runs?offset=-1')).status, 400);
+  assert.equal((await api('/api/runs?offset=abc')).status, 400);
+  // Zero jest poprawnym offsetem, ale nie poprawnym limitem (pusta lista bez powodu).
+  assert.equal((await api('/api/runs?offset=0')).status, 200);
+  assert.equal((await api('/api/runs?limit=0')).status, 400);
+  // Brak parametrów = wartości domyślne, jak dotąd.
+  assert.equal((await api('/api/runs')).status, 200);
+});
+
+test('ogon po /api/runs/:id daje 404, nie listę runów', async () => {
+  // Matcher listy łapał każdy GET /api/runs/*, więc literówka w adresie („/api/runs/12/extra")
+  // dostawała 200 i pełną listę — wyglądała jak poprawne zapytanie o coś zupełnie innego.
+  for (const path of ['/api/runs/1/extra', '/api/runs/abc/def', '/api/runs/1/2/3']) {
+    const res = await api(path);
+    assert.equal(res.status, 404, `${path} musi być 404, nie listą`);
+  }
+  // Oba prawidłowe warianty listy dalej działają — o to w tym warunku chodzi.
+  for (const path of ['/api/runs', '/api/runs/']) {
+    const res = await api(path);
+    assert.equal(res.status, 200, `${path} przestało zwracać listę`);
+    assert.ok(Array.isArray(res.body));
+  }
+});
+
+test('status spoza whitelisty daje 400 — także pod adresem z ukośnikiem na końcu', async () => {
+  // Wariant z ukośnikiem miał własną kopię ciała, która nie znała filtra status: ten sam
+  // adres z „/" cicho zwracał listę BEZ filtrowania, czyli inne dane niż bez ukośnika.
+  for (const path of ['/api/runs', '/api/runs/']) {
+    assert.equal((await api(`${path}?status=succes`)).status, 400, `${path} przepuścił literówkę`);
+    const ok = await api(`${path}?status=success`);
+    assert.equal(ok.status, 200, `${path} odrzucił poprawny status`);
+    assert.ok(Array.isArray(ok.body));
+    assert.ok(ok.body.every((r) => r.status === 'success'), `${path} zwrócił runy o innym statusie`);
+  }
+});
