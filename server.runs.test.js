@@ -503,3 +503,30 @@ test('job_id ze śmieciem daje 400 na liście i licznikach — nie cichą odpowi
   assert.equal((await api(`/api/runs/stats?job_id=${jobA.id}`)).status, 200);
   assert.equal((await api('/api/runs/stats')).status, 200);
 });
+
+test('limit/offset ze śmieciem daje 400, nie wyjątek SQLite (500)', async () => {
+  // parseInt('abc') = NaN, a NaN w LIMIT to ERR_SQLITE_ERROR — użytkownik dostawał 500
+  // „coś się zepsuło" zamiast nazwy złego parametru.
+  for (const bad of ['abc', '-1', '1.5', '']) {
+    if (bad !== '') assert.equal((await api(`/api/runs?limit=${encodeURIComponent(bad)}`)).status, 400, `limit=${bad}`);
+  }
+  assert.equal((await api('/api/runs?offset=-1')).status, 400);
+  assert.equal((await api('/api/runs?offset=abc')).status, 400);
+  // Zero jest poprawnym offsetem, ale nie poprawnym limitem (pusta lista bez powodu).
+  assert.equal((await api('/api/runs?offset=0')).status, 200);
+  assert.equal((await api('/api/runs?limit=0')).status, 400);
+  // Brak parametrów = wartości domyślne, jak dotąd.
+  assert.equal((await api('/api/runs')).status, 200);
+});
+
+test('status spoza whitelisty daje 400 — także pod adresem z ukośnikiem na końcu', async () => {
+  // Wariant z ukośnikiem miał własną kopię ciała, która nie znała filtra status: ten sam
+  // adres z „/" cicho zwracał listę BEZ filtrowania, czyli inne dane niż bez ukośnika.
+  for (const path of ['/api/runs', '/api/runs/']) {
+    assert.equal((await api(`${path}?status=succes`)).status, 400, `${path} przepuścił literówkę`);
+    const ok = await api(`${path}?status=success`);
+    assert.equal(ok.status, 200, `${path} odrzucił poprawny status`);
+    assert.ok(Array.isArray(ok.body));
+    assert.ok(ok.body.every((r) => r.status === 'success'), `${path} zwrócił runy o innym statusie`);
+  }
+});

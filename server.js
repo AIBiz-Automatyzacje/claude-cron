@@ -231,6 +231,37 @@ function parseJobIdParam(params) {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
+// Parsowanie okna listy (`limit`/`offset`). Bez tego `?limit=abc` szło do SQLite jako NaN
+// i kończyło się wyjątkiem (500 „coś się zepsuło") zamiast 400 z nazwą złego parametru.
+// Zwraca `undefined` (brak parametru → domyślna wartość dzwoniącego) albo liczbę, albo
+// `null` (wartość nie do przyjęcia → 400 po stronie routingu). Świadomie BEZ górnego
+// sufitu: poprawne wartości zachowują się dokładnie jak dotąd, także te duże.
+function parseWindowParam(params, name, { min }) {
+  const raw = params.get(name);
+  if (raw === null || raw === '') return undefined;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value >= min ? value : null;
+}
+
+// Lista runów — JEDNO ciało dla `/api/runs` i wariantu z ukośnikiem na końcu. Dwie kopie
+// rozjechały się już raz: wariant z ukośnikiem nie znał filtra `status`, więc ten sam adres
+// z `/` cicho zwracał listę bez filtrowania.
+function handleRunsList(res, params) {
+  const limit = parseWindowParam(params, 'limit', { min: 1 });
+  if (limit === null) return error(res, 'Invalid limit');
+  const offset = parseWindowParam(params, 'offset', { min: 0 });
+  if (offset === null) return error(res, 'Invalid offset');
+  const job_id = parseJobIdParam(params);
+  if (job_id === null) return error(res, 'Invalid job ID');
+  const hideRoutine = params.get('hide_routine') === '1';
+  const fields = params.get('fields') || undefined;
+  // Status z whitelisty: literówka („succes") ma dać 400, nie cichą pustą listę
+  // udającą „nic takiego nie ma". Brak parametru = bez filtra, jak dotąd.
+  const status = params.get('status') || undefined;
+  if (status && !RUN_STATUSES.includes(status)) return error(res, `Invalid status: ${status}`);
+  return json(res, db.getRuns({ limit: limit ?? 50, offset: offset ?? 0, job_id, status, hideRoutine, fields }));
+}
+
 async function handleApi(req, res) {
   const { method, path: urlPath, segments, params } = matchRoute(req.method, req.url);
 
@@ -502,17 +533,7 @@ async function handleApi(req, res) {
 
   // GET /api/runs — `fields=meta` (opt-in) zwraca wiersze bez stdout/stderr/webhook_payload.
   if (method === 'GET' && urlPath === '/api/runs') {
-    const limit = parseInt(params.get('limit') || '50', 10);
-    const offset = parseInt(params.get('offset') || '0', 10);
-    const job_id = parseJobIdParam(params);
-    if (job_id === null) return error(res, 'Invalid job ID');
-    const hideRoutine = params.get('hide_routine') === '1';
-    const fields = params.get('fields') || undefined;
-    // Status z whitelisty: literówka („succes") ma dać 400, nie cichą pustą listę
-    // udającą „nic takiego nie ma". Brak parametru = bez filtra, jak dotąd.
-    const statusParam = params.get('status') || undefined;
-    if (statusParam && !RUN_STATUSES.includes(statusParam)) return error(res, `Invalid status: ${statusParam}`);
-    return json(res, db.getRuns({ limit, offset, job_id, status: statusParam, hideRoutine, fields }));
+    return handleRunsList(res, params);
   }
 
   // GET /api/runs/current
@@ -586,15 +607,9 @@ async function handleApi(req, res) {
     return json(res, run);
   }
 
-  // /api/runs with query params
+  // /api/runs z ukośnikiem na końcu — to samo ciało co wyżej, żeby filtry działały tak samo.
   if (method === 'GET' && segments[0] === 'api' && segments[1] === 'runs') {
-    const limit = parseInt(params.get('limit') || '50', 10);
-    const offset = parseInt(params.get('offset') || '0', 10);
-    const job_id = parseJobIdParam(params);
-    if (job_id === null) return error(res, 'Invalid job ID');
-    const hideRoutine = params.get('hide_routine') === '1';
-    const fields = params.get('fields') || undefined;
-    return json(res, db.getRuns({ limit, offset, job_id, hideRoutine, fields }));
+    return handleRunsList(res, params);
   }
 
   // === Inbox (Team OS Hub) — administracja członkami ===

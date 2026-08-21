@@ -961,9 +961,10 @@ function syncRunsJobOptions() {
   // Job mógł zostać usunięty, gdy filtr na niego wskazywał — wtedy wracamy do „wszystkich",
   // zamiast zostawiać select z pustym wyborem i listę z niczym.
   if (runsFilter.jobId && !allJobs.some(j => String(j.id) === String(runsFilter.jobId))) {
+    // Wspólna ścieżka, nie własna kopia zapisu i przeładowania: applyRunsFilter podbija
+    // generację filtra, więc odpowiedź w locie dla SKASOWANEGO joba nie nadpisze już listy.
     runsFilter.jobId = '';
-    saveRunsFilter();
-    loadRuns();
+    applyRunsFilter();
   }
   sel.value = runsFilter.jobId || '';
 }

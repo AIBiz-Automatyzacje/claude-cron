@@ -256,8 +256,11 @@ test('buildRunsQuery: statsOnly pomija status, limit i fields', () => {
 });
 
 test('buildRunsQuery: ta sama funkcja karmi listę i poll — identyczne wejście, identyczny URL', () => {
+  // Porównanie buildRunsQuery(x) z buildRunsQuery(x) jest tautologią (funkcja jest czysta) —
+  // przechodzi także wtedy, gdy budowany URL jest błędny. Kontraktem jest KONKRETNY ciąg,
+  // bo to on decyduje, czy poll co 3 s nie nadpisze przefiltrowanej listy pełną.
   const filter = { jobId: 4, status: 'timeout', limit: 100 };
-  assert.equal(buildRunsQuery(filter), buildRunsQuery(filter), 'poll nie może zbudować innego URL-a niż jawne odświeżenie');
+  assert.equal(buildRunsQuery(filter), 'job_id=4&status=timeout&limit=100&fields=meta');
 });
 
 // === statusFilterPills ===
