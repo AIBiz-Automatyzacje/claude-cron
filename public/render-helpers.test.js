@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const {
   pollSignature, jobsSignature, buildSparkData, groupRecentByJob,
   buildRunsQuery, statusFilterPills, runsFilterIsActive,
-  vaultNames, vaultFilterPills, filterJobsByVault, vaultHue, VAULT_ALL, VAULT_NONE,
+  vaultNames, vaultFilterPills, filterJobsByVault, vaultHue,
+  vaultFilterOf, vaultFilterEquals, VAULT_KIND, VAULT_ALL_FILTER,
   parseCronForCalendar, computeWeekOccurrences, startOfDay,
   overlapsMaintenanceWindow,
   validateMemberName, memberRowData, MEMBER_NAME_MAX,
@@ -134,6 +135,13 @@ const VJOBS = [
   { id: 4, name: 'd', vault: 'praca' },
 ];
 
+const ALL = VAULT_ALL_FILTER;
+const NONE = { kind: VAULT_KIND.NONE, name: '' };
+const named = (name) => ({ kind: VAULT_KIND.VAULT, name });
+// Podpis pilla do porównań: rodzaj I nazwa, bo sam rodzaj nie odróżnia dwóch sejfów,
+// a sama nazwa nie odróżnia sejfu od wartownika.
+const sig = (p) => `${p.kind}:${p.name}`;
+
 test('vaultNames: unikalne, alfabetycznie, bez pustych', () => {
   assert.deepEqual(vaultNames(VJOBS), ['dom', 'praca']);
 });
@@ -144,32 +152,71 @@ test('vaultNames: nikt nie używa etykiety → pusta lista (UI ukrywa pasek filt
 });
 
 test('vaultFilterPills: „wszystkie" pierwsze, sejfy alfabetycznie, „bez sejfu" na końcu', () => {
-  const pills = vaultFilterPills(VJOBS, VAULT_ALL);
-  assert.deepEqual(pills.map(p => p.value), [VAULT_ALL, 'dom', 'praca', VAULT_NONE]);
+  const pills = vaultFilterPills(VJOBS, ALL);
+  assert.deepEqual(pills.map(sig), ['all:', 'vault:dom', 'vault:praca', 'none:']);
   assert.deepEqual(pills.map(p => p.count), [4, 1, 2, 1]);
   assert.equal(pills[0].active, true);
 });
 
 test('vaultFilterPills: bez zadań osieroconych nie ma pill-a „bez sejfu"', () => {
-  const pills = vaultFilterPills([{ id: 1, vault: 'praca' }], VAULT_ALL);
-  assert.deepEqual(pills.map(p => p.value), [VAULT_ALL, 'praca']);
+  const pills = vaultFilterPills([{ id: 1, vault: 'praca' }], ALL);
+  assert.deepEqual(pills.map(sig), ['all:', 'vault:praca']);
 });
 
 test('vaultFilterPills: żaden zadanie nie ma sejfu → ZERO pill-ów, nie samo „wszystkie"', () => {
   // Funkcja, której nie włączyłeś, nie ma prawa zabierać miejsca w widoku.
-  assert.deepEqual(vaultFilterPills([{ id: 1, vault: '' }], VAULT_ALL), []);
+  assert.deepEqual(vaultFilterPills([{ id: 1, vault: '' }], ALL), []);
 });
 
 test('vaultFilterPills: liczniki są z PEŁNEJ listy, nie z aktywnego filtra', () => {
-  const pills = vaultFilterPills(VJOBS, 'dom');
-  assert.equal(pills.find(p => p.value === 'praca').count, 2, 'inaczej po kliknięciu reszta pokazałaby zera');
+  const pills = vaultFilterPills(VJOBS, named('dom'));
+  assert.equal(pills.find(p => p.name === 'praca').count, 2, 'inaczej po kliknięciu reszta pokazałaby zera');
 });
 
 test('filterJobsByVault: nazwa, „bez sejfu" i „wszystkie"', () => {
-  assert.deepEqual(filterJobsByVault(VJOBS, 'praca').map(j => j.id), [1, 4]);
-  assert.deepEqual(filterJobsByVault(VJOBS, VAULT_NONE).map(j => j.id), [2]);
-  assert.equal(filterJobsByVault(VJOBS, VAULT_ALL).length, 4);
-  assert.equal(filterJobsByVault(VJOBS, '').length, 4, 'brak filtra = wszystko, nie nic');
+  assert.deepEqual(filterJobsByVault(VJOBS, named('praca')).map(j => j.id), [1, 4]);
+  assert.deepEqual(filterJobsByVault(VJOBS, NONE).map(j => j.id), [2]);
+  assert.equal(filterJobsByVault(VJOBS, ALL).length, 4);
+  assert.equal(filterJobsByVault(VJOBS, null).length, 4, 'brak filtra = wszystko, nie nic');
+});
+
+// Regresja: nazwa sejfu to dowolny tekst od użytkownika, więc kiedyś trafi się dokładnie
+// taka, jaką kod używa jako wartownika. Póki rodzaj i nazwa leżały w jednym stringu, sejf
+// „all" przejmował znaczenie „pokaż wszystkie" i jego pill pokazywał całą listę.
+const KOLIZYJNE = ['all', 'none', 'vault', '__none__', '__all__'];
+
+test('sejf o nazwie kolidującej z wartownikiem filtruje po SOBIE, nie udaje „wszystkich"', () => {
+  for (const name of KOLIZYJNE) {
+    const jobs = [{ id: 1, vault: name }, { id: 2, vault: 'praca' }, { id: 3, vault: '' }];
+    assert.deepEqual(
+      filterJobsByVault(jobs, named(name)).map(j => j.id), [1],
+      `sejf „${name}" pokazał cudze zadania`,
+    );
+  }
+});
+
+test('pill sejfu o kolizyjnej nazwie jest odrębny od pill-a „wszystkie" i „bez sejfu"', () => {
+  const jobs = [{ id: 1, vault: 'all' }, { id: 2, vault: 'none' }, { id: 3, vault: '' }];
+  const pills = vaultFilterPills(jobs, named('all'));
+  assert.deepEqual(pills.map(sig), ['all:', 'vault:all', 'vault:none', 'none:']);
+  assert.deepEqual(pills.map(p => p.active), [false, true, false, false],
+    'aktywny ma być WYŁĄCZNIE sejf „all", nigdy wartownik o tej samej nazwie');
+  assert.deepEqual(pills.map(p => p.count), [3, 1, 1, 1]);
+});
+
+test('vaultFilterOf: śmieć i nieznany rodzaj → „wszystkie" (nigdy pusta lista zadań)', () => {
+  assert.deepEqual(vaultFilterOf('bzdura', 'praca'), { kind: VAULT_KIND.ALL, name: '' });
+  assert.deepEqual(vaultFilterOf(undefined, undefined), { kind: VAULT_KIND.ALL, name: '' });
+  // Rodzaj „konkretny sejf" bez nazwy jest sprzeczny — też schodzi do „wszystkich".
+  assert.deepEqual(vaultFilterOf(VAULT_KIND.VAULT, ''), { kind: VAULT_KIND.ALL, name: '' });
+  assert.deepEqual(vaultFilterOf(VAULT_KIND.NONE, 'ignorowane'), { kind: VAULT_KIND.NONE, name: '' });
+});
+
+test('vaultFilterEquals: porównuje parę, nie samą nazwę', () => {
+  assert.equal(vaultFilterEquals(named('praca'), named('praca')), true);
+  assert.equal(vaultFilterEquals(named('praca'), named('dom')), false);
+  assert.equal(vaultFilterEquals(ALL, named('all')), false, 'wartownik ≠ sejf o tej nazwie');
+  assert.equal(vaultFilterEquals(NONE, named('none')), false);
 });
 
 test('vaultHue: ta sama nazwa → ten sam odcień, zawsze w zakresie 0-359', () => {

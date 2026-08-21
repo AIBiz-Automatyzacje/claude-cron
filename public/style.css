@@ -552,7 +552,9 @@ body {
 .log-line.trace .log-msg { color: var(--mute); }
 
 /* ===== Skille ===== */
-.filters { display: flex; gap: 10px; margin-bottom: 18px; }
+/* wrap: liczba pill-i rośnie z liczbą sejfów założonych przez użytkownika — bez zawijania
+   kolejne wyjeżdżają poza szerokość panelu zamiast przejść do drugiego rzędu. */
+.filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
 .filter-pill {
   display: inline-flex; align-items: center; gap: 8px;
   background: var(--card); border: 1px solid var(--hairline-2);

@@ -1,4 +1,6 @@
-node_modules/
+# bez ukośnika: reguła z ukośnikiem łapie wyłącznie KATALOG, więc dowiązanie
+# symboliczne o tej nazwie (wygodne przy pracy w worktree) przechodziło do commita.
+node_modules
 .node/
 data/
 *.log

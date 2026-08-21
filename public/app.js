@@ -69,17 +69,20 @@ const { mapStatus, mapTrigger } = EnumMap;
 const { pollSignature, jobsSignature, buildSparkData, groupRecentByJob } = RenderHelpers;
 const { computeWeekOccurrences, startOfDay } = RenderHelpers;
 const { buildRunsQuery, statusFilterPills, runsFilterIsActive } = RenderHelpers;
-const { vaultNames, vaultFilterPills, filterJobsByVault, vaultHue, VAULT_ALL, VAULT_NONE } = RenderHelpers;
+const { vaultNames, vaultFilterPills, filterJobsByVault, vaultHue } = RenderHelpers;
+const { vaultFilterOf, vaultFilterEquals, VAULT_KIND, VAULT_ALL_FILTER } = RenderHelpers;
 const { overlapsMaintenanceWindow } = RenderHelpers;
 const { validateMemberName, memberRowData } = RenderHelpers;
 const { runningRunsFrom, activeRunRows, activeRunsSignature } = RenderHelpers;
 const { shortRevision, revisionsMatch, updateBarView, sysbarView } = RenderHelpers;
 
 let zadaniaView = 'lista'; // 'lista' | 'kalendarz'
-// Filtr sejfu (vault) — wspólny dla listy i kalendarza. VAULT_ALL, nazwa sejfu albo
-// VAULT_NONE (zadania bez przypisania). Pasek filtrów pokazuje się dopiero wtedy, gdy
-// jakiekolwiek zadanie ma sejf ustawiony.
-let currentVaultFilter = VAULT_ALL;
+// Filtr sejfu (vault) — wspólny dla listy i kalendarza. Para { kind, name }: „wszystkie",
+// konkretny sejf albo „bez sejfu" (zadania bez przypisania). Rodzaj i nazwa są w OSOBNYCH
+// polach, bo nazwa sejfu to dowolny tekst od użytkownika i każdy wartownik trzymany w tej
+// samej przestrzeni prędzej czy później z nią koliduje. Pasek filtrów pokazuje się dopiero
+// wtedy, gdy jakiekolwiek zadanie ma sejf ustawiony.
+let currentVaultFilter = VAULT_ALL_FILTER;
 
 // UI pokazuje timeouty w minutach (czytelniej niż ms), baza/executor trzymają ms.
 const MS_PER_MIN = 60000;
@@ -722,28 +725,30 @@ function renderVaultFilters() {
 
   // Aktywny filtr mógł zniknąć razem z ostatnim zadaniem, które go używało — bez tego
   // lista zostałaby pusta, a jedyny pill zdejmujący filtr już by się nie renderował.
-  if (currentVaultFilter !== VAULT_ALL && !pills.some((p) => p.value === currentVaultFilter)) {
-    currentVaultFilter = VAULT_ALL;
+  if (currentVaultFilter.kind !== VAULT_KIND.ALL && !pills.some((p) => p.active)) {
+    currentVaultFilter = VAULT_ALL_FILTER;
     return renderVaultFilters();
   }
 
   box.innerHTML = pills.map((p) => {
-    const hue = p.value === VAULT_ALL || p.value === VAULT_NONE ? '' : ` style="--vault-hue:${vaultHue(p.value)}"`;
-    const label = p.value === VAULT_ALL ? '⊞ Wszystkie' : esc(p.label);
+    const hue = p.kind === VAULT_KIND.VAULT ? ` style="--vault-hue:${vaultHue(p.name)}"` : '';
+    const label = p.kind === VAULT_KIND.ALL ? '⊞ Wszystkie' : esc(p.label);
     // Nazwa sejfu pochodzi od użytkownika, więc NIE może trafić do treści inline handlera:
     // atrybut zdarzenia jest dekodowany jako HTML przed wykonaniem, więc apostrof wróciłby
     // i zamknął literał w `onclick="filterVault('…')"` — czyli dowolny kod z nazwy sejfu.
-    // Wartość idzie do `data-filter` (tam escAttr wystarcza), klik obsługuje delegacja.
-    return `<button class="filter-pill vault-filter${p.active ? ' active' : ''}" data-filter="${escAttr(p.value)}"${hue} aria-pressed="${p.active}">${label} <span class="fc">${p.count}</span></button>`;
+    // Rodzaj i nazwa idą w OSOBNYCH data-atrybutach (tam escAttr wystarcza), klik obsługuje
+    // delegacja — dzięki temu sejf nazwany „all" nie udaje pilla „Wszystkie".
+    return `<button class="filter-pill vault-filter${p.active ? ' active' : ''}" data-kind="${escAttr(p.kind)}" data-name="${escAttr(p.name)}"${hue} aria-pressed="${p.active}">${label} <span class="fc">${p.count}</span></button>`;
   }).join('');
   box.onclick = (ev) => {
     const btn = ev.target.closest('.vault-filter');
-    if (btn) filterVault(btn.dataset.filter);
+    if (btn) filterVault(vaultFilterOf(btn.dataset.kind, btn.dataset.name));
   };
   box.classList.toggle('hidden', pills.length === 0);
 }
 
 function filterVault(filter) {
+  if (vaultFilterEquals(currentVaultFilter, filter)) return; // ten sam filtr = zero pracy
   currentVaultFilter = filter;
   lastJobsSig = null; // wymuś re-render mimo guardu sygnaturowego (filtr nie zmienia danych zadań)
   renderJobs(); // renderJobs() sam odświeży też kalendarz, jeśli jest aktywny
@@ -1343,7 +1348,7 @@ function openCreateModal() {
   // Nowe zadanie dziedziczy aktywny filtr: jeśli przeglądasz jeden sejf, prawie zawsze
   // właśnie do niego dokładasz zadanie.
   syncVaultDatalist();
-  document.getElementById('form-vault').value = [VAULT_ALL, VAULT_NONE].includes(currentVaultFilter) ? '' : currentVaultFilter;
+  document.getElementById('form-vault').value = currentVaultFilter.kind === VAULT_KIND.VAULT ? currentVaultFilter.name : '';
   document.getElementById('form-skill').value = '';
   document.getElementById('form-freq').value = 'daily';
   document.getElementById('form-time').value = '09:00';

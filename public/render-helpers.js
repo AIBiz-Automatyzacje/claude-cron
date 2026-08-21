@@ -120,33 +120,55 @@
     return [...names].sort((a, b) => a.localeCompare(b));
   }
 
+  // Filtr sejfu to PARA (rodzaj, nazwa), nie goły string. Nazwa sejfu jest dowolnym tekstem
+  // od użytkownika, więc każda wartość-wartownik trzymana w tej samej przestrzeni prędzej czy
+  // później z nią koliduje: sejf nazwany dosłownie „all" wygrywał z wartownikiem „wszystkie"
+  // i jego pill pokazywał całą listę. Rodzaj żyje w osobnym polu, więc kolizja jest
+  // niemożliwa z definicji — a nie tylko nieprawdopodobna po dobraniu dziwnego wartownika.
+  const VAULT_KIND = { ALL: 'all', VAULT: 'vault', NONE: 'none' };
+  const VAULT_ALL_FILTER = Object.freeze({ kind: VAULT_KIND.ALL, name: '' });
+
+  // Normalizacja wejścia (stan z pamięci, atrybuty DOM): cokolwiek nieznanego → „wszystkie".
+  function vaultFilterOf(kind, name = '') {
+    if (kind === VAULT_KIND.NONE) return { kind: VAULT_KIND.NONE, name: '' };
+    if (kind === VAULT_KIND.VAULT && name) return { kind: VAULT_KIND.VAULT, name: String(name) };
+    return { kind: VAULT_KIND.ALL, name: '' };
+  }
+
+  function vaultFilterEquals(a, b) {
+    const x = vaultFilterOf(a && a.kind, a && a.name);
+    const y = vaultFilterOf(b && b.kind, b && b.name);
+    return x.kind === y.kind && x.name === y.name;
+  }
+
   // Pill-e filtra: „wszystkie", każdy sejf z osobna, a na końcu „bez sejfu" — ten ostatni
   // TYLKO gdy takie zadania faktycznie są. Liczniki zawsze z pełnej listy, nie z aktywnego
   // filtra, inaczej po pierwszym kliknięciu reszta pokazałaby zera.
-  const VAULT_ALL = 'all';
-  const VAULT_NONE = '__none__';
-
   function vaultFilterPills(jobs, activeFilter) {
     const list = Array.isArray(jobs) ? jobs : [];
     const names = vaultNames(list);
     if (names.length === 0) return [];
 
-    const active = activeFilter || VAULT_ALL;
-    const pills = [{ value: VAULT_ALL, label: 'Wszystkie', count: list.length, active: active === VAULT_ALL }];
+    const active = vaultFilterOf(activeFilter && activeFilter.kind, activeFilter && activeFilter.name);
+    const pill = (kind, name, label, count) => ({
+      kind, name, label, count, active: vaultFilterEquals(active, { kind, name }),
+    });
+
+    const pills = [pill(VAULT_KIND.ALL, '', 'Wszystkie', list.length)];
     for (const name of names) {
-      const count = list.filter((j) => (j.vault || '') === name).length;
-      pills.push({ value: name, label: name, count, active: active === name });
+      pills.push(pill(VAULT_KIND.VAULT, name, name, list.filter((j) => (j.vault || '') === name).length));
     }
     const orphans = list.filter((j) => !(j.vault || '')).length;
-    if (orphans > 0) pills.push({ value: VAULT_NONE, label: 'bez sejfu', count: orphans, active: active === VAULT_NONE });
+    if (orphans > 0) pills.push(pill(VAULT_KIND.NONE, '', 'bez sejfu', orphans));
     return pills;
   }
 
   function filterJobsByVault(jobs, filter) {
     const list = Array.isArray(jobs) ? jobs : [];
-    if (!filter || filter === VAULT_ALL) return list;
-    if (filter === VAULT_NONE) return list.filter((j) => !(j.vault || ''));
-    return list.filter((j) => (j.vault || '') === filter);
+    const f = vaultFilterOf(filter && filter.kind, filter && filter.name);
+    if (f.kind === VAULT_KIND.ALL) return list;
+    if (f.kind === VAULT_KIND.NONE) return list.filter((j) => !(j.vault || ''));
+    return list.filter((j) => (j.vault || '') === f.name);
   }
 
   // Kolor plakietki wyprowadzony z nazwy, nie z listy zaszytej w kodzie: dowolna nazwa
@@ -499,7 +521,8 @@
     shortRevision, revisionsMatch, updateBarView, sysbarView, hostOf, REVISION_PREFIX,
     pollSignature, jobsSignature, buildSparkData, groupRecentByJob, SPARK_WINDOW,
     buildRunsQuery, statusFilterPills, runsFilterIsActive,
-    vaultNames, vaultFilterPills, filterJobsByVault, vaultHue, VAULT_ALL, VAULT_NONE,
+    vaultNames, vaultFilterPills, filterJobsByVault, vaultHue,
+    vaultFilterOf, vaultFilterEquals, VAULT_KIND, VAULT_ALL_FILTER,
     parseCronForCalendar, computeWeekOccurrences, startOfDay, formatHourMinute,
     overlapsMaintenanceWindow,
     runningRunsFrom, formatElapsed, activeRunRows, activeRunsSignature,
