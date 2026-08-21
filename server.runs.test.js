@@ -519,6 +519,21 @@ test('limit/offset ze śmieciem daje 400, nie wyjątek SQLite (500)', async () =
   assert.equal((await api('/api/runs')).status, 200);
 });
 
+test('ogon po /api/runs/:id daje 404, nie listę runów', async () => {
+  // Matcher listy łapał każdy GET /api/runs/*, więc literówka w adresie („/api/runs/12/extra")
+  // dostawała 200 i pełną listę — wyglądała jak poprawne zapytanie o coś zupełnie innego.
+  for (const path of ['/api/runs/1/extra', '/api/runs/abc/def', '/api/runs/1/2/3']) {
+    const res = await api(path);
+    assert.equal(res.status, 404, `${path} musi być 404, nie listą`);
+  }
+  // Oba prawidłowe warianty listy dalej działają — o to w tym warunku chodzi.
+  for (const path of ['/api/runs', '/api/runs/']) {
+    const res = await api(path);
+    assert.equal(res.status, 200, `${path} przestało zwracać listę`);
+    assert.ok(Array.isArray(res.body));
+  }
+});
+
 test('status spoza whitelisty daje 400 — także pod adresem z ukośnikiem na końcu', async () => {
   // Wariant z ukośnikiem miał własną kopię ciała, która nie znała filtra status: ten sam
   // adres z „/" cicho zwracał listę BEZ filtrowania, czyli inne dane niż bez ukośnika.

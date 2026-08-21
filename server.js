@@ -608,7 +608,11 @@ async function handleApi(req, res) {
   }
 
   // /api/runs z ukośnikiem na końcu — to samo ciało co wyżej, żeby filtry działały tak samo.
-  if (method === 'GET' && segments[0] === 'api' && segments[1] === 'runs') {
+  // `segments.length === 2` jest tu istotne: bez tego warunek łapie KAŻDY ogon (np.
+  // /api/runs/123/extra) i odpowiada listą runów zamiast 404, czyli literówka w adresie
+  // wygląda jak poprawne zapytanie. Oba prawidłowe warianty — z ukośnikiem i bez — mają
+  // po odfiltrowaniu pustych segmentów dokładnie dwa.
+  if (method === 'GET' && segments.length === 2 && segments[0] === 'api' && segments[1] === 'runs') {
     return handleRunsList(res, params);
   }
 
