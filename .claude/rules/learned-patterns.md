@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 21 -->
+<!-- rule-count: 22 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -66,3 +66,6 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **node:sqlite otwieraj kompletem WAL + foreign_keys + busy_timeout**: domyślny `busy_timeout=0` znaczy, że KAŻDE trafienie w blokadę zapisu (nawet mikrosekundowe okno commitu WAL drugiego połączenia) to natychmiastowy `ERR_SQLITE_ERROR: database is locked` i crash procesu — nie czekanie. `db.exec('PRAGMA busy_timeout = 5000')` tuż po otwarciu każdego połączenia (także w skryptach pomocniczych dotykających żywej bazy); kontrakt przybij testem `PRAGMA busy_timeout → 5000`. Wykryte, gdy drugi scheduler umarł na locku szybciej, niż detekcja intruza zdążyła go zgłosić.
   Source: docs/solutions/runtime-errors/2026-08-07-brak-busy-timeout-crash-na-database-is-locked.md
+
+- **Dokument, który jest zarazem UI i kanałem poleceń: neutralizuj w renderze ORAZ kotwicz parser — i nie awansuj pól nadawcy do roli sterującej**: gdy ten sam plik (`Skrzynka.md`, notatka w vaultcie, README generowany z danych) jest renderowany z niezaufanej treści i parsowany jako intencja właściciela, KAŻDA linia nadawcy jest potencjalnym poleceniem — wiersz `- [x] <akcja> %% marker %%` wstawiony w treść wiadomości wymuszał pobranie pliku na cudzą maszynę bez żadnej akcji człowieka. Obrona musi stać po obu stronach roundtripu (w renderze rozbij wzorce znakiem zerowej szerokości budowanym z kodu; w parserze kotwicz DOKŁADNY kształt renderu, nie luźne `\s*`), bo żadna sama nie wystarcza: linie kontynuacji treści mają identyczne wcięcie co wiersz sterujący. Ta sama pułapka poza markdownem: pole opisowe od strony zewnętrznej (`mime` → nagłówek HTTP, `filename` → wikilink/HTML, `sha256` → warunek autoryzacji) awansuje do roli sterującej, a bramka zostaje przy starej roli — serwuj allowlistę mime + `nosniff` + `Content-Disposition: attachment`, a uprawnienie do treści wyprowadzaj ze śladu nie do sfabrykowania przez atakującego (kto wgrał bajty), nie z faktu, że zna jej identyfikator. Testy tego nie łapią, bo szew: atrapy fabrykują pola, których produkcja nie produkuje — test odmowy per wektor na PRAWDZIWEJ ścieżce render → parser.
+  Source: docs/solutions/auth-issues/2026-09-03-tresc-nadawcy-jako-akcja-uprawnienie-i-kod-w-skrzynce.md

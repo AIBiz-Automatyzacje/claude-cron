@@ -10,6 +10,15 @@ Job Team OS, w którym agent odpowiada na wiadomość `query` z wiedzy vaulta, *
 Spawn jest tylko-do-odczytu (`Read,Glob,Grep`, `cwd` = vault) i to `cwd` jest granicą bezpieczeństwa —
 prompt zawiera niezaufaną treść cudzej wiadomości. → [CLAUDE.md § Team OS — Skrzynka](../CLAUDE.md)
 
+## Blob (bajty załącznika)
+
+Zawartość załącznika Skrzynki, trzymana **poza bazą** w magazynie adresowanym po `sha256`
+(`lib/inbox-blobs.js`) — jeden plik na treść, niezależnie od liczby wiadomości, które go wskazują.
+Kontrintuicyjne: **metadane załącznika nie znikają nigdy, bajty wygasają** (`bytes_deleted_at`),
+więc wiersz w Skrzynce zostaje z adnotacją zamiast checkboxa „Pobierz". Sam hash **nie jest
+uprawnieniem** — dostęp daje dopiero ślad wgrania (`inbox_blob_uploads.uploaded_by`) zgodny
+z nadawcą wiadomości. → [CLAUDE.md § Team OS — Skrzynka](../CLAUDE.md)
+
 ## Hub
 
 Instancja Pulsa na VPS-ie admina — **jedyny proces piszący** do bazy skrzynki (`data/inbox.db`).
