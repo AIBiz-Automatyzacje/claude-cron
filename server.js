@@ -865,7 +865,14 @@ const BLOB_DRAIN_CAP_FACTOR = 2;
 // chunkami, nie łączny czas: uczciwy nadawca pompuje bez ustanku (25 MB przez wolne łącze to
 // minuty i ma prawo je dostać), a klient, który zadeklarował 26 MB i zamilkł po 16 bajtach,
 // nie zablokuje odmowy na zawsze.
-const BLOB_DRAIN_IDLE_MS = 1000;
+//
+// 10 s, nie 1 s: jedna retransmisja uplinku w środku 26 MB uploadu mieści się poniżej sekundy
+// bez żadnej patologii, a uznanie takiego nadawcy za milczącego kończyło się `req.destroy()`
+// przy niedoczytanych danych — czyli RST kasującym w buforze klienta naszą odpowiedź 413.
+// Nadawca widział wtedy „fetch failed" i nie dowiadywał się, dlaczego plik nie przeszedł,
+// a wynik zależał od obciążenia łącza (raz przechodzi, raz nie). Rząd wielkości jest spójny
+// z limitem czasu klienta (REQUEST_TIMEOUT_MS w inbox-client).
+const BLOB_DRAIN_IDLE_MS = 10_000;
 
 // Callback dostaje `true`, gdy drenaż trzeba było przerwać (cap albo cisza klienta), `false`
 // gdy klient sam dokończył lub zerwał transfer. Woła się dokładnie raz — 'end', 'error',

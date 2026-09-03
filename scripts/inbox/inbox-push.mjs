@@ -69,7 +69,15 @@ export function parseCheckedCallouts(section) {
 export function parseRequestedDownloads(section) {
   const results = [];
   for (const line of section.split('\n')) {
-    if (!/^>\s*- \[x\] Pobierz\b/.test(line)) continue;
+    // Kotwica na kształcie renderu (`>` + wcięcie listy + `- [x] Pobierz — `), nie na luźnym
+    // `\s*` z dowolną resztą linii. Sama kotwica NIE wystarczy i nigdy nie wystarczy: linie
+    // kontynuacji treści wiadomości mają DOKŁADNIE to samo wcięcie co wiersz załącznika, więc
+    // zdalny nadawca wpisujący w treść odhaczony wiersz „Pobierz" z markerem `att:` wymuszał
+    // pobranie pliku na maszynę odbiorcy bez żadnej jego akcji. Właściwą obroną jest
+    // neutralizeContentLine w renderze (inbox-pull.mjs) — te dwie strony trzymają kontrakt
+    // razem, a tutaj odcinamy dodatkowo warianty spoza kształtu renderu (głębsze zagnieżdżenia,
+    // wiersz bez separatora metadanych).
+    if (!/^> {1,3}- \[x\] Pobierz — /.test(line)) continue;
     const att = line.match(/%%\s*att:([a-f0-9-]{36})\s*%%/);
     if (!att) continue;
     results.push({ attachment_id: att[1] });

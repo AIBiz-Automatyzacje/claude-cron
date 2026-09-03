@@ -6,6 +6,7 @@
 // - Dane bierze z huba (`client.pull()`); oznaczanie pending → delivered robi hub.
 // Odpalane co 1 min przez launchd/cron. Zero Claude CLI.
 
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
@@ -69,22 +70,31 @@ export const ATTACHMENTS_REL_DIR = 'Zasoby/inbox-zalaczniki';
 // sprawdza obecność pliku pod <dir>/<miesiąc>/<nazwa>, downloader pod tą ścieżką zapisuje.
 // Rozjazd o jeden miesiąc znaczy „pobrane, a checkbox wraca przy każdym syncu" — to kontrakt,
 // nie przypadkowa duplikacja, więc żyje w jednej funkcji.
+// Liczone w UTC, nie w czasie lokalnym: `created_at` jest znacznikiem UTC, więc wiadomość
+// z 2026-07-31T23:30:00Z w strefie +02:00 wpadłaby do `2026-08`, a po zmianie strefy render
+// szukałby jej pliku w `2026-07` — checkbox „Pobierz" wracałby przy każdym syncu.
+// Znacznik nieparsowalny (ręczna edycja, stary rekord) dostaje stały kosz `bez-daty`;
+// `NaN-NaN` byłoby prawdziwą nazwą katalogu w vaultcie.
 export function attachmentMonth(iso) {
   const d = new Date(iso);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  if (Number.isNaN(d.getTime())) return 'bez-daty';
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
 // Nazwa pliku pochodzi z SIECI (metadane nadawcy) i trafia i na dysk, i do linii Skrzynki
 // o kontrakcie liniowym. Hub odrzuca separatory i znaki sterujące (isUnsafeFilename), ale
 // render nie może na tym polegać — pojedynczy `\n` w nazwie pozwoliłby wstrzyknąć odhaczony
 // checkbox, który inbox-push odczytałby jako akcję człowieka. `%` neutralizujemy, bo z niego
-// zbudowany jest marker `%% att:… %%` — nazwa nie może udawać cudzego markera.
+// zbudowany jest marker `%% att:… %%` — nazwa nie może udawać cudzego markera. Nawiasy
+// kwadratowe, `<`, `>` i cudzysłowy wycinamy, bo nazwa trafia i do WIKILINKU Obsidiana
+// (`]]` + `![[` osadziłoby w Skrzynce odbiorcy dowolną notatkę z jego vaulta, wybraną przez
+// nadawcę), i do wnętrza spana `os-att` (`<img src=…>` byłby beaconem otwarcia Skrzynki).
 export function safeAttachmentName(raw) {
-  const base = path.basename(String(raw ?? '')).replace(/[/\\:%\u0000-\u001f]/g, '').trim();
+  const base = path.basename(String(raw ?? '')).replace(/[/\\:%<>"'[\]\u0000-\u001f]/g, '').trim();
   return base === '' || base === '.' || base === '..' ? 'zalacznik' : base;
 }
 
-function formatBytes(bytes) {
+function formatAttachmentSize(bytes) {
   const n = Number(bytes);
   if (!Number.isFinite(n) || n < 0) return null;
   if (n < 1024) return `${n} B`;
@@ -93,12 +103,48 @@ function formatBytes(bytes) {
   return `${value.toFixed(1).replace('.', ',')} ${unit}`;
 }
 
+// Lustro MAX_NAME_ATTEMPTS z attachments.mjs: downloader przy kolizji nazw dokłada sufiks
+// porządkowy, więc render musi przejrzeć TĘ SAMĄ serię kandydatów.
+const MAX_NAME_ATTEMPTS = 50;
+
+function sha256OfFileSync(filePath) {
+  return createHash('sha256').update(fsSync.readFileSync(filePath)).digest('hex');
+}
+
 // Stan „pobrany" wynika WYŁĄCZNIE z obecności pliku na dysku (R8) — zero zapisu stanu
 // gdziekolwiek, bo blok między markerami jest nadpisywany w całości przy każdym pullu.
-function defaultIsDownloaded(month, filename) {
+//
+// Rozstrzyga TOŻSAMOŚĆ załącznika (rozmiar + sha256), nigdy sama nazwa: nazwa pochodzi od
+// nadawcy i nie jest unikalna. Dwie wiadomości od różnych osób z plikiem `raport.pdf` w tym
+// samym miesiącu dawały wcześniej ten sam werdykt — druga renderowała się jako „pobrana"
+// i osadzała CUDZY plik pod własnym podpisem, bez checkboxa pozwalającego pobrać właściwy.
+// Hash liczymy dopiero, gdy zgadza się rozmiar, więc w typowym przebiegu jest to jeden
+// odczyt pliku, a rozjazd rozmiaru kosztuje samo `stat`.
+// Zwraca NAZWĘ pliku na dysku (może być z sufiksem kolizji) albo false.
+function defaultIsDownloaded(month, filename, att = {}) {
   const dir = process.env.INBOX_ATTACHMENTS_DIR;
   if (!dir) return false;
-  return fsSync.existsSync(path.join(dir, month, filename));
+  const ext = path.extname(filename);
+  const stem = filename.slice(0, filename.length - ext.length);
+  const size = Number(att.size_bytes);
+  const sha = typeof att.sha256 === 'string' && att.sha256 !== '' ? att.sha256 : null;
+
+  for (let n = 1; n <= MAX_NAME_ATTEMPTS; n++) {
+    const candidate = n === 1 ? filename : `${stem} (${n})${ext}`;
+    let st;
+    try {
+      st = fsSync.statSync(path.join(dir, month, candidate));
+    } catch {
+      // Pierwsza dziura w serii = koniec kandydatów (downloader zajmuje pierwsze wolne miejsce).
+      return false;
+    }
+    if (!st.isFile()) return false;
+    if (Number.isFinite(size) && st.size !== size) continue;
+    // Hub bez sha256 w metadanych (instalacja sprzed IU-6) — zostaje dawne rozstrzyganie nazwą.
+    if (sha === null) return candidate;
+    if (sha256OfFileSync(path.join(dir, month, candidate)) === sha) return candidate;
+  }
+  return false;
 }
 
 // Trzy stany, rozstrzygane wyłącznie dyskiem i metadanymi:
@@ -109,10 +155,14 @@ function defaultIsDownloaded(month, filename) {
 export function renderAttachmentLine(att, month, isDownloaded = defaultIsDownloaded) {
   const name = safeAttachmentName(att.filename);
   const marker = `%% att:${att.id} %%`;
-  const meta = [name, formatBytes(att.size_bytes), att.mime].filter(Boolean).join(' · ');
+  const meta = [name, formatAttachmentSize(att.size_bytes), att.mime].filter(Boolean).join(' · ');
 
-  if (isDownloaded(month, name)) {
-    return `>   - <span class="os-att">📎 ${name}</span><br>![[${ATTACHMENTS_REL_DIR}/${month}/${name}]] ${marker}`;
+  // Wstrzykiwana atrapa może zwrócić `true` (kształt sprzed rozstrzygania tożsamością);
+  // realna implementacja zwraca NAZWĘ pliku, bo przy kolizji leży on pod sufiksem.
+  const onDisk = isDownloaded(month, name, att);
+  if (onDisk) {
+    const linkName = typeof onDisk === 'string' ? onDisk : name;
+    return `>   - <span class="os-att">📎 ${name}</span><br>![[${ATTACHMENTS_REL_DIR}/${month}/${linkName}]] ${marker}`;
   }
   if (att.blob_available === false) {
     return `>   - <span class="os-att os-att-gone">📎 ${meta} · wygasł — poproś nadawcę o ponowne wysłanie</span> ${marker}`;
@@ -135,12 +185,26 @@ function renderAttachmentLines(m, isDownloaded) {
 
 // Renderuje JEDNĄ wiadomość nitki jako li z awatarem: człowiek = inicjał w kolorze osoby,
 // agent (payload.auto_reply) = 🤖 + badge AUTO + prefix zdjęty z treści + linia „Źródło:" jako pill.
+// Treść wiadomości pochodzi od INNEGO członka przez hub — to wejście niezaufane, a linie
+// kontynuacji renderujemy dosłownie z tym samym wcięciem (`>   `), co wiersze załączników.
+// Bez neutralizacji nadawca wstawiał w treść własny odhaczony `- [x] Pobierz … %% att:<id> %%`
+// i WYMUSZAŁ pobranie pliku (do 25 MB, rozsiewanego przez Obsidian Sync) na maszynę odbiorcy
+// bez żadnej jego akcji; ten sam trik z `%% id:… thread:… %%` podszywa się pod kotwicę wątku.
+// Zerowej szerokości spacja (budowana z kodu, nie wklejona do źródła) rozbija oba wzorce,
+// a dla człowieka linia wygląda identycznie.
+function neutralizeContentLine(line) {
+  const zeroWidth = String.fromCharCode(0x200b);
+  return line
+    .replace(/^(\s*)-(\s*\[)/, `$1-${zeroWidth}$2`)
+    .replaceAll('%%', `%${zeroWidth}%`);
+}
+
 function renderMessage(m, isDownloaded = defaultIsDownloaded) {
   const auto = isAutoReply(m);
   const raw = auto ? (m.content || '').replace(AUTO_REPLY_PREFIX, '') : (m.content || '');
   const lines = raw.trim().split('\n').map(l => {
     const src = l.match(/^Źródło:\s*(.+)$/);
-    return src ? `<span class="os-src">📄 ${src[1]}</span>` : l;
+    return src ? `<span class="os-src">📄 ${src[1]}</span>` : neutralizeContentLine(l);
   });
   const who = auto
     ? `<span class="os-who">Asystent @${m.from_user}</span> <span class="os-time">· ${fmtTimeShort(m.created_at)}</span> <span class="os-auto">AUTO</span>`
@@ -156,11 +220,14 @@ function renderMessage(m, isDownloaded = defaultIsDownloaded) {
 //          (kontrakt push-job: SELECT WHERE id, walidacja to_user + typ → akcja).
 // me = tożsamość z huba (pole `user` z pull) — kierunek w metadanych („Ty → @x" vs „od @x").
 // isDownloaded wstrzykiwane dla testowalności (stan załącznika = obecność pliku na dysku).
-export function renderThreadCallout(thread, anchor, me, isDownloaded = defaultIsDownloaded) {
+export function renderThreadCallout(thread, anchor, me, isDownloaded = defaultIsDownloaded, freshIds = new Set()) {
   const root = thread[0];
   const threadId = root.thread_id || root.id;
   const name = CALLOUT_NAME[root.type] || 'note';
-  const isFresh = thread.some(r => r.status === 'pending');
+  // `freshIds` to id-ki, które w TYM przebiegu syncu przyszły jeszcze jako `pending`.
+  // Krok pobrań robi własny `pull`, a pull po stronie huba przestawia pending→delivered —
+  // bez przeniesienia tej wiedzy druga odpowiedź nigdy nie miałaby badge'u „nowe".
+  const isFresh = thread.some(r => r.status === 'pending' || freshIds.has(r.id));
 
   const tags = [
     isFresh ? '<span class="os-tag t-new">🆕 nowe</span>' : null,
@@ -252,7 +319,7 @@ export function replaceBetweenMarkers(source, startMarker, endMarker, newContent
 // Grupuje płaskie wiersze po thread_id w nitki posortowane chronologicznie.
 // threadRows = WSZYSTKIE wiadomości aktywnych wątków; activeForMe = moje nie-done (kotwice).
 // Kolejność wątków: malejąco wg czasu kotwicy (najświeższe rozmowy na górze).
-function buildThreadCallouts(threadRows, activeForMe, me) {
+function buildThreadCallouts(threadRows, activeForMe, me, freshIds = new Set()) {
   const byThread = new Map();
   for (const row of threadRows) {
     const key = row.thread_id || row.id;
@@ -274,7 +341,10 @@ function buildThreadCallouts(threadRows, activeForMe, me) {
   const callouts = [];
   for (const [key, anchor] of anchors) {
     const thread = byThread.get(key) || [anchor];
-    callouts.push({ anchorTime: new Date(anchor.created_at).getTime(), text: renderThreadCallout(thread, anchor, me) });
+    callouts.push({
+      anchorTime: new Date(anchor.created_at).getTime(),
+      text: renderThreadCallout(thread, anchor, me, defaultIsDownloaded, freshIds),
+    });
   }
   callouts.sort((a, b) => b.anchorTime - a.anchorTime);
   return callouts.map(c => c.text);
@@ -373,13 +443,13 @@ function normalizeSectionHeadings(raw) {
 }
 
 // eksportowane dla testu szwu (render + merge frontmattera + zapis na prawdziwym pliku)
-export async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedItems, me) {
+export async function updateSkrzynkaFile(filePath, threadRows, activeForMe, delegatedItems, me, freshIds = new Set()) {
   // `original` = treść z DYSKU — to z nią porównuje writeIfChanged. Porównanie z już
   // znormalizowanym `raw` zjadało zapis, gdy jedyną różnicą był nagłówek (pusta skrzynka,
   // liczniki bez zmian → normalizacja nigdy nie trafiała do pliku).
   const original = await ensureSkrzynkaFile(filePath);
   const raw = normalizeSectionHeadings(original);
-  const inboxCallouts = buildThreadCallouts(threadRows, activeForMe, me);
+  const inboxCallouts = buildThreadCallouts(threadRows, activeForMe, me, freshIds);
   const inboxCount = activeForMe.length;
   const delegatedCount = delegatedItems.length;
 
@@ -491,7 +561,7 @@ async function updateDashboard(todoPath, args) {
 // client wstrzykiwany dla testowalności (mock huba); domyślnie realny inbox-client.
 // Ścieżki plików zapewnia env-loader; konfigurację huba (INBOX_HUB_URL/INBOX_TOKEN)
 // waliduje sam klient (fail-fast z czytelnym błędem).
-export async function main({ client = inboxClient } = {}) {
+export async function main({ client = inboxClient, freshIds = new Set() } = {}) {
   await loadEnv();
   const { INBOX_TODO_PATH, INBOX_SKRZYNKA_PATH } = process.env;
 
@@ -516,7 +586,7 @@ export async function main({ client = inboxClient } = {}) {
   }).length;
 
   // Write to Skrzynka.md (oba bloki) + banner w dashboardzie
-  await updateSkrzynkaFile(INBOX_SKRZYNKA_PATH, threadRows, active, delegated, me);
+  await updateSkrzynkaFile(INBOX_SKRZYNKA_PATH, threadRows, active, delegated, me, freshIds);
   await updateDashboard(INBOX_TODO_PATH, {
     inboxCount: active.length,
     taskCount,
@@ -529,7 +599,7 @@ export async function main({ client = inboxClient } = {}) {
 
   // Hub zachowuje oryginalny status 'pending' w active (detekcja „nowe") mimo że sam
   // oznaczył je delivered — liczymy „new" z tego pola dla logu.
-  const newCount = active.filter(r => r.status === 'pending').length;
+  const newCount = active.filter(r => r.status === 'pending' || freshIds.has(r.id)).length;
   console.log(
     `[inbox-pull] ${new Date().toISOString()} — ` +
     `user=${me} inbox=${active.length} (task=${taskCount} query=${queryCount} new=${newCount}) ` +

@@ -360,3 +360,67 @@ test('odhaczony zalacznik nieznany hubowi → pominiety bez rzutu', async () => 
   assert.equal(stats.skipped, 1);
   assert.equal(stats.downloaded, 0);
 });
+
+// Regresja po review fazy 3: bajty z sieci lądują w vaultcie pod nazwą, którą człowiek
+// uzna za zaufaną, więc werdykt musi zapadać na FAKTYCZNEJ treści, nie na obietnicy huba.
+test('hub oddaje INNE bajty niż zamówiony sha256 → plik skasowany i pad zgłoszony', async () => {
+  const att = attachment();
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  const client = fakeHub([att], {
+    onDownload: async (sha256, destPath) => {
+      fs.writeFileSync(destPath, 'PODMIENIONA TRESC');
+      return { path: destPath, size: 17 };
+    },
+  });
+
+  const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.equal(fs.existsSync(path.join(attachmentsDir, MONTH, 'raport.pdf')), false, 'wadliwy plik nie zostaje w vaultcie');
+  assert.equal(stats.failed, 1);
+  assert.equal(stats.downloaded, 0);
+});
+
+test('metadane deklarujące plik ponad limit 25 MB → zero transferu', async () => {
+  const att = attachment();
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  const client = fakeHub([{ ...att, size_bytes: MAX_ATTACHMENT_BYTES + 1 }]);
+
+  const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.deepEqual(client.calls, ['pull'], 'bajty nie lecą w ogóle');
+  assert.equal(stats.skipped, 1);
+  assert.equal(stats.downloaded, 0);
+});
+
+test('rola maszyny czytana LENIWIE: brak odhaczeń = zero wywołań getRole', async () => {
+  const att = attachment();
+  const nieodhaczona = skrzynkaWithChecked([att]).replace('- [x] Pobierz', '- [ ] Pobierz');
+  const { skrzynka, attachmentsDir } = vault(nieodhaczona);
+  const client = fakeHub([att]);
+  let wywolania = 0;
+
+  await downloadRequestedAttachments({
+    client,
+    getRole: () => { wywolania++; return 'client'; },
+    skrzynkaPath: skrzynka,
+    attachmentsDir,
+  });
+
+  assert.equal(wywolania, 0, 'baza Pulsa nie jest otwierana w najczęstszym przebiegu syncu');
+});
+
+test('getRole zwracające agenta blokuje pobranie tak samo jak jawne role (R10)', async () => {
+  const att = attachment();
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  const client = fakeHub([att]);
+
+  const stats = await downloadRequestedAttachments({
+    client,
+    getRole: () => ROLE_AGENT,
+    skrzynkaPath: skrzynka,
+    attachmentsDir,
+  });
+
+  assert.equal(stats.role_skipped, true);
+  assert.deepEqual(client.calls, [], 'agent nie dotyka huba');
+});

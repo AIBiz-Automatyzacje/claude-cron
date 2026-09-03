@@ -38,7 +38,33 @@ export function readMachineRole() {
 
 // client/role wstrzykiwane dla testowalności (mock huba, rola bez dotykania bazy).
 export async function main({ client = inboxClient, role } = {}) {
-  // 1. PUSH najpierw — zaktualizuj DB ze stanu pliku (odhaczone checkboxy → status=done + archive)
+  // 1. POBRANIA najpierw — przed pushem, bo push potrafi DOMKNĄĆ wątek (`done` → status='done'),
+  //    a domknięty wątek wypada z `pullForUser`. Człowiek, który w jednym podejściu odhaczył
+  //    „Zrobione" i „Pobierz" na TYM SAMYM wątku, tracił wtedy plik bezpowrotnie: metadanych
+  //    już nie ma, a krok 3 usuwa wiersz ze Skrzynki, więc nie ma czego odhaczyć ponownie.
+  let freshIds = new Set();
+  try {
+    await loadEnv();
+    const stats = await downloadRequestedAttachments({
+      client,
+      role,
+      // Leniwie: odczyt roli otwiera data/claude-cron.db i robi pełny migrate, a krok pobrań
+      // kończy się no-opem w niemal każdej z 1440 minut doby. Wywołanie idzie dopiero za
+      // bramką „są odhaczone pobrania" (patrz attachments.mjs).
+      getRole: () => readMachineRole(),
+      skrzynkaPath: process.env.INBOX_SKRZYNKA_PATH,
+      attachmentsDir: process.env.INBOX_ATTACHMENTS_DIR,
+    });
+    // `pull` po stronie huba przestawia pending→delivered, więc pull kroku 3 nie zobaczy już
+    // ani jednej wiadomości „nowej". Przenosimy tę wiedzę jawnie, zamiast pozwolić, by badge
+    // „🆕 nowe" zależał od tego, czy akurat coś się w tej minucie pobierało.
+    freshIds = collectFreshIds(stats?.pullData);
+  } catch (e) {
+    console.error('[inbox-sync] pobrania FAILED:', e.message);
+    // Kontynuujemy — nieudane pobranie zostawia wiersz do ponownego odhaczenia.
+  }
+
+  // 2. PUSH — zaktualizuj DB ze stanu pliku (odhaczone checkboxy → status=done + archive)
   try {
     await runPush({ client });
   } catch (e) {
@@ -46,22 +72,14 @@ export async function main({ client = inboxClient, role } = {}) {
     // Kontynuujemy do pull — lepiej mieć stary stan w pliku niż nic
   }
 
-  // 2. POBRANIA — odhaczone „Pobierz" wykonane lokalnie, zanim pull przerenderuje blok.
-  try {
-    await loadEnv();
-    await downloadRequestedAttachments({
-      client,
-      role: role === undefined ? readMachineRole() : role,
-      skrzynkaPath: process.env.INBOX_SKRZYNKA_PATH,
-      attachmentsDir: process.env.INBOX_ATTACHMENTS_DIR,
-    });
-  } catch (e) {
-    console.error('[inbox-sync] pobrania FAILED:', e.message);
-    // Kontynuujemy do pull — nieudane pobranie zostawia checkbox, następny sync spróbuje znowu
-  }
-
   // 3. PULL — regeneruj Skrzynkę z DB (rekordy ze status=done już nie są renderowane)
-  await runPull({ client });
+  await runPull({ client, freshIds });
+}
+
+// Id wiadomości, które w TYM przebiegu przyszły jeszcze jako `pending`.
+export function collectFreshIds(pullData) {
+  const active = Array.isArray(pullData?.active) ? pullData.active : [];
+  return new Set(active.filter(r => r?.status === 'pending').map(r => r.id));
 }
 
 // Odpalamy TYLKO przy uruchomieniu wprost (job Pulsa), nie przy imporcie z testu —

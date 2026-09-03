@@ -1,4 +1,4 @@
-// Testy SEKWENCJI syncu: push → pobrania → pull, w jednym procesie.
+// Testy SEKWENCJI syncu: pobrania → push → pull, w jednym procesie.
 // Mockowany wyłącznie klient huba; parsery, render i zapisy na dysku działają naprawdę,
 // więc test jest szwem trzech kroków, a nie sprawdzeniem, że każdy z nich da się zawołać.
 //
@@ -136,7 +136,7 @@ function fakeHub() {
   };
 }
 
-test('sekwencja: pobranie następuje PO pushu i PRZED pullem', async (t) => {
+test('sekwencja: pobranie następuje PRZED pushem i PRZED pullem', async (t) => {
   const { attachmentsDir } = setupVault(t);
   const client = fakeHub();
 
@@ -146,7 +146,10 @@ test('sekwencja: pobranie następuje PO pushu i PRZED pullem', async (t) => {
   const download = client.calls.indexOf('downloadBlob');
   const lastPull = client.calls.lastIndexOf('pull');
   assert.ok(done >= 0 && download >= 0 && lastPull >= 0, `brak kroku w ${client.calls.join(',')}`);
-  assert.ok(done < download, 'push (done) musi poprzedzać pobranie');
+  // Kolejność odwrócona względem pierwotnej implementacji (review fazy 3): push potrafi
+  // DOMKNĄĆ wątek, a domknięty wątek wypada z `pullForUser` — pobranie po pushu traciło
+  // metadane załącznika z tego samego wątku i plik nie trafiał do vaulta już nigdy.
+  assert.ok(download < done, 'pobranie musi poprzedzać push domykający wątki');
   assert.ok(download < lastPull, 'pobranie musi poprzedzać pull regenerujący Skrzynkę');
   // Szew hub↔plik: bajty naprawdę wylądowały w vaultcie.
   assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, 'raport.pdf'), 'utf8'), FILE_CONTENT);
@@ -178,4 +181,33 @@ test('pad pobrania nie zatrzymuje pulla (sync dojeżdża do końca)', async (t) 
   // Pull przerenderował plik — czyli krok 3 wykonał się mimo padu kroku 2.
   const out = fs.readFileSync(skrzynka, 'utf8');
   assert.ok(out.includes('%% inbox:items:start %%'), 'Skrzynka przerenderowana przez pull');
+});
+
+// Regresja po review fazy 3: „Zrobione" i „Pobierz" odhaczone w JEDNYM podejściu na TYM
+// SAMYM wątku. `done` ustawia status='done', a domknięty wątek wypada z `pullForUser` —
+// przy kolejności push→pobrania krok pobrań nie dostawał już metadanych, plik nie trafiał
+// do vaulta, a krok 3 usuwał wiersz ze Skrzynki, więc nie było czego odhaczyć ponownie.
+test('jeden wątek, dwa odhaczenia: plik ląduje w vaultcie mimo domknięcia wątku', async (t) => {
+  const { attachmentsDir } = setupVault(t);
+  const client = fakeHub();
+  let zamkniete = false;
+  client.done = async () => {
+    client.calls.push('done');
+    zamkniete = true;
+    return { v: 1, result: 'closed', thread: CLOSED_THREAD };
+  };
+  client.pull = async () => {
+    client.calls.push('pull');
+    // Hub po domknięciu nie oddaje już tego wątku — ani wiadomości, ani jej załączników.
+    const rows = zamkniete ? [] : [MESSAGE];
+    return { v: 1, user: 'alicja', active: rows, threadRows: rows, delegated: [] };
+  };
+
+  await main({ client, role: 'client' });
+
+  assert.equal(
+    fs.readFileSync(path.join(attachmentsDir, MONTH, 'raport.pdf'), 'utf8'),
+    FILE_CONTENT,
+    'plik z domkniętego w tym samym runie wątku musi trafić do vaulta',
+  );
 });

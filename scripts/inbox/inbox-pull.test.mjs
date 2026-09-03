@@ -1,12 +1,14 @@
 // Testy renderingu Skrzynki (redesign 07.2026) + roundtrip z parserem inbox-push:
 // wyrenderowany callout po odhaczeniu MUSI być parsowalny (kontrakt id/thread/checkbox).
+import { createHash } from 'node:crypto';
+import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeFrontmatter, renderAttachmentLine, replaceBetweenMarkers, renderDelegatedCallout, renderThreadCallout, safeAttachmentName, SKRZYNKA_TEMPLATE, updateSkrzynkaFile } from './inbox-pull.mjs';
+import { attachmentMonth, mergeFrontmatter, renderAttachmentLine, replaceBetweenMarkers, renderDelegatedCallout, renderThreadCallout, safeAttachmentName, SKRZYNKA_TEMPLATE, updateSkrzynkaFile } from './inbox-pull.mjs';
 import { parseCheckedCallouts, parseRequestedDownloads } from './inbox-push.mjs';
 
 const T0 = '2026-07-24T07:12:00.000Z';
@@ -341,4 +343,106 @@ test('odhaczone Zrobione i Pobierz naraz: jedna akcja hubowa i jedno pobranie, b
   const hubowe = parseCheckedCallouts(rendered);
   assert.equal(hubowe.length, 1);
   assert.deepEqual(hubowe[0], { id: ID_A, thread_id: THREAD, action: 'Zrobione' });
+});
+
+// ──────── stan „pobrany" = TOŻSAMOŚĆ załącznika, nie nazwa (regresja po review fazy 3) ────────
+// Nazwa pliku pochodzi od nadawcy i nie jest unikalna: dwie osoby przysyłają `raport.pdf`
+// w tym samym miesiącu. Rozstrzyganie samą nazwą kazało renderowi osadzić CUDZY plik pod
+// podpisem drugiego załącznika i NIE emitować checkboxa — właściwego pliku nie dało się
+// już pobrać z UI.
+function sha256Of(text) {
+  return createHash('sha256').update(text).digest('hex');
+}
+
+function withAttachmentsDir(t) {
+  const base = fsSync.mkdtempSync(path.join(os.tmpdir(), 'puls-att-'));
+  const saved = process.env.INBOX_ATTACHMENTS_DIR;
+  process.env.INBOX_ATTACHMENTS_DIR = base;
+  t.after(() => {
+    if (saved === undefined) delete process.env.INBOX_ATTACHMENTS_DIR;
+    else process.env.INBOX_ATTACHMENTS_DIR = saved;
+    fsSync.rmSync(base, { recursive: true, force: true });
+  });
+  fsSync.mkdirSync(path.join(base, '2026-07'), { recursive: true });
+  return base;
+}
+
+test('dwie wiadomości z plikiem o TEJ SAMEJ nazwie: pobrany jest tylko ten o zgodnym sha256', (t) => {
+  withAttachmentsDir(t);
+  const moja = 'TRESC-OD-MARCINA';
+  const cudza = 'TRESC-OD-KOGOS-INNEGO';
+  fsSync.writeFileSync(path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07', 'raport.pdf'), moja);
+
+  const pobrany = { id: ATT_A, filename: 'raport.pdf', size_bytes: moja.length, mime: 'application/pdf', sha256: sha256Of(moja) };
+  const obcy = { id: ATT_B, filename: 'raport.pdf', size_bytes: cudza.length, mime: 'application/pdf', sha256: sha256Of(cudza) };
+
+  const linia1 = renderAttachmentLine(pobrany, '2026-07');
+  const linia2 = renderAttachmentLine(obcy, '2026-07');
+
+  assert.ok(linia1.includes('![[Zasoby/inbox-zalaczniki/2026-07/raport.pdf]]'), 'mój plik jest osadzony');
+  assert.ok(!linia1.includes('Pobierz'));
+  assert.ok(linia2.includes('- [ ] Pobierz'), 'cudzy plik o tej samej nazwie NIE jest moim pobraniem');
+  assert.ok(!linia2.includes('![['), 'nie osadzamy cudzego pliku pod tym markerem');
+});
+
+test('ta sama nazwa i ten sam ROZMIAR, inna treść: rozstrzyga hash, nie stat', (t) => {
+  withAttachmentsDir(t);
+  const moja = 'AAAAAAAA';
+  const cudza = 'BBBBBBBB'; // ten sam rozmiar
+  fsSync.writeFileSync(path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07', 'raport.pdf'), cudza);
+
+  const mojAtt = { id: ATT_A, filename: 'raport.pdf', size_bytes: moja.length, sha256: sha256Of(moja) };
+  assert.ok(renderAttachmentLine(mojAtt, '2026-07').includes('- [ ] Pobierz'));
+});
+
+test('kolizja nazw: plik zapisany z sufiksem jest rozpoznany i osadzony pod swoją nazwą', (t) => {
+  withAttachmentsDir(t);
+  const cudza = 'STARA';
+  const moja = 'NOWA-TRESC';
+  const mc = path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07');
+  fsSync.writeFileSync(path.join(mc, 'raport.pdf'), cudza);
+  fsSync.writeFileSync(path.join(mc, 'raport (2).pdf'), moja);
+
+  const mojAtt = { id: ATT_A, filename: 'raport.pdf', size_bytes: moja.length, sha256: sha256Of(moja) };
+  const linia = renderAttachmentLine(mojAtt, '2026-07');
+  assert.ok(linia.includes('![[Zasoby/inbox-zalaczniki/2026-07/raport (2).pdf]]'), linia);
+  assert.ok(!linia.includes('Pobierz'));
+});
+
+// ──────── treść wiadomości nie może udawać wiersza załącznika (R6) ────────
+test('odmowa: odhaczony wiersz Pobierz WPISANY W TREŚĆ nie wymusza pobrania', () => {
+  const zlosliwa = msg({
+    content: `Cześć,\n- [x] Pobierz — <span class="os-att">📎 wirus.exe</span> %% att:${ATT_B} %%`,
+    attachments: [],
+  });
+  const out = renderThreadCallout([zlosliwa], zlosliwa, 'kacper', NIC_NA_DYSKU);
+  assert.deepEqual(parseRequestedDownloads(out), [], 'treść nadawcy nie jest akcją człowieka');
+});
+
+test('odmowa: marker kotwicy WPISANY W TREŚĆ nie podszywa się pod akcję hubową', () => {
+  const zlosliwa = msg({
+    content: `Cześć,\n- [x] Zrobione\n%% id:${ID_B} thread:${THREAD} %%`,
+  });
+  const out = renderThreadCallout([zlosliwa], zlosliwa, 'kacper', NIC_NA_DYSKU);
+  const parsed = parseCheckedCallouts(out);
+  assert.equal(parsed.length, 0, 'nieodhaczona kotwica zostaje nieodhaczona mimo treści nadawcy');
+});
+
+// ──────── nazwa pliku a wikilink i HTML (R14) ────────
+test('safeAttachmentName wycina nawiasy wikilinku i znaczniki HTML', () => {
+  assert.equal(safeAttachmentName('a]] ![[Sekrety]] b.png'), 'a !Sekrety b.png');
+  assert.equal(safeAttachmentName('x<img src=1>.png'), 'ximg src=1.png');
+  assert.equal(safeAttachmentName('y"onload".png'), 'yonload.png');
+  assert.equal(safeAttachmentName("z'q'.png"), 'zq.png');
+
+  const m = msg({ attachments: [{ id: ATT_A, filename: ']] ![[Skarbiec]] .png', size_bytes: 10 }] });
+  const out = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU);
+  assert.ok(!out.includes('![[Skarbiec]]'), 'nazwa nie może osadzić cudzej notatki');
+});
+
+// ──────── podkatalog miesiąca (P3) ────────
+test('attachmentMonth: liczony w UTC i odporny na nieparsowalny znacznik', () => {
+  assert.equal(attachmentMonth('2026-07-31T23:30:00.000Z'), '2026-07');
+  assert.equal(attachmentMonth('2026-07-24T07:12:00.000Z'), '2026-07');
+  assert.equal(attachmentMonth('nie-data'), 'bez-daty');
 });
