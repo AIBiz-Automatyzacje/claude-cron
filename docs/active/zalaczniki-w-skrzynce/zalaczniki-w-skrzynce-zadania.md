@@ -80,7 +80,7 @@ Zależy od: Faza 1
 - [x] Test: [Unit] `uploadBlob` używa `BINARY_TIMEOUT_MS`, nie `REQUEST_TIMEOUT_MS`
 - [x] Test: [Unit] `downloadBlob` przy zerwaniu w połowie nie zostawia pliku docelowego
 - [x] Test: [Unit] Komunikat błędu z URL-em zawierającym token jest zredagowany
-- [ ] Weryfikacja: `node --test scripts/inbox/inbox-client.test.mjs` przechodzi bez błędów
+- [x] Weryfikacja: `node --test scripts/inbox/inbox-client.test.mjs` przechodzi bez błędów
 
 ### IU-5: Wysyłka plików przez `send` i `reply` (feature-builder-data)
 
@@ -99,11 +99,29 @@ Zależy od: Faza 1
 - [x] Test: [Unit] `handleSend` z `sha256` nieistniejącym na hubie → 400, wiadomość nie powstaje
 - [x] Test: [Unit] `handleSend` z `attachments` niebędącym tablicą albo z nadmiarową liczbą pozycji → 400
 - [x] Test: [Unit] Ścieżka do pliku, który nie istnieje → czytelny błąd przed transferem
-- [ ] Weryfikacja: `node --test scripts/inbox/attachments.test.mjs scripts/inbox/send.test.mjs` przechodzi bez błędów
-- [ ] Weryfikacja: `node --test lib/inbox-api.test.js lib/inbox-db.test.js` przechodzi bez błędów (regresja fazy 1)
+- [x] Weryfikacja: `node --test scripts/inbox/attachments.test.mjs scripts/inbox/send.test.mjs` przechodzi bez błędów
+- [x] Weryfikacja: `node --test lib/inbox-api.test.js lib/inbox-db.test.js` przechodzi bez błędów (regresja fazy 1)
 
 Teksty (verbatim, IU-5) — odmowa przy przekroczeniu progu:
 `Plik <nazwa> ma <rozmiar> i przekracza limit 25 MB. Wrzuć go na Dysk i wyślij link w treści wiadomości.`
+
+## Do poprawy po review fazy 2
+
+- [x] 🟠 [P2] **lib/inbox-api.js:224** — Bramka nazwy pliku (`/[/\\\0]/` + dokladnie `'.'`/`'..'`, lustro w `lib/inbox-db.js:515`) przepuszcza znaki sterujace (`"a\nb.pdf"`, `"raport\r\n- [x] Zrobione"`), warianty `'..'` z koncowa spacja/kropka (Win32 je obcina), oraz `:` (alternatywny strumien danych NTFS). `filename` to niezaufane wejscie nadawcy (R14), ktore w fazie 3 idzie do `path.join` i do renderu `Skrzynka.md` o kontrakcie liniowym — nazwa z `\n` pozwala wstrzyknac odhaczony checkbox, ktory `inbox-push.mjs` odczyta jako akcje czlowieka. Napraw w OBU lustrach: odrzucaj zakres kontrolny U+0000–U+001F, znak `:`, oraz nazwy, ktorych postac po obcieciu koncowych kropek i spacji rowna sie `'.'` albo `'..'`.
+- [x] 🟠 [P2] **scripts/inbox/inbox-client.mjs:363** — `BINARY_TIMEOUT_MS` nie chroni transferu bajtow w `downloadBlob`, tylko naglowki: `fetchWithTimeout` (linia 92) robi `clearTimeout(timer)` w `finally`, a cialo konsumuje dopiero `pipeline(Readable.fromWeb(res.body), createWriteStream(tmpFile))` — juz po rozbrojeniu AbortControllera. Hub/Funnel, ktory odesle 200 i przestanie wysylac bajty, zawiesza `downloadBlob` BEZ LIMITU (run syncu wisi do twardego timeoutu executora, w vaultcie zostaje `.<nazwa>.<uuid>.part`, ktory Obsidian Sync rozniesie). Napraw: przenies kontrole timeoutu do `attemptBlobDownload` (wlasny `AbortController` + timer, `signal` do `fetch` i do `pipeline(..., { signal })`, `clearTimeout` dopiero po `pipeline`/`rename`). Dopisz test: strumien, ktory po pierwszym chunku nic nie emituje i sie nie zamyka, konczy sie bledem limitu czasu, a katalog docelowy zostaje pusty.
+- [x] 🟠 [P2] **scripts/inbox/reply.test.mjs:82** — sciezka `--attach` w `reply.mjs` nie ma ANI JEDNEGO testu (plik nie zawiera slowa `attach`), choc checkbox IU-5 „ta sama sciezka zalacznikow co w send.mjs" jest odhaczony — rozjazd obu sciezek jest niewykrywalny (literowka `args.attachments` zamiast `args.attach` = zielona suita i odpowiedz bez plikow, R1/R2 zlamane cicho). Dopisz dwa testy lustrzane do `send.test.mjs`: (1) `--attach` na plik tmp → `client.uploads.length === 1` i jeden rekord w `client.calls[0].attachments`; (2) pad `uploadBlob` → `client.send` niewywolany (`client.calls.length === 0`).
+- [x] 🟡 [P3] **lib/inbox-api.js:230** — walidacja `mime` sprawdza wylacznie dlugosc, wiec `'byle-co'` i `'text/html\r\nX: y'` przechodza granice i dopiero `normalizeAttachment` (lib/inbox-db.js:533) rzuca `InboxDbError` mapowany na ogolne `invalid_input`. Zamien warunek na `if (mime != null && (!isNonEmptyString(mime, MAX_MIME_LEN) || !/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/.test(mime))) return { error: 'invalid_attachments' };` (wzorzec `MIME_PATTERN` z lib/inbox-db.js:494).
+- [x] 🟡 [P3] **scripts/inbox/attachments.mjs:47** — `formatBytes` zaokragla `toFixed(1)` do najblizszej dziesiatej, wiec plik 26 214 401 B daje komunikat „ma 25,0 MB i przekracza limit 25 MB" (zdanie wewnetrznie sprzeczne). Zamien obliczenie na zaokraglenie w gore: `const mb = Math.ceil((bytes / (1024 * 1024)) * 10) / 10;` — reszta ciala bez zmian. Dopisz w `scripts/inbox/attachments.test.mjs` przypadek `formatBytes(MAX_ATTACHMENT_BYTES + 1) === '25,1 MB'`.
+- [x] 🟡 [P3] **scripts/inbox/attachments.mjs:96** — domyslka `client = inboxClient` nie ma ani jednego uzycia (wszystkie cztery wywolania wstrzykuja klienta jawnie) i utrzymuje przy zyciu import z linii 14, wiazac modul przygotowania plikow z transportem. Zamien sygnature na `export async function prepareAttachments(paths, { client })` i usun linie 14 `import * as inboxClient from './inbox-client.mjs';`.
+- [x] 🟡 [P3] **scripts/inbox/attachments.mjs:98** — `const list = Array.isArray(paths) ? paths : [paths];` to defensive code na scenariusz niemozliwy: `args.attach` siedzi w `REPEATABLE_KEYS` i jest zawsze tablica albo `undefined` (obsluzone wczesniejszym `if (paths == null) return [];`). Zamien linie 97–99 na `const list = paths ?? [];`, zostawiajac istniejacy `if (list.length === 0) return [];`.
+- [x] 🟡 [P3] **scripts/inbox/inbox-client.mjs:362** — `await mkdir(path.dirname(destPath), { recursive: true })` lezy w tym samym `try` co `pipeline`, wiec EACCES/EROFS/ENOTDIR katalogu docelowego jest raportowany jako `{ retryable: true, message: 'przerwany transfer: ...' }` i konczy sie diagnoza wskazujaca siec zamiast praw do katalogu. Przenies `mkdir` PRZED blok `try` z linii 361 i owin wlasnym `try/catch` rzucajacym `InboxClientError` z nazwa katalogu i przyczyna (jak galaz `rename` w liniach 373–378).
+- [x] 🟡 [P3] **scripts/inbox/reply.mjs:47** — runtime'owy komunikat Usage nie wymienia nowej flagi (w `send.mjs` zostal rozszerzony, w `reply.mjs` zaktualizowano tylko komentarz naglowkowy). Zmien tresc bledu na: `Usage: reply.mjs --thread-id <uuid> [--content "..." | --content-file <sciezka>] [--title "..."] [--to <nick>] [--attach <sciezka>]`.
+- [x] 🟡 [P3] **lib/inbox-api.test.js:565** — granica `MAX_ATTACHMENTS_PER_MESSAGE` nieprzybita (jedyny przypadek to `MAX + 1` odrzucone), wiec zamiana `>` na `>=` w `lib/inbox-api.js:214` przeszlaby niezauwazona. Pod linia 565 dopisz asercje, ze lista o dlugosci dokladnie `MAX_ATTACHMENTS_PER_MESSAGE` (te same pola co `tooMany`, `sha256: SHA_A`, `filename` typu `p0.pdf`, `p1.pdf`, …) daje `status === 200`.
+- [x] 🟡 [P3] **scripts/inbox/attachments.test.mjs:61** — granica progu 25 MB nieprzybita (test uzywa `MAX_ATTACHMENT_BYTES + 1024*1024`), wiec zamiana `>` na `>=` w `scripts/inbox/attachments.mjs:81` rozjechalaby klienta z hubem (`server.js:877` i `lib/inbox-blobs.js:153` uzywaja `>`). Dopisz test tworzacy przez `fs.truncateSync` plik o dokladnie `MAX_ATTACHMENT_BYTES` i asertujacy, ze `prepareAttachments([plik], { client })` zwraca jedna pozycje oraz `client.uploads.length === 1`.
+
+## Operator checklist faza 2
+
+Brak — wszystkie trzy checkboxy `Weryfikacja:` fazy 2 przebiegly zielono (CLI, exit 0), a faza nie ma ani jednego checkboxa `[E2E]`.
 
 ## Faza 3 — Odbiór: render, odhaczenie, zapis do vaulta
 

@@ -2,6 +2,10 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { main, findOriginal } from './reply.mjs';
 
 const THREAD = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -19,10 +23,21 @@ afterEach(() => {
   else process.env.INBOX_TOKEN = savedEnv.token;
 });
 
-function fakeClient(pulled) {
+function fakeClient(pulled, { failUploadOn = null } = {}) {
   const sends = [];
+  const uploads = [];
   return {
     sends,
+    uploads,
+    // Alias na `sends` — testy załączników są lustrem send.test.mjs (ta sama nazwa pola).
+    get calls() {
+      return sends;
+    },
+    uploadBlob: async (sha256, filePath) => {
+      uploads.push({ sha256, filePath });
+      if (failUploadOn !== null && uploads.length === failUploadOn) throw new Error('upload padł');
+      return { v: 1, sha256, deduped: false };
+    },
     pull: async () => pulled,
     send: async (body) => {
       sends.push(body);
@@ -79,4 +94,69 @@ test('findOriginal: nitki przychodzące wygrywają z delegacjami; reply nie jest
   const rows = { threadRows: [{ thread_id: THREAD, type: 'reply' }, { thread_id: THREAD, type: 'task', from_user: 'a' }], delegated: [{ thread_id: THREAD, from_user: 'b' }] };
   assert.equal(findOriginal(rows, THREAD).from_user, 'a');
   assert.equal(findOriginal({ threadRows: [], delegated: [] }, THREAD), null);
+});
+
+// ──────── --attach (IU-5): lustro send.test.mjs ────────
+// Obie komendy mają dzielić ścieżkę załączników, więc obie muszą mieć tę samą siatkę testów:
+// literówka w nazwie argumentu (args.attachments zamiast args.attach) daje zieloną suitę
+// i odpowiedź BEZ plików — cichy rozjazd, którego nikt nie wykryje po stronie send.
+
+function tmpFile(dir, name, content) {
+  const p = path.join(dir, name);
+  fs.writeFileSync(p, content);
+  return p;
+}
+
+test('reply: --attach → bajty lecą przed wiadomością, metadane w body huba', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-reply-'));
+  try {
+    const a = tmpFile(dir, 'zalacznik.pdf', 'A');
+    const client = fakeClient({
+      user: 'kacper',
+      threadRows: [{ thread_id: THREAD, type: 'query', from_user: 'Cave', to_user: 'kacper', title: 'Pytanie' }],
+      delegated: [],
+    });
+
+    await main({ client, argv: argv('--thread-id', THREAD, '--content', 'Odpowiadam', '--attach', a) });
+
+    assert.equal(client.uploads.length, 1);
+    assert.equal(client.calls.length, 1);
+    assert.equal(client.calls[0].attachments.length, 1);
+    assert.equal(client.calls[0].attachments[0].filename, 'zalacznik.pdf');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('reply: pad uploadu → client.send NIE jest wołany w ogóle (R2)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'puls-reply-'));
+  try {
+    const a = tmpFile(dir, 'a.txt', 'A');
+    const client = fakeClient(
+      {
+        user: 'kacper',
+        threadRows: [{ thread_id: THREAD, type: 'query', from_user: 'Cave', to_user: 'kacper', title: 'Pytanie' }],
+        delegated: [],
+      },
+      { failUploadOn: 1 }
+    );
+
+    await assert.rejects(
+      main({ client, argv: argv('--thread-id', THREAD, '--content', 'X', '--attach', a) }),
+      /upload padł/
+    );
+    assert.equal(client.calls.length, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('reply: bez --attach body huba nie dostaje pola attachments', async () => {
+  const client = fakeClient({
+    user: 'kacper',
+    threadRows: [{ thread_id: THREAD, type: 'query', from_user: 'Cave', to_user: 'kacper', title: 'Pytanie' }],
+    delegated: [],
+  });
+  await main({ client, argv: argv('--thread-id', THREAD, '--content', 'X') });
+  assert.equal('attachments' in client.calls[0], false);
 });

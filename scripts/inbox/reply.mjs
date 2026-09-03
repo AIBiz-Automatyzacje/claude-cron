@@ -44,7 +44,7 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
   const content = readContent(args);
 
   if (!threadId || !content) {
-    throw new Error('Usage: reply.mjs --thread-id <uuid> [--content "..." | --content-file <ścieżka>] [--title "..."] [--to <nick>]');
+    throw new Error('Usage: reply.mjs --thread-id <uuid> [--content "..." | --content-file <ścieżka>] [--title "..."] [--to <nick>] [--attach <ścieżka>]');
   }
 
   const pulled = await client.pull();

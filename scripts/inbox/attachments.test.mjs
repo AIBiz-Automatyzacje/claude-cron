@@ -112,6 +112,22 @@ test('prepareAttachments: brak --attach → pusta lista i zero żądań', async 
   assert.equal(client.uploads.length, 0);
 });
 
+test('prepareAttachments: plik DOKŁADNIE na progu 25 MB → przechodzi (granica po stronie dozwolonej)', async () => {
+  // Bez tego przypadku zamiana `>` na `>=` w inspectFiles rozjechałaby klienta z hubem
+  // (server.js i lib/inbox-blobs.js porównują ostro) — plik legalny dla huba byłby odrzucany
+  // lokalnie, a diagnoza wskazywałaby na hub.
+  const edge = path.join(dir, 'na-progu.bin');
+  fs.writeFileSync(edge, '');
+  fs.truncateSync(edge, MAX_ATTACHMENT_BYTES);
+  const client = fakeClient();
+
+  const out = await prepareAttachments([edge], { client });
+
+  assert.equal(out.length, 1);
+  assert.equal(out[0].size_bytes, MAX_ATTACHMENT_BYTES);
+  assert.equal(client.uploads.length, 1);
+});
+
 test('guessMime: znane rozszerzenie → typ, nieznane → null (podpowiedź, nie decyzja)', () => {
   assert.equal(guessMime('a.PNG'), 'image/png');
   assert.equal(guessMime('a.xyz'), null);
@@ -120,4 +136,7 @@ test('guessMime: znane rozszerzenie → typ, nieznane → null (podpowiedź, nie
 
 test('formatBytes: przecinek dziesiętny w komunikacie po polsku', () => {
   assert.equal(formatBytes(26 * 1024 * 1024), '26,0 MB');
+  // Zaokrąglenie w górę: pierwszy bajt ponad limit nie może wyświetlić się jako „25,0 MB",
+  // bo komunikat odmowy przeczyłby wtedy sam sobie.
+  assert.equal(formatBytes(MAX_ATTACHMENT_BYTES + 1), '25,1 MB');
 });

@@ -11,8 +11,6 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import * as inboxClient from './inbox-client.mjs';
-
 // Próg mierzy WYŁĄCZNIE pojedynczy plik — sumy wiadomości nie limitujemy (kwoty miejsca
 // zostały świadomie wycofane). Lustro MAX_ATTACHMENT_BYTES z lib/inbox-api.js: hub egzekwuje
 // tę samą wartość w strumieniu, tutaj jest po to, by nie zaczynać transferu skazanego na 413.
@@ -45,7 +43,10 @@ export function guessMime(filename) {
 
 // Rozmiar dla człowieka w komunikacie odmowy. Przecinek dziesiętny, bo komunikat jest polski.
 export function formatBytes(bytes) {
-  const mb = bytes / (1024 * 1024);
+  // Zaokrąglenie W GÓRĘ, nie do najbliższej dziesiątej: przy 26 214 401 B toFixed(1) dałby
+  // „ma 25,0 MB i przekracza limit 25 MB" — zdanie wewnętrznie sprzeczne dla całego przedziału
+  // 25,00–25,05 MB, w którym odmowa jest jak najbardziej słuszna.
+  const mb = Math.ceil((bytes / (1024 * 1024)) * 10) / 10;
   return `${mb.toFixed(1).replace('.', ',')} MB`;
 }
 
@@ -92,10 +93,11 @@ async function inspectFiles(paths) {
 }
 
 // Zwraca metadane gotowe do przekazania w polu `attachments` wywołania `send`.
-// client wstrzykiwany dla testowalności (mock huba) — wzorzec send.mjs/close.mjs.
-export async function prepareAttachments(paths, { client = inboxClient } = {}) {
-  if (paths == null) return [];
-  const list = Array.isArray(paths) ? paths : [paths];
+// `client` jest WYMAGANY (bez domyślki na inbox-client): ten moduł zna pliki, nie transport,
+// a każdy wywołujący i tak wstrzykuje klienta jawnie — wzorzec send.mjs/reply.mjs/close.mjs.
+// `paths` to wartość `args.attach` z REPEATABLE_KEYS, więc zawsze tablica albo undefined.
+export async function prepareAttachments(paths, { client }) {
+  const list = paths ?? [];
   if (list.length === 0) return [];
 
   const files = await inspectFiles(list);

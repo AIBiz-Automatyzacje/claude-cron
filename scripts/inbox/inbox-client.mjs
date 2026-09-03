@@ -36,6 +36,15 @@ const REQUEST_TIMEOUT_MS = 15_000;
 // przy 300 kB/s to ~87 s. Próg liczony od najgorszego realnego łącza, nie od pomiaru.
 const BINARY_TIMEOUT_MS = 180_000;
 
+// Wstrzykiwalny override limitu binarnego — WYŁĄCZNIE dla testów (wzorzec db.setDbPath /
+// setClaudeBin). Test zwisu transferu inaczej musiałby czekać realne 180 s, a to jedyny
+// sposób, by udowodnić, że limit obejmuje BAJTY, nie tylko nagłówki.
+let binaryTimeoutMs = BINARY_TIMEOUT_MS;
+
+export function setBinaryTimeoutMs(ms) {
+  binaryTimeoutMs = Number.isFinite(ms) && ms > 0 ? ms : BINARY_TIMEOUT_MS;
+}
+
 // Lustro SHA256_PATTERN z lib/inbox-blobs.js — hash trafia do ŚCIEŻKI URL-a i do nazwy pliku
 // tymczasowego, więc walidujemy go po naszej stronie, zanim cokolwiek go użyje (hub waliduje
 // powtórnie; defense-in-depth). Świadomy duplikat przez granicę pakietu, jak EXPECTED_API_VERSION.
@@ -331,7 +340,7 @@ export async function uploadBlob(sha256, filePath) {
         body: bytes,
         headers: { 'Content-Type': 'application/octet-stream' },
         token,
-        timeoutMs: BINARY_TIMEOUT_MS,
+        timeoutMs: binaryTimeoutMs,
       }),
     true
   );
@@ -342,39 +351,63 @@ export async function uploadBlob(sha256, filePath) {
 // obok celu, a `rename` (atomowy w obrębie FS) następuje dopiero po pełnym transferze — przerwane
 // pobranie nie zostawia w vaultcie pliku wyglądającego na kompletny.
 async function attemptBlobDownload({ url, action, token, destPath }) {
-  let res;
+  // Katalog docelowy tworzymy PRZED blokiem transferu i z własną obsługą błędu: EACCES/EROFS
+  // /ENOTDIR to problem uprawnień, nie sieci — zaraportowany jako „przerwany transfer" wysyłałby
+  // diagnozę w stronę Funnela i kończył się bezsensownym retry.
+  const destDir = path.dirname(destPath);
   try {
-    res = await fetchWithTimeout(url, { method: 'GET', timeoutMs: BINARY_TIMEOUT_MS });
+    await mkdir(destDir, { recursive: true });
   } catch (err) {
-    return { retryable: true, message: describeFetchFailure(err, token, BINARY_TIMEOUT_MS) };
+    throw new InboxClientError(`downloadBlob: nie udało się utworzyć katalogu ${destDir} (${err.message}).`);
   }
 
-  if (!res.ok) {
-    const details = await describeErrorBody(res, token);
-    if (res.status >= 500) {
-      return { retryable: true, message: `hub odpowiedział ${res.status}${details}` };
+  // Limit czasu obejmuje CAŁE pobranie, nie tylko nagłówki. fetchWithTimeout rozbraja timer
+  // w `finally`, czyli w chwili, gdy ciało odpowiedzi jeszcze nie zaczęło płynąć — hub albo
+  // Funnel, który odeśle 200 i zamilknie, zawiesiłby transfer BEZ ŻADNEGO limitu (run syncu
+  // wisi do twardego timeoutu executora, a w vaultcie zostaje plik .part rozniesiony przez
+  // Obsidian Sync). Dlatego jeden AbortController na próbę: ten sam sygnał idzie do fetch
+  // i do pipeline, a timer gaśnie dopiero po zapisaniu bajtów.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), binaryTimeoutMs);
+  const tmpFile = path.join(destDir, `.${path.basename(destPath)}.${randomUUID()}.part`);
+  try {
+    let res;
+    try {
+      res = await fetch(url, { method: 'GET', signal: controller.signal });
+    } catch (err) {
+      return { retryable: true, message: describeFetchFailure(err, token, binaryTimeoutMs) };
     }
-    throw new InboxClientError(`Hub Team OS odrzucił żądanie "${action}" (HTTP ${res.status})${details}.`);
-  }
 
-  const tmpFile = path.join(path.dirname(destPath), `.${path.basename(destPath)}.${randomUUID()}.part`);
-  try {
-    await mkdir(path.dirname(destPath), { recursive: true });
-    await pipeline(Readable.fromWeb(res.body), createWriteStream(tmpFile));
-  } catch (err) {
-    // Zerwanie w połowie jest RETRYOWALNE (GET nie ma skutków ubocznych), ale plik tymczasowy
-    // ginie tu i teraz — sprzątanie nie może czekać na kolejną próbę ani na sukces.
-    await removeTempFile(tmpFile);
-    return { retryable: true, message: `przerwany transfer: ${redactToken(err.message, token)}` };
-  }
+    if (!res.ok) {
+      const details = await describeErrorBody(res, token);
+      if (res.status >= 500) {
+        return { retryable: true, message: `hub odpowiedział ${res.status}${details}` };
+      }
+      throw new InboxClientError(`Hub Team OS odrzucił żądanie "${action}" (HTTP ${res.status})${details}.`);
+    }
 
-  try {
-    await rename(tmpFile, destPath);
-  } catch (err) {
-    // Pad finalizacji (brak praw, EXDEV) nie jest awarią transportu — ponowienie pobrania
-    // niczego nie naprawi, więc czytelny błąd zamiast cichego retry.
-    await removeTempFile(tmpFile);
-    throw new InboxClientError(`downloadBlob: nie udało się zapisać pliku ${destPath} (${err.message}).`);
+    try {
+      await pipeline(Readable.fromWeb(res.body), createWriteStream(tmpFile), { signal: controller.signal });
+    } catch (err) {
+      // Zerwanie w połowie jest RETRYOWALNE (GET nie ma skutków ubocznych), ale plik tymczasowy
+      // ginie tu i teraz — sprzątanie nie może czekać na kolejną próbę ani na sukces.
+      await removeTempFile(tmpFile);
+      if (err && (err.name === 'AbortError' || err.code === 'ABORT_ERR')) {
+        return { retryable: true, message: describeFetchFailure({ name: 'AbortError' }, token, binaryTimeoutMs) };
+      }
+      return { retryable: true, message: `przerwany transfer: ${redactToken(err.message, token)}` };
+    }
+
+    try {
+      await rename(tmpFile, destPath);
+    } catch (err) {
+      // Pad finalizacji (brak praw, EXDEV) nie jest awarią transportu — ponowienie pobrania
+      // niczego nie naprawi, więc czytelny błąd zamiast cichego retry.
+      await removeTempFile(tmpFile);
+      throw new InboxClientError(`downloadBlob: nie udało się zapisać pliku ${destPath} (${err.message}).`);
+    }
+  } finally {
+    clearTimeout(timer);
   }
 
   const { size } = await stat(destPath);

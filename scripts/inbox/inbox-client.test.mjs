@@ -16,6 +16,7 @@ import {
   claimQuery,
   uploadBlob,
   downloadBlob,
+  setBinaryTimeoutMs,
   InboxClientError,
 } from './inbox-client.mjs';
 
@@ -486,6 +487,59 @@ test('downloadBlob: zerwanie w połowie → brak pliku docelowego i brak śmieci
   assert.equal(fs.existsSync(dest), false);
   // …ani niedokończonego ogona po transferze.
   assert.deepEqual(fs.readdirSync(tmpDir), []);
+});
+
+test('downloadBlob: strumień zamilkł po pierwszym chunku → limit czasu i pusty katalog docelowy', async () => {
+  const dest = path.join(tmpDir, 'wisi.pdf');
+  // Hub/Funnel odsyła 200 i przestaje wysyłać bajty, nie zamykając strumienia. Limit czasu MUSI
+  // obejmować transfer, nie tylko nagłówki — inaczej run syncu wisi do twardego timeoutu
+  // executora, a w vaultcie zostaje plik .part rozniesiony przez Obsidian Sync.
+  const stalled = () => ({
+    ok: true,
+    status: 200,
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('pierwszy-chunk'));
+        // celowo: żadnego close() ani error() — nadawca po prostu milczy
+      },
+    }),
+  });
+  mockFetch([{ response: stalled() }, { response: stalled() }]);
+  setBinaryTimeoutMs(60);
+  try {
+    await assert.rejects(downloadBlob(SHA, dest), (err) => {
+      assert.ok(err instanceof InboxClientError);
+      assert.match(err.message, /limit czasu 60 ms/);
+      return true;
+    });
+  } finally {
+    setBinaryTimeoutMs(null);
+  }
+
+  assert.equal(fs.existsSync(dest), false);
+  // Ani pliku docelowego, ani ogona .part po przerwanym transferze.
+  assert.deepEqual(fs.readdirSync(tmpDir), []);
+});
+
+test('downloadBlob: niezapisywalny katalog docelowy → błąd o katalogu, nie „przerwany transfer"', async () => {
+  const blocked = path.join(tmpDir, 'zablokowany');
+  fs.mkdirSync(blocked);
+  fs.chmodSync(blocked, 0o500); // brak prawa zapisu — mkdir podkatalogu padnie na EACCES
+  const dest = path.join(blocked, 'podkatalog', 'plik.pdf');
+  const calls = mockFetch([{ response: binaryResponse(['abc']) }]);
+
+  try {
+    await assert.rejects(downloadBlob(SHA, dest), (err) => {
+      assert.ok(err instanceof InboxClientError);
+      assert.match(err.message, /nie udało się utworzyć katalogu/);
+      assert.ok(!/przerwany transfer/.test(err.message));
+      return true;
+    });
+    // Diagnoza praw do katalogu nie jest awarią transportu — żądanie nie poleciało w ogóle.
+    assert.equal(calls.length, 0);
+  } finally {
+    fs.chmodSync(blocked, 0o700);
+  }
 });
 
 test('downloadBlob: 404 (brak uprawnienia albo brak bajtów) → czytelny błąd bez retry, zero plików', async () => {
