@@ -68,6 +68,23 @@ export function evaluateHeartbeat(raw, nowMs) {
   return { ok: true, ageMin: Math.max(0, (nowMs - stampMs) / 60000) };
 }
 
+// Alarm mówi TYLKO tyle, że dane nie płyną — nie mówi, która maszyna zawiniła.
+// 12.08.2026 poprzednia wersja tej instrukcji kazała od razu restartować klienta na
+// VPS, a stał wtedy Obsidian na Macu (VPS przez cały czas raportował „Fully synced").
+// Ręczny `setsid nohup ob sync` jest dodatkowo szkodliwy: na VPS sync trzyma systemd,
+// który natychmiast wstawia własną instancję — druga startuje obok i obie biją się
+// o blokadę vaulta („Another sync instance is already running").
+const NAPRAWA =
+  'Najpierw ustal, która strona stoi — alarm tego nie rozstrzyga.\n' +
+  '\n' +
+  '1. Na VPS: journalctl -u obsidian-sync -n 20 --no-pager\n' +
+  '   Widzisz świeże „Fully synced" → VPS jest zdrowy, winny jest Obsidian na Macu:\n' +
+  '   przeładuj go (Cmd+Q i start) — potrafi wisieć „połączony", nie przesyłając nic.\n' +
+  '2. Brak świeżych wpisów albo usługa martwa → restart po stronie VPS:\n' +
+  '   systemctl restart obsidian-sync\n' +
+  '\n' +
+  'Nie startuj `ob sync` ręcznie — na VPS zarządza nim systemd i powstaną dwie instancje.';
+
 async function readIfExists(filePath) {
   try {
     return await fs.readFile(filePath, 'utf8');
@@ -172,9 +189,7 @@ async function main() {
         : `plik ${args.check} nie zawiera czytelnego pola "updated:"`;
       console.error(
         `[heartbeat] SYNCHRONIZACJA NIE DZIAŁA — ${why}.\n` +
-        'Druga maszyna nie dostarczyła znacznika. Zrestartuj klienta sync na VPS:\n' +
-        '  pkill -f "ob sync --path"\n' +
-        '  setsid nohup ob sync --path /home/claude/vault --continuous < /dev/null > ~/ob-sync.log 2>&1 &'
+        `Druga maszyna nie dostarczyła znacznika.\n\n${NAPRAWA}`
       );
       process.exit(1);
     }
@@ -184,9 +199,7 @@ async function main() {
       console.error(
         `[heartbeat] SYNCHRONIZACJA STOI — znacznik ${args.check} nie odświeżył się od ${age} min (próg: ${maxAgeMin}).\n` +
         'Uwaga: status procesu i UI Obsidiana mogą przy tym pokazywać „aktywny" — nie sugeruj się nimi.\n' +
-        'Restart klienta sync na VPS:\n' +
-        '  pkill -f "ob sync --path"\n' +
-        '  setsid nohup ob sync --path /home/claude/vault --continuous < /dev/null > ~/ob-sync.log 2>&1 &'
+        `\n${NAPRAWA}`
       );
       process.exit(1);
     }
