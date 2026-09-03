@@ -141,6 +141,9 @@ bash scripts/install-vps.test.sh   # 123 PASS
 - `docs/active/team-os-onboarding-instalatory/review-faza-3.md` — P1-1 (pełny failure scenario),
   P2-1 (kontrakt z `CLAUDE.md` bez testu).
 - `CLAUDE.md`, sekcja „Team OS — Skrzynka" — bullet o `resolveInboxSecretFile` jako granicy bezpieczeństwa.
+- `docs/solutions/auth-issues/2026-09-03-tresc-nadawcy-jako-akcja-uprawnienie-i-kod-w-skrzynce.md` —
+  ta sama klasa na kanale załączników: treść nadawcy awansowała do roli sterującej (polecenie w
+  `Skrzynka.md`, `mime` w nagłówku, `sha256` jako uprawnienie).
 
 ## Kontekst
 

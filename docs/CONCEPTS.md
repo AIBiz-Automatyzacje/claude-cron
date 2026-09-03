@@ -71,8 +71,10 @@ label launchd) świadomie zostają przy starej nazwie `claude-cron` — zmiana p
 
 Flaga w `state` (`client` | `agent`, brak flagi = `client`) rozstrzygająca, które joby skrzynki seeduje
 dana instalacja: `client` = sync vaulta (maszyna człowieka), `agent` = auto-reply (maszyna 24/7).
-Ustawiana **wyłącznie przez instalatory**, nigdy backfillowana w `migrate()`; zmiana roli **nie wyłącza**
-joba z poprzedniej roli. → [CLAUDE.md § Team OS — Skrzynka](../CLAUDE.md)
+Ustawiana **wyłącznie przez instalatory**, nigdy backfillowana w `migrate()`. Przy **jawnej** roli seed
+przy starcie WYŁĄCZA włączony job roli przeciwnej (`enforceRoleExclusivity`) — dwie maszyny renderujące
+Skrzynkę pod Obsidian Sync uszkadzają plik; joba nigdy nie kasuje, a ręczne wyłączenia joba własnej roli
+zostają nietknięte. → [CLAUDE.md § Team OS — Skrzynka](../CLAUDE.md)
 
 ## Routine (`routine=1`)
 
