@@ -1,5 +1,5 @@
 Branch: `feature/zalaczniki-w-skrzynce`
-Ostatnia aktualizacja: 2026-09-03 (faza 2)
+Ostatnia aktualizacja: 2026-09-03 (faza 3)
 
 # Załączniki w Skrzynce Team OS — kontekst
 
@@ -62,3 +62,24 @@ przy pierwszym pobraniu, więc wcześniej nie ma czego wskazać).
   te bajty" w `handleSend` oraz `MAX_ATTACHMENTS_PER_MESSAGE = 10`.
 - **Zero nowych zależności.** Audyt error-handlingu diffu: brak `console.log` i pustych `catch`;
   jedyny nowy log to `console.warn` z prefiksem modułu (konwencja projektu, lustro `lib/inbox-blobs.js`).
+
+### 2026-09-03 — Faza 3: Odbiór — render, odhaczenie, zapis do vaulta (IU-6, IU-7, IU-8)
+
+- **Zaimplementowane:** wiersz załącznika w trzech stanach renderowany bezstanowo przy każdym pullu
+  (`scripts/inbox/inbox-pull.mjs`); osobny parser odhaczonych pobrań `parseRequestedDownloads`, nietykający
+  `parseCheckedCallouts` (`scripts/inbox/inbox-push.mjs`); pobranie do `Zasoby/inbox-zalaczniki/RRRR-MM/`
+  z sanityzacją nazwy sprawdzającą EFEKT ścieżki i no-opem na maszynie w roli `agent`
+  (`scripts/inbox/attachments.mjs`, `scripts/inbox/env-loader.mjs`); sekwencja syncu push → pobrania → pull
+  w jednym procesie (`scripts/inbox/inbox-sync.mjs` + nowy `inbox-sync.test.mjs`).
+- **Walidacja:** pełna suita `node --test` — 1236/1236 PASS. `server.inbox.http.test.js` 24/24 w izolacji,
+  trzy przebiegi z rzędu. Projekt nie ma typecheckera, lintera ani buildu.
+- **Naprawa poza IU:** FAIL testu „PUT blob: ciało większe niż limit → 413" był brany za flake
+  infrastruktury (faza 2 i raporty builderów), a okazał się defektem serwera: natychmiastowy `req.destroy()`
+  po odmowie kasuje odpowiedź RST-em w buforze klienta. Odmowa dla uprawnionego klienta idzie teraz po
+  drenażu ciała z capem i watchdogiem bezczynności — szczegóły i uzasadnienie w planie technicznym,
+  sekcja „Odchylenia — faza 3".
+- **Odchylenia od planu:** opisane w planie technicznym
+  (`docs/plans/2026-09-03-001-feat-zalaczniki-w-skrzynce-plan.md`, sekcja „Odchylenia — faza 3").
+- **Zero nowych zależności.** Audyt error-handlingu diffu: zero pustych `catch` (każdy raportuje
+  `console.warn`/`console.error` z prefiksem modułu — konwencja skryptów CLI projektu), zero `console.log`
+  w kodzie serwera.

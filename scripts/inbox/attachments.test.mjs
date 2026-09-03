@@ -7,7 +7,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { prepareAttachments, guessMime, formatBytes, MAX_ATTACHMENT_BYTES } from './attachments.mjs';
+import {
+  MAX_ATTACHMENT_BYTES,
+  ROLE_AGENT,
+  downloadRequestedAttachments,
+  formatBytes,
+  guessMime,
+  prepareAttachments,
+  resolveAttachmentTarget,
+} from './attachments.mjs';
+import { renderAttachmentLine } from './inbox-pull.mjs';
 
 let dir;
 beforeEach(() => {
@@ -139,4 +148,215 @@ test('formatBytes: przecinek dziesiętny w komunikacie po polsku', () => {
   // Zaokrąglenie w górę: pierwszy bajt ponad limit nie może wyświetlić się jako „25,0 MB",
   // bo komunikat odmowy przeczyłby wtedy sam sobie.
   assert.equal(formatBytes(MAX_ATTACHMENT_BYTES + 1), '25,1 MB');
+});
+
+// ──────── odbiór: pobranie odhaczonych załączników (IU-8) ────────
+// Mockowany wyłącznie klient huba (pull/downloadBlob); Skrzynka, katalog załączników i pliki
+// są PRAWDZIWE — testowanym zachowaniem jest właśnie to, co ląduje na dysku i gdzie.
+// Wiersz Skrzynki budujemy prawdziwym renderem (roundtrip render → odhaczenie → pobranie),
+// bo kontrakt render↔parser↔zapis jest najkruchszym miejscem tej ścieżki.
+
+const ATT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const ATT_ID2 = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const MSG_AT = '2026-07-24T07:12:00.000Z';
+const MONTH = '2026-07';
+
+function sha256Of(content) {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+// Skrzynka z odhaczonymi wierszami „Pobierz" — linie pochodzą z prawdziwego renderu,
+// więc test padnie, gdy render i parser się rozjadą.
+function skrzynkaWithChecked(attachments) {
+  const lines = attachments.map(att =>
+    renderAttachmentLine(att, MONTH, () => false).replace('- [ ] Pobierz', '- [x] Pobierz')
+  );
+  return [
+    '# Skrzynka',
+    '',
+    '%% inbox:items:start %%',
+    '> [!todo]- Wiadomosc z plikiem',
+    ...lines,
+    '%% inbox:items:end %%',
+    '',
+  ].join('\n');
+}
+
+function attachment({ id = ATT_ID, filename = 'raport.pdf', content = 'PDF-1' } = {}) {
+  return { id, filename, size_bytes: content.length, mime: 'application/pdf', sha256: sha256Of(content), content };
+}
+
+// Hub-atrapa: `pull` oddaje jedną wiadomość z podanymi załącznikami, `downloadBlob` zapisuje
+// bajty pod wskazaną ścieżką. `done` istnieje po to, by test R9 mógł udowodnić, że NIKT go
+// nie woła — nie po to, by go obsłużyć.
+function fakeHub(attachments, { onDownload = null } = {}) {
+  const calls = [];
+  const byHash = new Map(attachments.map(a => [a.sha256, a.content]));
+  return {
+    calls,
+    pull: async () => {
+      calls.push('pull');
+      const message = {
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        created_at: MSG_AT,
+        attachments: attachments.map(({ content, ...meta }) => meta),
+      };
+      return { v: 1, user: 'alicja', active: [message], threadRows: [message], delegated: [] };
+    },
+    downloadBlob: async (sha256, destPath) => {
+      calls.push(`downloadBlob:${path.basename(destPath)}`);
+      if (onDownload) return onDownload(sha256, destPath);
+      fs.writeFileSync(destPath, byHash.get(sha256) ?? '');
+      return { path: destPath, size: (byHash.get(sha256) ?? '').length };
+    },
+    done: async () => {
+      calls.push('done');
+      throw new Error('done nie powinno byc wolane dla akcji lokalnej');
+    },
+  };
+}
+
+function vault(skrzynkaContent) {
+  const skrzynka = path.join(dir, 'Skrzynka.md');
+  fs.writeFileSync(skrzynka, skrzynkaContent, 'utf8');
+  return { skrzynka, attachmentsDir: path.join(dir, 'Zasoby', 'inbox-zalaczniki') };
+}
+
+test('odhaczony zalacznik → plik laduje w katalogu miesiaca pod sanityzowana nazwa (happy path)', async () => {
+  const att = attachment();
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  const client = fakeHub([att]);
+
+  const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  const target = path.join(attachmentsDir, MONTH, 'raport.pdf');
+  assert.equal(fs.readFileSync(target, 'utf8'), 'PDF-1');
+  assert.equal(stats.downloaded, 1);
+});
+
+test('pobranie jest akcja WYLACZNIE lokalna — zero wywolan zmieniajacych stan huba (R9)', async () => {
+  const att = attachment();
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  const client = fakeHub([att]);
+
+  await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.deepEqual(client.calls, ['pull', 'downloadBlob:raport.pdf']);
+  assert.ok(!client.calls.includes('done'), 'done() nie moze pasc przy pobraniu');
+});
+
+test('nazwa "../../../etc/passwd" → zapis WEWNATRZ katalogu miesiaca, nigdy poza nim (R14)', async () => {
+  const att = attachment({ filename: '../../../etc/passwd', content: 'ZLE' });
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  const client = fakeHub([att]);
+
+  await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, 'passwd'), 'utf8'), 'ZLE');
+  // Nic nie wyszlo poza katalog miesiaca — ani do vaulta, ani wyzej.
+  assert.deepEqual(fs.readdirSync(path.join(attachmentsDir, MONTH)), ['passwd']);
+  assert.deepEqual(fs.readdirSync(attachmentsDir), [MONTH]);
+});
+
+test('resolveAttachmentTarget: separator, znak sterujacy i ".." sprowadzone do basename (R14)', () => {
+  const base = path.join(dir, 'zal');
+  const cases = [
+    ['podkatalog/plik.txt', 'plik.txt'],
+    // Separator Windows na POSIX-ie nie jest separatorem dla `path.basename`, wiec zostaje
+    // WYCIETY ze srodka nazwy (nie rozbija sciezki). Nazwa wychodzi brzydka, ale wlasnosc,
+    // ktora chronimy, to EFEKT: zero separatorow i zapis w katalogu miesiaca (asercja nizej).
+    ['..\\..\\plik.txt', '....plik.txt'],
+    // Znak sterujacy budowany z kodu, nie wklejony do zrodla — niewidzialny znak w pliku
+    // testu jest pulapka dla kazdego, kto go pozniej czyta (wzorzec neutralizeMarkers).
+    [`plik${String.fromCharCode(0x01)}.txt`, 'plik.txt'],
+    ['..', 'zalacznik'],
+    ['.', 'zalacznik'],
+    ['', 'zalacznik'],
+  ];
+  for (const [raw, expected] of cases) {
+    const out = resolveAttachmentTarget(base, MONTH, raw);
+    assert.notEqual(out, null, `brak wyniku dla ${JSON.stringify(raw)}`);
+    assert.equal(out.name, expected, `nazwa dla ${JSON.stringify(raw)}`);
+    // Sedno: sprawdzamy EFEKT — wynik po resolve lezy w katalogu miesiaca.
+    assert.equal(path.dirname(out.target), path.resolve(base, MONTH));
+  }
+});
+
+test('powtorne pobranie tego samego pliku → brak drugiego pliku i brak transferu (idempotencja)', async () => {
+  const att = attachment();
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  fs.mkdirSync(path.join(attachmentsDir, MONTH), { recursive: true });
+  fs.writeFileSync(path.join(attachmentsDir, MONTH, 'raport.pdf'), att.content);
+  const client = fakeHub([att]);
+
+  const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.deepEqual(fs.readdirSync(path.join(attachmentsDir, MONTH)), ['raport.pdf']);
+  assert.equal(stats.already, 1);
+  assert.equal(stats.downloaded, 0);
+  assert.deepEqual(client.calls, ['pull'], 'bajty nie leca drugi raz');
+});
+
+test('kolizja nazw przy INNEJ tresci → drugi plik z sufiksem, pierwszy nietkniety', async () => {
+  const att = attachment({ id: ATT_ID2, content: 'NOWA TRESC' });
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  fs.mkdirSync(path.join(attachmentsDir, MONTH), { recursive: true });
+  fs.writeFileSync(path.join(attachmentsDir, MONTH, 'raport.pdf'), 'STARA TRESC');
+  const client = fakeHub([att]);
+
+  const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, 'raport.pdf'), 'utf8'), 'STARA TRESC');
+  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, 'raport (2).pdf'), 'utf8'), 'NOWA TRESC');
+  assert.equal(stats.downloaded, 1);
+});
+
+test('przerwane pobranie → brak pliku docelowego, stan pozostaje "niepobrany"', async () => {
+  const att = attachment();
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  const client = fakeHub([att], {
+    onDownload: async () => { throw new Error('przerwany transfer'); },
+  });
+
+  const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.equal(fs.existsSync(path.join(attachmentsDir, MONTH, 'raport.pdf')), false);
+  assert.equal(stats.failed, 1);
+  assert.equal(stats.downloaded, 0);
+});
+
+test('rola maszyny = agent → krok pobran jest no-opem mimo odhaczonych checkboxow (R10)', async () => {
+  const att = attachment();
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  const client = fakeHub([att]);
+
+  const stats = await downloadRequestedAttachments({ client, role: ROLE_AGENT, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.deepEqual(client.calls, [], 'agent nie dotyka huba');
+  assert.equal(fs.existsSync(path.join(attachmentsDir, MONTH)), false);
+  assert.equal(stats.role_skipped, true);
+});
+
+test('brak odhaczonych pobran → zero zadan do huba (najczestszy przebieg syncu)', async () => {
+  const att = attachment();
+  const nieodhaczona = skrzynkaWithChecked([att]).replace('- [x] Pobierz', '- [ ] Pobierz');
+  const { skrzynka, attachmentsDir } = vault(nieodhaczona);
+  const client = fakeHub([att]);
+
+  const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.deepEqual(client.calls, []);
+  assert.equal(stats.downloaded, 0);
+});
+
+test('odhaczony zalacznik nieznany hubowi → pominiety bez rzutu', async () => {
+  const att = attachment();
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  // Hub oddaje INNY zalacznik niz odhaczony (watek domkniety, bajty wygasly).
+  const client = fakeHub([attachment({ id: ATT_ID2, filename: 'inny.pdf', content: 'X' })]);
+
+  const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.equal(stats.skipped, 1);
+  assert.equal(stats.downloaded, 0);
 });

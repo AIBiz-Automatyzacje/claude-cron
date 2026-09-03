@@ -7,6 +7,7 @@
 // Odpalane co 1 min przez launchd/cron. Zero Claude CLI.
 
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -56,9 +57,85 @@ function delegateIcon(iso) {
   return hours >= 48 ? '⚠️' : '⏳';
 }
 
+// ──────── załączniki (R5/R7/R8) ────────
+// Katalog pobranych plików jest VAULT-WZGLĘDNY, bo trafia do wikilinku Obsidiana;
+// bezwzględną ścieżkę tego samego katalogu daje `INBOX_ATTACHMENTS_DIR` (env-loader, IU-8).
+export const ATTACHMENTS_REL_DIR = 'Zasoby/inbox-zalaczniki';
+
+// Podkatalog miesiąca liczony z czasu WIADOMOŚCI, nie z `Date.now()`: wiersz przerenderowany
+// po przełomie miesiąca musi wskazywać ten sam plik, a `writeIfChanged` nie może dostać
+// zmiennej w czasie treści (inaczej zapis co minutę i wyścig z Obsidian Sync).
+// Eksportowana, bo TEN SAM podkatalog musi wyliczyć krok pobrań (attachments.mjs): render
+// sprawdza obecność pliku pod <dir>/<miesiąc>/<nazwa>, downloader pod tą ścieżką zapisuje.
+// Rozjazd o jeden miesiąc znaczy „pobrane, a checkbox wraca przy każdym syncu" — to kontrakt,
+// nie przypadkowa duplikacja, więc żyje w jednej funkcji.
+export function attachmentMonth(iso) {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// Nazwa pliku pochodzi z SIECI (metadane nadawcy) i trafia i na dysk, i do linii Skrzynki
+// o kontrakcie liniowym. Hub odrzuca separatory i znaki sterujące (isUnsafeFilename), ale
+// render nie może na tym polegać — pojedynczy `\n` w nazwie pozwoliłby wstrzyknąć odhaczony
+// checkbox, który inbox-push odczytałby jako akcję człowieka. `%` neutralizujemy, bo z niego
+// zbudowany jest marker `%% att:… %%` — nazwa nie może udawać cudzego markera.
+export function safeAttachmentName(raw) {
+  const base = path.basename(String(raw ?? '')).replace(/[/\\:%\u0000-\u001f]/g, '').trim();
+  return base === '' || base === '.' || base === '..' ? 'zalacznik' : base;
+}
+
+function formatBytes(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n < 0) return null;
+  if (n < 1024) return `${n} B`;
+  const unit = n < 1024 * 1024 ? 'kB' : 'MB';
+  const value = n < 1024 * 1024 ? n / 1024 : n / (1024 * 1024);
+  return `${value.toFixed(1).replace('.', ',')} ${unit}`;
+}
+
+// Stan „pobrany" wynika WYŁĄCZNIE z obecności pliku na dysku (R8) — zero zapisu stanu
+// gdziekolwiek, bo blok między markerami jest nadpisywany w całości przy każdym pullu.
+function defaultIsDownloaded(month, filename) {
+  const dir = process.env.INBOX_ATTACHMENTS_DIR;
+  if (!dir) return false;
+  return fsSync.existsSync(path.join(dir, month, filename));
+}
+
+// Trzy stany, rozstrzygane wyłącznie dyskiem i metadanymi:
+// 1) plik na dysku → osadzenie, BEZ checkboxa (odhaczenie już nic nie znaczy);
+// 2) bajty na hubie → checkbox „Pobierz" (akcja lokalna, patrz IU-7 — nigdy nie idzie do huba);
+// 3) `blob_available === false` → adnotacja o wygaśnięciu, bez checkboxa (po limicie 90 dni
+//    to ścieżka normalna, nie przypadek brzegowy). Brak pola = bajty są (hub sprzed retencji).
+export function renderAttachmentLine(att, month, isDownloaded = defaultIsDownloaded) {
+  const name = safeAttachmentName(att.filename);
+  const marker = `%% att:${att.id} %%`;
+  const meta = [name, formatBytes(att.size_bytes), att.mime].filter(Boolean).join(' · ');
+
+  if (isDownloaded(month, name)) {
+    return `>   - <span class="os-att">📎 ${name}</span><br>![[${ATTACHMENTS_REL_DIR}/${month}/${name}]] ${marker}`;
+  }
+  if (att.blob_available === false) {
+    return `>   - <span class="os-att os-att-gone">📎 ${meta} · wygasł — poproś nadawcę o ponowne wysłanie</span> ${marker}`;
+  }
+  return `>   - [ ] Pobierz — <span class="os-att">📎 ${meta}</span> ${marker}`;
+}
+
+// Wiersze renderowane PRZY SWOJEJ wiadomości (R5) i wcięte jak linie kontynuacji, więc
+// należą do jej pozycji listy. Każdy niesie WŁASNY marker `%% att:<uuid> %%` — istniejący
+// `%% id:… thread:… %%` identyfikuje wyłącznie kotwicę wątku i nie rozróżnia ani wiadomości
+// w wątku, ani plików w wiadomości. Rekord bez id albo bez nazwy jest pomijany: bez id nie
+// da się go odhaczyć, a wiersz-widmo tylko myliłby człowieka.
+function renderAttachmentLines(m, isDownloaded) {
+  const list = Array.isArray(m.attachments) ? m.attachments : [];
+  const month = attachmentMonth(m.created_at);
+  return list
+    .filter(att => att && typeof att.id === 'string' && att.id !== '' && att.filename)
+    .map(att => renderAttachmentLine(att, month, isDownloaded));
+}
+
 // Renderuje JEDNĄ wiadomość nitki jako li z awatarem: człowiek = inicjał w kolorze osoby,
 // agent (payload.auto_reply) = 🤖 + badge AUTO + prefix zdjęty z treści + linia „Źródło:" jako pill.
-function renderMessage(m) {
+function renderMessage(m, isDownloaded = defaultIsDownloaded) {
   const auto = isAutoReply(m);
   const raw = auto ? (m.content || '').replace(AUTO_REPLY_PREFIX, '') : (m.content || '');
   const lines = raw.trim().split('\n').map(l => {
@@ -70,7 +147,7 @@ function renderMessage(m) {
     : `<span class="os-who">@${m.from_user}</span> <span class="os-time">· ${fmtTimeShort(m.created_at)}</span>`;
   const head = `> - ${avatarSpan(m.from_user, { bot: auto })}${who}<br>${lines[0] || ''}`;
   const cont = lines.slice(1).map(l => `>   ${l}`);
-  return [head, ...cont].join('\n');
+  return [head, ...cont, ...renderAttachmentLines(m, isDownloaded)].join('\n');
 }
 
 // Renderuje JEDEN callout na cały wątek — nitka chronologicznie w środku.
@@ -78,7 +155,8 @@ function renderMessage(m) {
 // anchor = pierwsza aktywna (nie-done) wiadomość DO MNIE — jej id/typ trafiają do markera i checkboxa
 //          (kontrakt push-job: SELECT WHERE id, walidacja to_user + typ → akcja).
 // me = tożsamość z huba (pole `user` z pull) — kierunek w metadanych („Ty → @x" vs „od @x").
-export function renderThreadCallout(thread, anchor, me) {
+// isDownloaded wstrzykiwane dla testowalności (stan załącznika = obecność pliku na dysku).
+export function renderThreadCallout(thread, anchor, me, isDownloaded = defaultIsDownloaded) {
   const root = thread[0];
   const threadId = root.thread_id || root.id;
   const name = CALLOUT_NAME[root.type] || 'note';
@@ -98,7 +176,7 @@ export function renderThreadCallout(thread, anchor, me) {
     ? '<span class="os-hint">odhaczenie odsyła potwierdzenie i zamyka wątek</span>'
     : '<span class="os-hint">dopytaj: `/deleguj reply --thread-id <id z dołu>` albo odhacz ✅</span>';
 
-  const messages = thread.map(renderMessage).join('\n');
+  const messages = thread.map(m => renderMessage(m, isDownloaded)).join('\n');
 
   return [
     `> [!${name}${isFresh ? '|fresh' : ''}]- ${root.title}`,

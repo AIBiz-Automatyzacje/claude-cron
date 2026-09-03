@@ -852,17 +852,93 @@ async function handleInbox(req, res, match) {
 // Odmowa na ścieżce binarnej. Destroy dopiero po flushu odpowiedzi (wzorzec 413 z /ask):
 // klient PUT-a może wciąż pompować megabajty, a bez destroy Node dumpowałby resztę
 // strumienia w nieskończoność. Kody intruzów (403/404/405) idą bez treści.
-function rejectBlob(req, res, decision) {
-  // Connection: close, bo za chwilę ubijamy gniazdo. Bez tego klient z pulą połączeń
-  // (undici/fetch) uznaje socket za żywy, wysyła nim NASTĘPNE żądanie i dostaje twarde
-  // „fetch failed" — odmowa jednego transferu psułaby wtedy kolejną, poprawną operację.
+// Odpowiedź wysłana, gdy klient jest w ŚRODKU pompowania megabajtów, a gniazdo zaraz potem
+// ubite, dociera do niego jako RST — a RST kasuje w jego buforze naszą odpowiedź, więc fetch
+// widzi „fetch failed" zamiast 413 i nadawca nie dowiaduje się, dlaczego plik nie przeszedł.
+// Wynik zależy od obciążenia maszyny, czyli ten sam przypadek raz przechodzi, raz nie. Dla
+// klienta UPRAWNIONEGO (token trafiony) wypijamy więc resztę ciała w próżnię i odpowiadamy
+// dopiero potem. Bajtów nigdzie nie zapisujemy, a drenaż ma twardy cap: kto po odmowie pompuje
+// dalej niż dwukrotność limitu, nie jest już uczciwym nadawcą i dostaje ubite gniazdo.
+const BLOB_DRAIN_CAP_FACTOR = 2;
+
+// Bezczynność, po której przestajemy czekać na resztę ciała. Watchdog mierzy PRZERWĘ między
+// chunkami, nie łączny czas: uczciwy nadawca pompuje bez ustanku (25 MB przez wolne łącze to
+// minuty i ma prawo je dostać), a klient, który zadeklarował 26 MB i zamilkł po 16 bajtach,
+// nie zablokuje odmowy na zawsze.
+const BLOB_DRAIN_IDLE_MS = 1000;
+
+// Callback dostaje `true`, gdy drenaż trzeba było przerwać (cap albo cisza klienta), `false`
+// gdy klient sam dokończył lub zerwał transfer. Woła się dokładnie raz — 'end', 'error',
+// 'close', cap i watchdog potrafią przyjść w dowolnej kombinacji.
+function drainRequestBody(req, capBytes, onSettled) {
+  let seen = 0;
+  let settled = false;
+  let idleTimer = null;
+  const settle = (aborted) => {
+    if (settled) return;
+    settled = true;
+    if (idleTimer) clearTimeout(idleTimer);
+    onSettled(aborted);
+  };
+  const armIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      // pause(): dalsze bajty zostają w buforach socketu, aż zamkniemy gniazdo.
+      req.pause();
+      settle(true);
+    }, BLOB_DRAIN_IDLE_MS);
+    idleTimer.unref();
+  };
+  // Strumień bywa już domknięty, zanim tu trafimy: `for await` w writeBlobFromStream niszczy
+  // `req` przy przerwaniu pętli (limit, rozjazd hasha). Wtedy 'end' NIE przyjdzie już nigdy,
+  // a drenaż czekałby na nie w nieskończoność — razem z odpowiedzią, której klient nie dostanie.
+  if (req.readableEnded || req.destroyed || !req.readable) return settle(false);
+  req.once('close', () => settle(false));
+  req.on('data', (chunk) => {
+    seen += chunk.length;
+    if (seen > capBytes) {
+      req.pause();
+      settle(true);
+      return;
+    }
+    armIdleTimer();
+  });
+  req.once('end', () => settle(false));
+  req.once('error', () => settle(true));
+  armIdleTimer();
+  req.resume();
+}
+
+// Connection: close + destroy po flushu. Bez nagłówka klient z pulą połączeń (undici/fetch)
+// uznaje socket za żywy, wysyła nim NASTĘPNE żądanie i dostaje twarde „fetch failed" —
+// odmowa jednego transferu psułaby wtedy kolejną, poprawną operację.
+function closeSocketAfterResponse(req, res) {
   res.setHeader('Connection', 'close');
   res.once('finish', () => req.destroy());
-  if (decision.json) {
-    return json(res, decision.json, decision.status);
+}
+
+function drainThenRespond(req, res, maxBytes, send) {
+  drainRequestBody(req, maxBytes * BLOB_DRAIN_CAP_FACTOR, (overflowed) => {
+    if (overflowed) closeSocketAfterResponse(req, res);
+    send();
+  });
+}
+
+// `drain` włączamy WYŁĄCZNIE dla odmów kierowanych do uprawnionego klienta. Intruz (403/404)
+// zostaje przy natychmiastowym zamknięciu: nie mamy powodu przyjmować od niego bajtów.
+function rejectBlob(req, res, decision, { drain = false, maxBytes = 0 } = {}) {
+  const respond = () => {
+    if (decision.json) {
+      return json(res, decision.json, decision.status);
+    }
+    res.writeHead(decision.status);
+    return res.end();
+  };
+  if (!drain) {
+    closeSocketAfterResponse(req, res);
+    return respond();
   }
-  res.writeHead(decision.status);
-  return res.end();
+  return drainThenRespond(req, res, maxBytes, respond);
 }
 
 // PUT: bajty ze strumienia żądania wprost do magazynu. Limit i sha256 liczy
@@ -875,7 +951,12 @@ async function streamBodyToFile(req, res, decision) {
   // strumień), ale gdy klient sam się przyznaje, nie ma po co pompować bajtów.
   const declared = Number(req.headers['content-length']);
   if (Number.isFinite(declared) && declared > decision.maxBytes) {
-    return rejectBlob(req, res, { status: 413, json: { v: INBOX_API_VERSION, error: 'too_large' } });
+    return rejectBlob(
+      req,
+      res,
+      { status: 413, json: { v: INBOX_API_VERSION, error: 'too_large' } },
+      { drain: true, maxBytes: decision.maxBytes }
+    );
   }
   // Skrót dedupu wolno dać wyłącznie temu, kto tę treść już raz zweryfikowanie wgrał
   // (retry, ten sam plik do wielu adresatów). Dla kogoś obcego pominięcie transferu
@@ -887,27 +968,30 @@ async function streamBodyToFile(req, res, decision) {
     });
     // Ślad wgrania zapisujemy po ZWERYFIKOWANYM transferze (hash policzył hub).
     if (!alreadyUploaded) inboxDb.recordBlobUpload(decision.sha256, decision.member.name);
-    if (result.deduped && alreadyUploaded) {
-      // Ciała nie przeczytaliśmy — klient może wciąż pompować megabajty, więc po flushu
-      // odpowiedzi ubijamy gniazdo (wzorzec rejectBlob), zamiast dumpować resztę w próżnię.
-      res.setHeader('Connection', 'close');
-      res.once('finish', () => req.destroy());
-    }
-    return json(res, {
+    const payload = {
       v: INBOX_API_VERSION,
       sha256: result.sha256,
       size: result.size,
       deduped: result.deduped,
-    });
+    };
+    if (result.deduped && alreadyUploaded) {
+      // Ciała nie przeczytaliśmy — klient wciąż pompuje megabajty, a odpowiedź wysłana teraz
+      // i domknięta destroyem zginęłaby w RST (patrz drainRequestBody). Wypijamy więc resztę
+      // w próżnię, z tym samym twardym capem, i odpowiadamy dopiero potem.
+      return drainThenRespond(req, res, decision.maxBytes, () => json(res, payload));
+    }
+    return json(res, payload);
   } catch (err) {
     if (err instanceof inboxBlobs.InboxBlobError) {
       // Błąd DLA UPRAWNIONEGO klienta (token już trafiony), więc niesie kod przyczyny:
       // bez niego klient nie wie, czy ponawiać (zerwany transfer), czy przeliczyć plik
       // (rozjazd hasha), czy odpuścić (za duży). Magazyn sprzątnął już plik tymczasowy.
-      return rejectBlob(req, res, {
-        status: blobErrorStatus(err.code),
-        json: { v: INBOX_API_VERSION, error: err.code },
-      });
+      return rejectBlob(
+        req,
+        res,
+        { status: blobErrorStatus(err.code), json: { v: INBOX_API_VERSION, error: err.code } },
+        { drain: true, maxBytes: decision.maxBytes }
+      );
     }
     throw err;
   }

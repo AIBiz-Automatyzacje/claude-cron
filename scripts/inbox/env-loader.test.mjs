@@ -11,7 +11,7 @@ import { DEFAULT_INBOX_SECRET_FILE, loadEnv, readEnvFile, resolveInboxSecretFile
 
 const INBOX_VARS = [
   'INBOX_ENV_FILE', 'INBOX_HUB_URL', 'INBOX_TOKEN',
-  'INBOX_TODO_PATH', 'INBOX_SKRZYNKA_PATH', 'INBOX_ARCHIVE_DIR',
+  'INBOX_TODO_PATH', 'INBOX_SKRZYNKA_PATH', 'INBOX_ARCHIVE_DIR', 'INBOX_ATTACHMENTS_DIR',
   'CLAUDE_CRON_WORKSPACE',
 ];
 
@@ -41,6 +41,7 @@ test('INBOX_ENV_FILE: ścieżki rozwiązane ZAWSZE, także przy komplecie HUB_UR
       assert.equal(process.env.INBOX_TODO_PATH, path.join('/tmp/ws', 'Zadania/Dashboard.md'));
       assert.equal(process.env.INBOX_SKRZYNKA_PATH, path.join('/tmp/ws', 'Zadania/Skrzynka.md'));
       assert.equal(process.env.INBOX_ARCHIVE_DIR, path.join('/tmp/ws', 'Zasoby/inbox-archive'));
+      assert.equal(process.env.INBOX_ATTACHMENTS_DIR, path.join('/tmp/ws', 'Zasoby/inbox-zalaczniki'));
     }
   );
 });
@@ -132,6 +133,16 @@ test('loadEnv: jawne INBOX_*_PATH wygrywają nad workspace', async () => {
   assert.equal(process.env.INBOX_SKRZYNKA_PATH, '/custom/vault/Zadania/Skrzynka.md');
   assert.equal(process.env.INBOX_TODO_PATH, path.join('/tmp/ws', 'Zadania/Dashboard.md'));
   assert.equal(process.env.INBOX_ARCHIVE_DIR, path.join('/custom/vault', 'Zasoby/inbox-archive'));
+  // Katalog zalacznikow idzie za SKRZYNKA (jak archiwum), nie za workspace'em: pobrany plik
+  // musi wyladowac w tym samym vaultcie, w ktorym stoi wikilink renderowany do Skrzynki.
+  assert.equal(process.env.INBOX_ATTACHMENTS_DIR, path.join('/custom/vault', 'Zasoby/inbox-zalaczniki'));
+});
+
+test('loadEnv: jawne INBOX_ATTACHMENTS_DIR z env nie jest nadpisywane', async () => {
+  process.env.CLAUDE_CRON_WORKSPACE = '/tmp/ws';
+  process.env.INBOX_ATTACHMENTS_DIR = '/dysk-zewnetrzny/zalaczniki';
+  await loadEnv();
+  assert.equal(process.env.INBOX_ATTACHMENTS_DIR, '/dysk-zewnetrzny/zalaczniki');
 });
 
 // === Nazwa pliku dashboardu: Dashboard.md (standard) z fallbackiem na to_do.md (wycofany) ===

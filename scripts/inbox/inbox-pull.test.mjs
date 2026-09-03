@@ -6,8 +6,8 @@ import path from 'node:path';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeFrontmatter, replaceBetweenMarkers, renderDelegatedCallout, renderThreadCallout, SKRZYNKA_TEMPLATE, updateSkrzynkaFile } from './inbox-pull.mjs';
-import { parseCheckedCallouts } from './inbox-push.mjs';
+import { mergeFrontmatter, renderAttachmentLine, replaceBetweenMarkers, renderDelegatedCallout, renderThreadCallout, safeAttachmentName, SKRZYNKA_TEMPLATE, updateSkrzynkaFile } from './inbox-pull.mjs';
+import { parseCheckedCallouts, parseRequestedDownloads } from './inbox-push.mjs';
 
 const T0 = '2026-07-24T07:12:00.000Z';
 const ID_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -223,4 +223,122 @@ test('replaceBetweenMarkers: zdublowany marker = głośny fail, nie pisanie w pi
 
   const podwojnyEnd = 'a\n%% s %%\nx\n%% e %%\nb\n%% e %%';
   assert.throws(() => replaceBetweenMarkers(podwojnyEnd, '%% s %%', '%% e %%', 'nowe'), /Zdublowany marker/);
+});
+
+// ──────── załączniki (IU-6, R5/R7/R8) ────────
+// Stan wiersza wynika WYŁĄCZNIE z dysku i metadanych — render niczego nie zapisuje,
+// bo blok między markerami jest nadpisywany w całości przy każdym pullu.
+const ATT_A = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const ATT_B = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const NIC_NA_DYSKU = () => false;
+
+function att(over = {}) {
+  return { id: ATT_A, filename: 'baner.png', size_bytes: 1536, mime: 'image/png', ...over };
+}
+
+test('załącznik niepobrany: checkbox Pobierz z metadanymi i własnym markerem att:', () => {
+  const m = msg({ attachments: [att()] });
+  const out = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU);
+  assert.match(out, /^>   - \[ \] Pobierz — <span class="os-att">📎 baner\.png · 1,5 kB · image\/png<\/span> %% att:dddddddd-dddd-4ddd-8ddd-dddddddddddd %%$/m);
+});
+
+test('załącznik pobrany: osadzenie ![[…]] i BRAK checkboxa Pobierz (R8)', () => {
+  const m = msg({ attachments: [att()] });
+  const naDysku = (month, filename) => month === '2026-07' && filename === 'baner.png';
+  const out = renderThreadCallout([m], m, 'kacper', naDysku);
+  assert.ok(out.includes('![[Zasoby/inbox-zalaczniki/2026-07/baner.png]]'));
+  assert.ok(!out.includes('Pobierz'), 'pobrany plik nie pokazuje już checkboxa');
+  assert.ok(out.includes(`%% att:${ATT_A} %%`));
+});
+
+test('bajty wygasłe na hubie: adnotacja bez checkboxa', () => {
+  const m = msg({ attachments: [att({ blob_available: false })] });
+  const out = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU);
+  assert.ok(out.includes('os-att-gone'));
+  assert.ok(out.includes('wygasł'));
+  assert.ok(!out.includes('[ ] Pobierz'), 'wygasły załącznik nie da się pobrać');
+  assert.ok(out.includes(`%% att:${ATT_A} %%`));
+});
+
+test('dwa załączniki w jednej wiadomości: dwie linie o RÓŻNYCH markerach att:', () => {
+  const m = msg({ attachments: [att(), att({ id: ATT_B, filename: 'brief.pdf', mime: 'application/pdf' })] });
+  const out = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU);
+  const linie = out.split('\n').filter(l => l.includes('%% att:'));
+  assert.equal(linie.length, 2);
+  assert.ok(linie[0].includes(`%% att:${ATT_A} %%`));
+  assert.ok(linie[1].includes(`%% att:${ATT_B} %%`));
+  assert.ok(linie[1].includes('brief.pdf'));
+});
+
+test('wiersz załącznika nie zależy od Date.now() — dwa renderowania dają ten sam string', () => {
+  const m = msg({ attachments: [att()] });
+  const linia = () => renderAttachmentLine(att(), '2026-07', NIC_NA_DYSKU);
+  const pierwszy = linia();
+  const drugi = linia();
+  assert.equal(pierwszy, drugi);
+  // pełny wiersz w kontekście wątku też jest stabilny (writeIfChanged nie dostaje zmiennej treści)
+  const a = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU).split('\n').find(l => l.includes('%% att:'));
+  const b = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU).split('\n').find(l => l.includes('%% att:'));
+  assert.equal(a, b);
+});
+
+test('nazwa z sieci: separator, znak sterujący i % są neutralizowane przed trafieniem do linii', () => {
+  // "\n" w nazwie pozwoliłby wstrzyknąć odhaczony checkbox, który inbox-push wziąłby
+  // za akcję człowieka; "%%" pozwoliłoby udawać cudzy marker.
+  assert.equal(safeAttachmentName('../../etc/passwd'), 'passwd');
+  assert.equal(safeAttachmentName('zla\nnazwa.png'), 'zlanazwa.png');
+  assert.equal(safeAttachmentName('a%% att:x %%.png'), 'a attx .png'); // ':' pada razem z '%' (NTFS ADS)
+  assert.equal(safeAttachmentName('..'), 'zalacznik');
+
+  const m = msg({ attachments: [att({ filename: 'x\n> - [x] Zrobione' })] });
+  const out = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU);
+  assert.equal(parseCheckedCallouts(out).length, 0, 'nazwa pliku nie może wstrzyknąć akcji');
+});
+
+test('wiadomość bez załączników renderuje się bit w bit jak przed IU-6', () => {
+  const m = msg();
+  assert.equal(
+    renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU),
+    renderThreadCallout([{ ...m, attachments: [] }], m, 'kacper', NIC_NA_DYSKU),
+  );
+});
+
+test('roundtrip Zrobione działa też przy wiadomości z załącznikiem', () => {
+  const m = msg({ attachments: [att()] });
+  const rendered = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU)
+    .replace('> - [ ] Zrobione', '> - [x] Zrobione');
+  const parsed = parseCheckedCallouts(rendered);
+  assert.equal(parsed.length, 1);
+  assert.deepEqual(parsed[0], { id: ID_A, thread_id: THREAD, action: 'Zrobione' });
+});
+
+// ──────── szew render ↔ parser pobrań (IU-7, R6/R9) ────────
+// Kontrakt render↔parser jest najkruchszym miejscem systemu: testy czystych funkcji obu
+// stron przechodzą przy złamanym zachowaniu systemowym, więc roundtrip jest obowiązkowy.
+test('roundtrip Pobierz: wyrenderowany i odhaczony wiersz parsuje się na id załącznika', () => {
+  const m = msg({ attachments: [att()] });
+  const rendered = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU)
+    .replace('- [ ] Pobierz', '- [x] Pobierz');
+  assert.deepEqual(parseRequestedDownloads(rendered), [{ attachment_id: ATT_A }]);
+});
+
+test('roundtrip Pobierz: parseCheckedCallouts NIE zgłasza pobrania hubowi (R9)', () => {
+  const m = msg({ attachments: [att()] });
+  const rendered = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU)
+    .replace('- [ ] Pobierz', '- [x] Pobierz');
+  // Sam checkbox kotwicy pozostaje nieodhaczony — jedyną akcją człowieka było pobranie.
+  assert.deepEqual(parseCheckedCallouts(rendered), []);
+});
+
+test('odhaczone Zrobione i Pobierz naraz: jedna akcja hubowa i jedno pobranie, bez mieszania', () => {
+  const m = msg({ attachments: [att(), att({ id: ATT_B, filename: 'brief.pdf' })] });
+  const rendered = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU)
+    .replace('- [ ] Pobierz', '- [x] Pobierz')            // tylko PIERWSZY załącznik
+    .replace('> - [ ] Zrobione', '> - [x] Zrobione');
+
+  assert.deepEqual(parseRequestedDownloads(rendered), [{ attachment_id: ATT_A }]);
+
+  const hubowe = parseCheckedCallouts(rendered);
+  assert.equal(hubowe.length, 1);
+  assert.deepEqual(hubowe[0], { id: ID_A, thread_id: THREAD, action: 'Zrobione' });
 });

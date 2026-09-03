@@ -1,5 +1,5 @@
 Branch: `feature/zalaczniki-w-skrzynce`
-Ostatnia aktualizacja: 2026-09-03
+Ostatnia aktualizacja: 2026-09-03 (faza 3)
 
 # Załączniki w Skrzynce Team OS — zadania
 
@@ -106,18 +106,7 @@ Teksty (verbatim, IU-5) — odmowa przy przekroczeniu progu:
 `Plik <nazwa> ma <rozmiar> i przekracza limit 25 MB. Wrzuć go na Dysk i wyślij link w treści wiadomości.`
 
 ## Do poprawy po review fazy 2
-
-- [x] 🟠 [P2] **lib/inbox-api.js:224** — Bramka nazwy pliku (`/[/\\\0]/` + dokladnie `'.'`/`'..'`, lustro w `lib/inbox-db.js:515`) przepuszcza znaki sterujace (`"a\nb.pdf"`, `"raport\r\n- [x] Zrobione"`), warianty `'..'` z koncowa spacja/kropka (Win32 je obcina), oraz `:` (alternatywny strumien danych NTFS). `filename` to niezaufane wejscie nadawcy (R14), ktore w fazie 3 idzie do `path.join` i do renderu `Skrzynka.md` o kontrakcie liniowym — nazwa z `\n` pozwala wstrzyknac odhaczony checkbox, ktory `inbox-push.mjs` odczyta jako akcje czlowieka. Napraw w OBU lustrach: odrzucaj zakres kontrolny U+0000–U+001F, znak `:`, oraz nazwy, ktorych postac po obcieciu koncowych kropek i spacji rowna sie `'.'` albo `'..'`.
-- [x] 🟠 [P2] **scripts/inbox/inbox-client.mjs:363** — `BINARY_TIMEOUT_MS` nie chroni transferu bajtow w `downloadBlob`, tylko naglowki: `fetchWithTimeout` (linia 92) robi `clearTimeout(timer)` w `finally`, a cialo konsumuje dopiero `pipeline(Readable.fromWeb(res.body), createWriteStream(tmpFile))` — juz po rozbrojeniu AbortControllera. Hub/Funnel, ktory odesle 200 i przestanie wysylac bajty, zawiesza `downloadBlob` BEZ LIMITU (run syncu wisi do twardego timeoutu executora, w vaultcie zostaje `.<nazwa>.<uuid>.part`, ktory Obsidian Sync rozniesie). Napraw: przenies kontrole timeoutu do `attemptBlobDownload` (wlasny `AbortController` + timer, `signal` do `fetch` i do `pipeline(..., { signal })`, `clearTimeout` dopiero po `pipeline`/`rename`). Dopisz test: strumien, ktory po pierwszym chunku nic nie emituje i sie nie zamyka, konczy sie bledem limitu czasu, a katalog docelowy zostaje pusty.
-- [x] 🟠 [P2] **scripts/inbox/reply.test.mjs:82** — sciezka `--attach` w `reply.mjs` nie ma ANI JEDNEGO testu (plik nie zawiera slowa `attach`), choc checkbox IU-5 „ta sama sciezka zalacznikow co w send.mjs" jest odhaczony — rozjazd obu sciezek jest niewykrywalny (literowka `args.attachments` zamiast `args.attach` = zielona suita i odpowiedz bez plikow, R1/R2 zlamane cicho). Dopisz dwa testy lustrzane do `send.test.mjs`: (1) `--attach` na plik tmp → `client.uploads.length === 1` i jeden rekord w `client.calls[0].attachments`; (2) pad `uploadBlob` → `client.send` niewywolany (`client.calls.length === 0`).
-- [x] 🟡 [P3] **lib/inbox-api.js:230** — walidacja `mime` sprawdza wylacznie dlugosc, wiec `'byle-co'` i `'text/html\r\nX: y'` przechodza granice i dopiero `normalizeAttachment` (lib/inbox-db.js:533) rzuca `InboxDbError` mapowany na ogolne `invalid_input`. Zamien warunek na `if (mime != null && (!isNonEmptyString(mime, MAX_MIME_LEN) || !/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/.test(mime))) return { error: 'invalid_attachments' };` (wzorzec `MIME_PATTERN` z lib/inbox-db.js:494).
-- [x] 🟡 [P3] **scripts/inbox/attachments.mjs:47** — `formatBytes` zaokragla `toFixed(1)` do najblizszej dziesiatej, wiec plik 26 214 401 B daje komunikat „ma 25,0 MB i przekracza limit 25 MB" (zdanie wewnetrznie sprzeczne). Zamien obliczenie na zaokraglenie w gore: `const mb = Math.ceil((bytes / (1024 * 1024)) * 10) / 10;` — reszta ciala bez zmian. Dopisz w `scripts/inbox/attachments.test.mjs` przypadek `formatBytes(MAX_ATTACHMENT_BYTES + 1) === '25,1 MB'`.
-- [x] 🟡 [P3] **scripts/inbox/attachments.mjs:96** — domyslka `client = inboxClient` nie ma ani jednego uzycia (wszystkie cztery wywolania wstrzykuja klienta jawnie) i utrzymuje przy zyciu import z linii 14, wiazac modul przygotowania plikow z transportem. Zamien sygnature na `export async function prepareAttachments(paths, { client })` i usun linie 14 `import * as inboxClient from './inbox-client.mjs';`.
-- [x] 🟡 [P3] **scripts/inbox/attachments.mjs:98** — `const list = Array.isArray(paths) ? paths : [paths];` to defensive code na scenariusz niemozliwy: `args.attach` siedzi w `REPEATABLE_KEYS` i jest zawsze tablica albo `undefined` (obsluzone wczesniejszym `if (paths == null) return [];`). Zamien linie 97–99 na `const list = paths ?? [];`, zostawiajac istniejacy `if (list.length === 0) return [];`.
-- [x] 🟡 [P3] **scripts/inbox/inbox-client.mjs:362** — `await mkdir(path.dirname(destPath), { recursive: true })` lezy w tym samym `try` co `pipeline`, wiec EACCES/EROFS/ENOTDIR katalogu docelowego jest raportowany jako `{ retryable: true, message: 'przerwany transfer: ...' }` i konczy sie diagnoza wskazujaca siec zamiast praw do katalogu. Przenies `mkdir` PRZED blok `try` z linii 361 i owin wlasnym `try/catch` rzucajacym `InboxClientError` z nazwa katalogu i przyczyna (jak galaz `rename` w liniach 373–378).
-- [x] 🟡 [P3] **scripts/inbox/reply.mjs:47** — runtime'owy komunikat Usage nie wymienia nowej flagi (w `send.mjs` zostal rozszerzony, w `reply.mjs` zaktualizowano tylko komentarz naglowkowy). Zmien tresc bledu na: `Usage: reply.mjs --thread-id <uuid> [--content "..." | --content-file <sciezka>] [--title "..."] [--to <nick>] [--attach <sciezka>]`.
-- [x] 🟡 [P3] **lib/inbox-api.test.js:565** — granica `MAX_ATTACHMENTS_PER_MESSAGE` nieprzybita (jedyny przypadek to `MAX + 1` odrzucone), wiec zamiana `>` na `>=` w `lib/inbox-api.js:214` przeszlaby niezauwazona. Pod linia 565 dopisz asercje, ze lista o dlugosci dokladnie `MAX_ATTACHMENTS_PER_MESSAGE` (te same pola co `tooMany`, `sha256: SHA_A`, `filename` typu `p0.pdf`, `p1.pdf`, …) daje `status === 200`.
-- [x] 🟡 [P3] **scripts/inbox/attachments.test.mjs:61** — granica progu 25 MB nieprzybita (test uzywa `MAX_ATTACHMENT_BYTES + 1024*1024`), wiec zamiana `>` na `>=` w `scripts/inbox/attachments.mjs:81` rozjechalaby klienta z hubem (`server.js:877` i `lib/inbox-blobs.js:153` uzywaja `>`). Dopisz test tworzacy przez `fs.truncateSync` plik o dokladnie `MAX_ATTACHMENT_BYTES` i asertujacy, ze `prepareAttachments([plik], { client })` zwraca jedna pozycje oraz `client.uploads.length === 1`.
+Zamkniete cyklem fix: 11 pozycji — pelna tresc findingow i uzasadnienia w `review-faza-2.md`.
 
 ## Operator checklist faza 2
 
@@ -129,54 +118,54 @@ Zależy od: Faza 2
 
 ### IU-6: Render załączników w Skrzynce — trzy stany (feature-builder-data)
 
-- [ ] Modyfikuj: `scripts/inbox/inbox-pull.mjs` — wiersz załącznika renderowany PRZY SWOJEJ wiadomości w `renderMessage`, jako samodzielna linia z własnym markerem `%% att:<uuid> %%`; istniejący marker `%% id: … thread: … %%` identyfikuje wyłącznie kotwicę wątku i nie rozróżnia ani wiadomości w wątku, ani plików w wiadomości
-- [ ] Modyfikuj: `scripts/inbox/inbox-pull.mjs` — trzy stany rozstrzygane WYŁĄCZNIE odczytem dysku i metadanych: plik obecny → osadzenie `> ![[…]]` bez checkboxa (R8); bajty na hubie → `- [ ] Pobierz` z metadanymi; bajty wygasłe → wiersz z adnotacją bez checkboxa
-- [ ] Modyfikuj: `scripts/inbox/inbox-pull.mjs` — zero zapisu stanu gdziekolwiek; blok między markerami jest nadpisywany w całości co minutę, więc wszystko, co nie wynika z dysku albo z odpowiedzi huba, zostanie zdmuchnięte
-- [ ] Modyfikuj: `scripts/inbox/inbox-pull.mjs` — klasy `os-att` i `os-att-gone` w spanach; wiersz nie może nieść niczego zależnego od `Date.now()`, bo `writeIfChanged` generowałby wtedy zapis co minutę i ryzyko konfliktu
-- [ ] Test (unit): `scripts/inbox/inbox-pull.test.mjs`
-- [ ] Test: [Unit] Wiadomość z jednym załącznikiem, plik nieobecny na dysku → linia `- [ ] Pobierz` z markerem `att:`
-- [ ] Test: [Unit] Ten sam zestaw wejściowy, plik obecny na dysku → osadzenie `![[…]]`, BRAK linii `Pobierz`
-- [ ] Test: [Unit] Metadane bez blobu na hubie → wiersz z adnotacją o wygaśnięciu, brak checkboxa
-- [ ] Test: [Unit] Dwa załączniki w jednej wiadomości → dwie linie o różnych markerach `att:`
-- [ ] Test: [Unit] Wiersz załącznika nie zawiera niczego zależnego od `Date.now()` — dwa renderowania w odstępie czasu dają identyczny string
-- [ ] Test: [Unit] Istniejący test roundtrip „Zrobione" nadal przechodzi bez zmian
+- [x] Modyfikuj: `scripts/inbox/inbox-pull.mjs` — wiersz załącznika renderowany PRZY SWOJEJ wiadomości w `renderMessage`, jako samodzielna linia z własnym markerem `%% att:<uuid> %%`; istniejący marker `%% id: … thread: … %%` identyfikuje wyłącznie kotwicę wątku i nie rozróżnia ani wiadomości w wątku, ani plików w wiadomości
+- [x] Modyfikuj: `scripts/inbox/inbox-pull.mjs` — trzy stany rozstrzygane WYŁĄCZNIE odczytem dysku i metadanych: plik obecny → osadzenie `> ![[…]]` bez checkboxa (R8); bajty na hubie → `- [ ] Pobierz` z metadanymi; bajty wygasłe → wiersz z adnotacją bez checkboxa
+- [x] Modyfikuj: `scripts/inbox/inbox-pull.mjs` — zero zapisu stanu gdziekolwiek; blok między markerami jest nadpisywany w całości co minutę, więc wszystko, co nie wynika z dysku albo z odpowiedzi huba, zostanie zdmuchnięte
+- [x] Modyfikuj: `scripts/inbox/inbox-pull.mjs` — klasy `os-att` i `os-att-gone` w spanach; wiersz nie może nieść niczego zależnego od `Date.now()`, bo `writeIfChanged` generowałby wtedy zapis co minutę i ryzyko konfliktu
+- [x] Test (unit): `scripts/inbox/inbox-pull.test.mjs`
+- [x] Test: [Unit] Wiadomość z jednym załącznikiem, plik nieobecny na dysku → linia `- [ ] Pobierz` z markerem `att:`
+- [x] Test: [Unit] Ten sam zestaw wejściowy, plik obecny na dysku → osadzenie `![[…]]`, BRAK linii `Pobierz`
+- [x] Test: [Unit] Metadane bez blobu na hubie → wiersz z adnotacją o wygaśnięciu, brak checkboxa
+- [x] Test: [Unit] Dwa załączniki w jednej wiadomości → dwie linie o różnych markerach `att:`
+- [x] Test: [Unit] Wiersz załącznika nie zawiera niczego zależnego od `Date.now()` — dwa renderowania w odstępie czasu dają identyczny string
+- [x] Test: [Unit] Istniejący test roundtrip „Zrobione" nadal przechodzi bez zmian
 - [ ] Weryfikacja: `node --test scripts/inbox/inbox-pull.test.mjs` przechodzi bez błędów
 
 ### IU-7: Parser odhaczonych pobrań — akcja wyłącznie lokalna (feature-builder-data)
 
-- [ ] Modyfikuj: `scripts/inbox/inbox-push.mjs` — OSOBNA funkcja `parseRequestedDownloads(section)`, nie rozszerzenie alternatywy w `parseCheckedCallouts`; dopisanie `Pobierz` do `(Zrobione|Zapoznane)` wpuściłoby akcję lokalną do `client.done()`, a hub odrzuciłby ją jako `invalid_action`, czyli błąd przy każdym syncu
-- [ ] Modyfikuj: `scripts/inbox/inbox-push.mjs` — parser jest przebiegiem po liniach, nie po blokach; marker `%% att:<uuid> %%` jest samodzielny, więc nie zależy od kruchego blokowania po prefiksie `'> '` (render emituje gołe `>`, które rozbijają callout na fragmenty)
-- [ ] Modyfikuj: `scripts/inbox/inbox-push.mjs` — `parseCheckedCallouts` zostaje NIETKNIĘTE; brak interferencji ma być udowodniony testem, nie założony
-- [ ] Test (unit): `scripts/inbox/inbox-push.test.mjs`
-- [ ] Test (unit): `scripts/inbox/inbox-pull.test.mjs`
-- [ ] Test: [Unit] Roundtrip: wyrenderowany wiersz z podmienionym `[ ]` na `[x]` parsuje się na `{attachment_id}`
-- [ ] Test: [Unit] `parseCheckedCallouts` na tej samej sekcji nie zwraca niczego dla wiersza `Pobierz` (R9)
-- [ ] Test: [Unit] Sekcja z odhaczonym „Zrobione" i odhaczonym „Pobierz" → jedna akcja hubowa i jedno pobranie, bez wzajemnego mieszania
-- [ ] Test: [Unit] Nieodhaczony wiersz `Pobierz` nie generuje żądania
-- [ ] Test: [Unit] Uszkodzony marker (`%% att: %%` bez uuid) jest pomijany bez rzutu
+- [x] Modyfikuj: `scripts/inbox/inbox-push.mjs` — OSOBNA funkcja `parseRequestedDownloads(section)`, nie rozszerzenie alternatywy w `parseCheckedCallouts`; dopisanie `Pobierz` do `(Zrobione|Zapoznane)` wpuściłoby akcję lokalną do `client.done()`, a hub odrzuciłby ją jako `invalid_action`, czyli błąd przy każdym syncu
+- [x] Modyfikuj: `scripts/inbox/inbox-push.mjs` — parser jest przebiegiem po liniach, nie po blokach; marker `%% att:<uuid> %%` jest samodzielny, więc nie zależy od kruchego blokowania po prefiksie `'> '` (render emituje gołe `>`, które rozbijają callout na fragmenty)
+- [x] Modyfikuj: `scripts/inbox/inbox-push.mjs` — `parseCheckedCallouts` zostaje NIETKNIĘTE; brak interferencji ma być udowodniony testem, nie założony
+- [x] Test (unit): `scripts/inbox/inbox-push.test.mjs`
+- [x] Test (unit): `scripts/inbox/inbox-pull.test.mjs`
+- [x] Test: [Unit] Roundtrip: wyrenderowany wiersz z podmienionym `[ ]` na `[x]` parsuje się na `{attachment_id}`
+- [x] Test: [Unit] `parseCheckedCallouts` na tej samej sekcji nie zwraca niczego dla wiersza `Pobierz` (R9)
+- [x] Test: [Unit] Sekcja z odhaczonym „Zrobione" i odhaczonym „Pobierz" → jedna akcja hubowa i jedno pobranie, bez wzajemnego mieszania
+- [x] Test: [Unit] Nieodhaczony wiersz `Pobierz` nie generuje żądania
+- [x] Test: [Unit] Uszkodzony marker (`%% att: %%` bez uuid) jest pomijany bez rzutu
 - [ ] Weryfikacja: `node --test scripts/inbox/inbox-push.test.mjs scripts/inbox/inbox-pull.test.mjs` przechodzi bez błędów
 
 Notatka wykonawcza (IU-7): kontrakt render↔parser jest najbardziej kruchym miejscem systemu i jedynym z testem szwu. Napisz nowy test roundtrip (render → odhaczenie → parse) PRZED implementacją parsera.
 
 ### IU-8: Pobranie do vaulta i wpięcie w sync (feature-builder-data)
 
-- [ ] Modyfikuj: `scripts/inbox/inbox-sync.mjs` — sekwencja staje się push → pobrania → pull, w jednym procesie; między krokami nie może być okna, w którym render zdmuchnie akcję usera
-- [ ] Modyfikuj: `scripts/inbox/env-loader.mjs` — nowe `INBOX_ATTACHMENTS_DIR` = `<workspace>/Zasoby/inbox-zalaczniki`, wyprowadzane z `INBOX_SKRZYNKA_PATH` tak samo jak `INBOX_ARCHIVE_DIR`, ustawiane zawsze i tylko gdy nie ma go w env
-- [ ] Modyfikuj: `scripts/inbox/attachments.mjs` — sanityzacja nazwy (R14) sprawdza EFEKT, nie kształt: `path.basename` → usunięcie znaków kontrolnych i separatorów → odrzucenie `.`/`..`/nazwy pustej → `path.resolve` i weryfikacja, że wynik nadal leży pod katalogiem docelowym
-- [ ] Modyfikuj: `scripts/inbox/attachments.mjs` — kolizja nazw: przy innej treści sufiks porządkowy, przy tej samej treści (zgodny `sha256`) potraktuj jako pobrany i nic nie rób; zapis przez plik tymczasowy i `rename`, bo obecność pliku JEST stanem pobrania
-- [ ] Modyfikuj: `scripts/inbox/attachments.mjs` — R10 dwiema warstwami: job syncu z natury nie istnieje na maszynie w roli `agent`, a mimo to krok pobrań sprawdza rolę jawnie i kończy się no-opem (obrona w głąb, bo rola bywa ustawiana ręcznie)
-- [ ] Modyfikuj: `scripts/inbox/attachments.mjs` — pobranie niczego nie zgłasza hubowi (R9): brak `client.done()`, brak zmiany statusu, brak archiwum
-- [ ] Test (unit): `scripts/inbox/attachments.test.mjs`
-- [ ] Test (unit): `scripts/inbox/inbox-sync.test.mjs`
-- [ ] Test: [Unit] Odhaczony załącznik → plik ląduje w `Zasoby/inbox-zalaczniki/RRRR-MM/` pod sanityzowaną nazwą
-- [ ] Test: [Unit] Nazwa `../../../etc/passwd` → zapis wewnątrz katalogu docelowego albo odmowa; NIGDY poza nim
-- [ ] Test: [Unit] Nazwa z separatorem, znakiem kontrolnym i sama `..` → każda odrzucona lub sprowadzona do basename
-- [ ] Test: [Unit] Powtórne pobranie tego samego pliku (ta sama treść) → brak drugiego pliku, brak błędu
-- [ ] Test: [Unit] Kolizja nazw przy różnej treści → drugi plik z sufiksem, pierwszy nietknięty
-- [ ] Test: [Unit] Przerwane pobranie → brak pliku docelowego, stan pobrania nadal „niepobrany"
-- [ ] Test: [Unit] `state.inbox_role === 'agent'` → krok pobrań jest no-opem mimo odhaczonych checkboxów (R10)
-- [ ] Test: [Unit] Pobranie nie woła `client.done()` ani niczego zmieniającego status (R9) — mock klienta odnotowuje zero wywołań
-- [ ] Test: [Unit] Sekwencja syncu: pobranie następuje PO pushu i PRZED pullem
+- [x] Modyfikuj: `scripts/inbox/inbox-sync.mjs` — sekwencja staje się push → pobrania → pull, w jednym procesie; między krokami nie może być okna, w którym render zdmuchnie akcję usera
+- [x] Modyfikuj: `scripts/inbox/env-loader.mjs` — nowe `INBOX_ATTACHMENTS_DIR` = `<workspace>/Zasoby/inbox-zalaczniki`, wyprowadzane z `INBOX_SKRZYNKA_PATH` tak samo jak `INBOX_ARCHIVE_DIR`, ustawiane zawsze i tylko gdy nie ma go w env
+- [x] Modyfikuj: `scripts/inbox/attachments.mjs` — sanityzacja nazwy (R14) sprawdza EFEKT, nie kształt: `path.basename` → usunięcie znaków kontrolnych i separatorów → odrzucenie `.`/`..`/nazwy pustej → `path.resolve` i weryfikacja, że wynik nadal leży pod katalogiem docelowym
+- [x] Modyfikuj: `scripts/inbox/attachments.mjs` — kolizja nazw: przy innej treści sufiks porządkowy, przy tej samej treści (zgodny `sha256`) potraktuj jako pobrany i nic nie rób; zapis przez plik tymczasowy i `rename`, bo obecność pliku JEST stanem pobrania
+- [x] Modyfikuj: `scripts/inbox/attachments.mjs` — R10 dwiema warstwami: job syncu z natury nie istnieje na maszynie w roli `agent`, a mimo to krok pobrań sprawdza rolę jawnie i kończy się no-opem (obrona w głąb, bo rola bywa ustawiana ręcznie)
+- [x] Modyfikuj: `scripts/inbox/attachments.mjs` — pobranie niczego nie zgłasza hubowi (R9): brak `client.done()`, brak zmiany statusu, brak archiwum
+- [x] Test (unit): `scripts/inbox/attachments.test.mjs`
+- [x] Test (unit): `scripts/inbox/inbox-sync.test.mjs`
+- [x] Test: [Unit] Odhaczony załącznik → plik ląduje w `Zasoby/inbox-zalaczniki/RRRR-MM/` pod sanityzowaną nazwą
+- [x] Test: [Unit] Nazwa `../../../etc/passwd` → zapis wewnątrz katalogu docelowego albo odmowa; NIGDY poza nim
+- [x] Test: [Unit] Nazwa z separatorem, znakiem kontrolnym i sama `..` → każda odrzucona lub sprowadzona do basename
+- [x] Test: [Unit] Powtórne pobranie tego samego pliku (ta sama treść) → brak drugiego pliku, brak błędu
+- [x] Test: [Unit] Kolizja nazw przy różnej treści → drugi plik z sufiksem, pierwszy nietknięty
+- [x] Test: [Unit] Przerwane pobranie → brak pliku docelowego, stan pobrania nadal „niepobrany"
+- [x] Test: [Unit] `state.inbox_role === 'agent'` → krok pobrań jest no-opem mimo odhaczonych checkboxów (R10)
+- [x] Test: [Unit] Pobranie nie woła `client.done()` ani niczego zmieniającego status (R9) — mock klienta odnotowuje zero wywołań
+- [x] Test: [Unit] Sekwencja syncu: pobranie następuje PO pushu i PRZED pullem
 - [ ] Weryfikacja: `node --test scripts/inbox/attachments.test.mjs scripts/inbox/inbox-sync.test.mjs` przechodzi bez błędów
 - [ ] Weryfikacja: `node --test` (pełna suita) przechodzi bez błędów
 

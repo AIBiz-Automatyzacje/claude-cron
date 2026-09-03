@@ -8,8 +8,11 @@
 
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+
+import { attachmentMonth, safeAttachmentName } from './inbox-pull.mjs';
+import { extractInboxSection, parseRequestedDownloads } from './inbox-push.mjs';
 
 // Próg mierzy WYŁĄCZNIE pojedynczy plik — sumy wiadomości nie limitujemy (kwoty miejsca
 // zostały świadomie wycofane). Lustro MAX_ATTACHMENT_BYTES z lib/inbox-api.js: hub egzekwuje
@@ -117,4 +120,165 @@ export async function prepareAttachments(paths, { client }) {
     });
   }
   return prepared;
+}
+
+// ──────── odbiór: pobranie odhaczonych załączników do vaulta (R6/R7/R10/R14) ────────
+
+// Lustro ROLE_AGENT z lib/inbox-seed.js. Świadomy duplikat przez granicę modułów (CJS↔ESM),
+// jak EXPECTED_API_VERSION w inbox-client: ten skrypt nie ma powodu ciągnąć całej warstwy
+// lib/ tylko po jeden literał, a wartość jest zapisana w bazie i nie zmieni się bez migracji.
+export const ROLE_AGENT = 'agent';
+
+// Ile razy wolno dokładać sufiks porządkowy przy kolizji nazw, zanim uznamy sytuację za
+// patologię (setka plików „raport (n).pdf" to nie kolizja, to pętla) i zgłosimy błąd.
+const MAX_NAME_ATTEMPTS = 50;
+
+// Sanityzacja sprawdza EFEKT, nie kształt (R14). `safeAttachmentName` (jedno źródło prawdy,
+// współdzielone z renderem) sprowadza nazwę do basename bez separatorów i znaków sterujących,
+// ale sama zgodność ze wzorcem niczego nie dowodzi: dopiero `path.resolve` mówi, GDZIE plik
+// naprawdę wyląduje. Ta sama przesłanka, dla której guard `.gitignore` pyta gita o efekt
+// zamiast czytać wzorce z pliku. Zwraca null, gdy wynik wyszedłby poza katalog miesiąca.
+export function resolveAttachmentTarget(attachmentsDir, month, rawFilename) {
+  const name = safeAttachmentName(rawFilename);
+  const dir = path.resolve(String(attachmentsDir), String(month));
+  const target = path.resolve(dir, name);
+  // Porównanie po KATALOGU RODZICU, nie po prefiksie stringa: prefiks przepuszcza
+  // „<dir>-inny/plik" (ten sam początek, inny katalog).
+  if (path.dirname(target) !== dir) return null;
+  return { dir, name, target };
+}
+
+async function fileExists(filePath) {
+  try {
+    await stat(filePath);
+    return true;
+  } catch (err) {
+    if (err.code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
+// Rozstrzyga, dokąd zapisać bajty o danym sha256. Zwraca null, gdy plik o TEJ TREŚCI już
+// leży na dysku — pobranie jest wtedy no-opem (idempotencja: obecność pliku JEST stanem
+// pobrania, więc powtórka nie może dokładać kopii). Kolizja nazw przy INNEJ treści dostaje
+// sufiks porządkowy; pierwszy plik zostaje nietknięty, bo należy do innej wiadomości.
+export async function pickDownloadDestination(dir, name, sha256) {
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let n = 1; n <= MAX_NAME_ATTEMPTS; n++) {
+    const candidate = path.join(dir, n === 1 ? name : `${stem} (${n})${ext}`);
+    if (!(await fileExists(candidate))) return candidate;
+    if ((await sha256OfFile(candidate)) === sha256) return null;
+  }
+  throw new AttachmentError(
+    `Nie mam wolnej nazwy dla pliku ${name} w ${dir} (${MAX_NAME_ATTEMPTS} kolizji) — posprzątaj katalog.`
+  );
+}
+
+// Indeks załączników z odpowiedzi huba: id → { sha256, filename, month }. Miesiąc bierze się
+// z czasu WIADOMOŚCI (tak samo jak w renderze), nie z Date.now(). Przeglądamy wszystkie
+// listy pulla, bo wiersz z checkboxem renderuje się dla całej nitki, nie tylko dla `active`.
+function indexAttachments(pullData) {
+  const index = new Map();
+  const lists = [pullData?.active, pullData?.threadRows, pullData?.delegated];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const message of list) {
+      const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+      const month = attachmentMonth(message?.created_at);
+      for (const att of attachments) {
+        if (!att || typeof att.id !== 'string' || att.id === '') continue;
+        if (index.has(att.id)) continue;
+        index.set(att.id, { sha256: att.sha256, filename: att.filename, month });
+      }
+    }
+  }
+  return index;
+}
+
+async function readSkrzynka(skrzynkaPath) {
+  try {
+    return await readFile(skrzynkaPath, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+// Krok „pobrania" syncu. Wykonuje WYŁĄCZNIE akcje lokalne (R9): czyta Skrzynkę, ściąga bajty
+// po sha256 i zapisuje plik. Zero `client.done()`, zero zmiany statusu, zero archiwum —
+// hub nie dowiaduje się o pobraniu niczego.
+//
+// `role` to rola maszyny (state.inbox_role) wstrzykiwana przez wywołującego. Maszyna-agent
+// nie pobiera NIGDY (R10): job syncu z natury na niej nie powstaje (lib/inbox-seed.js),
+// ale rolę bywa ustawiana ręcznie, więc druga warstwa obrony siedzi tutaj — przed odczytem
+// pliku i przed jakimkolwiek żądaniem do huba.
+export async function downloadRequestedAttachments({
+  client,
+  role = null,
+  skrzynkaPath,
+  attachmentsDir,
+} = {}) {
+  const stats = { downloaded: 0, already: 0, skipped: 0, failed: 0 };
+
+  if (role === ROLE_AGENT) {
+    console.log('[inbox-attachments] rola maszyny = agent — pobrania pominięte');
+    return { ...stats, role_skipped: true };
+  }
+  if (!client) throw new AttachmentError('downloadRequestedAttachments: wymagany klient huba.');
+  if (!skrzynkaPath) throw new AttachmentError('downloadRequestedAttachments: brak INBOX_SKRZYNKA_PATH.');
+  if (!attachmentsDir) throw new AttachmentError('downloadRequestedAttachments: brak INBOX_ATTACHMENTS_DIR.');
+
+  const raw = await readSkrzynka(skrzynkaPath);
+  if (raw === null) return stats;
+
+  const requested = parseRequestedDownloads(extractInboxSection(raw));
+  // Brak odhaczeń = brak ruchu w sieci. To najczęstszy przebieg (sync co minutę), więc
+  // pull po metadane wykonujemy dopiero, gdy naprawdę jest co pobierać.
+  if (requested.length === 0) return stats;
+
+  const index = indexAttachments(await client.pull());
+
+  for (const { attachment_id: id } of requested) {
+    const meta = index.get(id);
+    // Załącznik nieznany w bieżącym pullu (wątek domknięty, bajty wygasły, ręczna edycja
+    // markera) — pomijamy bez rzutu; przy następnym renderze wiersz i tak zniknie.
+    if (!meta || !meta.sha256 || !meta.filename) {
+      console.warn(`[inbox-attachments] pomijam ${id}: brak metadanych w odpowiedzi huba`);
+      stats.skipped++;
+      continue;
+    }
+
+    const target = resolveAttachmentTarget(attachmentsDir, meta.month, meta.filename);
+    if (target === null) {
+      console.warn(`[inbox-attachments] odmowa zapisu ${id}: nazwa wyprowadza poza katalog załączników`);
+      stats.skipped++;
+      continue;
+    }
+
+    try {
+      await mkdir(target.dir, { recursive: true });
+      const dest = await pickDownloadDestination(target.dir, target.name, meta.sha256);
+      if (dest === null) {
+        stats.already++;
+        continue;
+      }
+      // Zapis idzie przez plik tymczasowy i `rename` po stronie klienta — przerwane pobranie
+      // NIE zostawia w vaultcie pliku wyglądającego na kompletny, a to istotne, bo obecność
+      // pliku jest jedynym stanem pobrania.
+      await client.downloadBlob(meta.sha256, dest);
+      stats.downloaded++;
+    } catch (err) {
+      // Pad jednego pliku nie może zabrać reszty ani całego syncu: checkbox zostaje odhaczony,
+      // więc kolejny przebieg spróbuje ponownie.
+      console.error(`[inbox-attachments] nie pobrałem ${id}: ${err.message}`);
+      stats.failed++;
+    }
+  }
+
+  console.log(
+    `[inbox-attachments] ${new Date().toISOString()} — ` +
+      `downloaded=${stats.downloaded} already=${stats.already} skipped=${stats.skipped} failed=${stats.failed}`
+  );
+  return stats;
 }

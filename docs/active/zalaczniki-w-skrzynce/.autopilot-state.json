@@ -39,10 +39,34 @@
       "numer": 2,
       "nazwa": "Wysyłka z załącznikami",
       "execute": "done",
-      "review": "pending",
-      "fix": "none",
+      "review": "done",
+      "fix": "done",
       "otwarteFindingi": [],
-      "metryki": null
+      "metryki": {
+        "liczniki": {
+          "p1": 0,
+          "p2": 3,
+          "p3": 8,
+          "operator": 0
+        },
+        "przebieg": {
+          "pominieci": [
+            "e2e"
+          ],
+          "e2eTryb": "pominiety",
+          "znalezione": 24,
+          "poDedupJs": 23,
+          "poDedupSem": 12,
+          "weryfikowane": 4,
+          "obalone": 1,
+          "p3Odrzucone": 0,
+          "e2eCheckboxy": 0,
+          "e2eStatus": "pominiety przez routing",
+          "e2ePass": 0,
+          "e2eFail": 0,
+          "e2eSkip": 0
+        }
+      }
     },
     {
       "numer": 3,

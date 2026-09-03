@@ -528,7 +528,7 @@ Zmiany względem litery planu, przyjęte w implementacji fazy 2:
 
 **Zależy od:** Faza 2
 
-- [ ] **IU-6: Render załączników w Skrzynce — trzy stany**
+- [x] **IU-6: Render załączników w Skrzynce — trzy stany**
 
 **Cel:** Wiersz załącznika przy wiadomości, w jednym z trzech stanów, wyliczany bezstanowo przy każdym pullu.
 
@@ -579,7 +579,7 @@ Zmiany względem litery planu, przyjęte w implementacji fazy 2:
 
 ---
 
-- [ ] **IU-7: Parser odhaczonych pobrań — akcja wyłącznie lokalna**
+- [x] **IU-7: Parser odhaczonych pobrań — akcja wyłącznie lokalna**
 
 **Cel:** Rozpoznanie `- [x] Pobierz` jako żądania pobrania, konstrukcyjnie odciętego od ścieżki zgłaszania
 do huba.
@@ -628,7 +628,7 @@ z testem szwu. Napisz nowy test roundtrip (render → odhaczenie → parse) **pr
 
 ---
 
-- [ ] **IU-8: Pobranie do vaulta i wpięcie w sync**
+- [x] **IU-8: Pobranie do vaulta i wpięcie w sync**
 
 **Cel:** Wykonanie pobrania między push a pull, zapis pod bezpieczną nazwą w `Zasoby/inbox-zalaczniki/RRRR-MM/`,
 oraz twarde odcięcie maszyny w roli agenta.
@@ -685,6 +685,44 @@ oraz twarde odcięcie maszyny w roli agenta.
 **Weryfikacja:**
 - `node --test scripts/inbox/attachments.test.mjs scripts/inbox/inbox-sync.test.mjs` przechodzi bez błędów.
 - `node --test` (pełna suita) przechodzi bez błędów.
+
+#### Odchylenia — faza 3 (2026-09-03, zrealizowane)
+
+**Status:** wszystkie scenariusze testowe IU-6, IU-7 i IU-8 napisane i przechodzą. Pełna suita
+`node --test`: 1236/1236 PASS. Projekt nie ma typecheckera, lintera ani buildu.
+
+Zmiany względem litery planu, przyjęte w implementacji fazy 3:
+
+- **IU-6** — wiersz załącznika renderowany jako WCIĘTA pozycja podlisty (`>   - …`), a nie goła
+  linia `> ![[…]]`. Dzięki temu należy do pozycji listy swojej wiadomości (R5) i nie rozbija `<ul>`,
+  co w tym rendererze wymagałoby drugiego separatora `<!--os-thread-sep-->`. Marker i kształt
+  treści bez zmian.
+- **IU-6** — stan „pobrany" renderuje etykietę nazwy i osadzenie w JEDNEJ linii
+  (`<span class="os-att">📎 nazwa</span><br>![[ścieżka]] %% att:id %%`): kontrakt liniowy parsera
+  z IU-7 wymaga, by marker stał w tej samej linii co wiersz.
+- **IU-6** — dodana eksportowana `safeAttachmentName`. Nazwa pliku pochodzi z sieci i trafia do
+  linii Skrzynki o kontrakcie liniowym: `\n` pozwoliłby wstrzyknąć odhaczony checkbox czytany przez
+  `inbox-push` jako akcja człowieka, a `%%` udawać cudzy marker. Nie było tego w planie.
+- **IU-6** — `renderThreadCallout` dostała opcjonalny czwarty parametr `isDownloaded` (DI dla testów,
+  domyślnie odczyt dysku po `INBOX_ATTACHMENTS_DIR`); sygnatura trzyargumentowa bez zmian.
+- **IU-6/IU-8** — podkatalog miesiąca liczony z `created_at` WIADOMOŚCI, nie z `Date.now()`
+  (wymóg determinizmu). `attachmentMonth` wyeksportowana z `inbox-pull.mjs` i użyta przez downloader —
+  duplikat cicho rozjechałby zapis i sprawdzanie obecności pliku.
+- **IU-8** — `inbox-sync.mjs` dostał guard entry-pointu i przyjmuje wstrzykniętego klienta
+  (wzorzec `inbox-push`/`inbox-pull`). Bez tego modułu nie da się zaimportować w teście, czyli nie da
+  się zweryfikować wymaganej kolejności push → pobrania → pull.
+- **IU-8** — test sanityzacji dla `..\..\plik.txt` oczekuje `....plik.txt`, nie `plik.txt`: na POSIX
+  backslash nie jest separatorem dla `path.basename`, więc znaki są wycinane ze środka nazwy.
+  Asercja bezpieczeństwa sprawdza EFEKT (katalog wyniku to katalog miesiąca), nie kształt nazwy.
+- **Poza IU (naprawa w fazie domknięcia)** — odmowa binarna (`rejectBlob` w `server.js`) wysyłana
+  w ŚRODKU transferu i domykana natychmiastowym `req.destroy()` dociera do klienta jako RST, który
+  kasuje odpowiedź w jego buforze: `fetch` widzi „fetch failed" zamiast 413, a wynik zależy od
+  obciążenia maszyny (test 413 raz przechodził, raz nie — brany wcześniej za flake infrastruktury).
+  Dla klienta UPRAWNIONEGO odpowiedź idzie teraz PO wypiciu reszty ciała w próżnię
+  (`drainRequestBody`, bajty nigdzie nie zapisywane), z twardym capem 2× limitu i watchdogiem
+  bezczynności 1 s — klient, który zadeklarował 26 MB i zamilkł, nie zablokuje odmowy. Intruz
+  (403/404) zostaje przy natychmiastowym zamknięciu gniazda.
+- Zero nowych zależności w całej fazie.
 
 ### Faza 4 — Retencja, sprzątanie i rewokacja
 
