@@ -20,7 +20,16 @@ const { getInstallVersion } = require('./lib/version');
 const updater = require('./lib/updater');
 const { describeEnvUsage, readPersistedEnvCached } = require('./lib/persisted-env');
 const { matchWebhookToken, matchAskToken, queryParams } = require('./lib/webhook');
-const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
+const {
+  API_VERSION: INBOX_API_VERSION,
+  matchInboxToken,
+  handleInboxRequest,
+  isBinaryAction,
+  authorizeBlobRequest,
+  blobErrorStatus,
+  MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES,
+} = require('./lib/inbox-api');
+const inboxBlobs = require('./lib/inbox-blobs');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
 const { pushNotifySettings, buildPushPayload } = require('./lib/notify-push');
 
@@ -812,7 +821,14 @@ async function handleAsk(req, res, token) {
 // Cienka skorupa I/O nad handleInboxRequest (czysta funkcja w lib/inbox-api.js).
 // Cap body PODCZAS streamowania (413 zanim intruz wypompuje setki MB → OOM; body idzie
 // do parse'a PRZED autoryzacją) — MAX_BODY_SIZE współdzielone z handlerem (defense-in-depth).
-async function handleInbox(req, res, token, action) {
+async function handleInbox(req, res, match) {
+  // Rozgałęzienie PRZED readTextBody: ten helper robi req.setEncoding('utf8'), więc chunki
+  // stają się stringami i każdy bajt spoza UTF-8 zamieniłby się w U+FFFD — plik dojechałby
+  // uszkodzony, a hash i tak by się nie zgodził. Ścieżka binarna nie może go dotknąć.
+  if (isBinaryAction(match.action)) {
+    return await handleInboxBlob(req, res, match);
+  }
+  const { token, action } = match;
   const rawBody = await readTextBody(req, INBOX_MAX_BODY_BYTES);
   if (rawBody === null) {
     // Limit przekroczony / zerwany stream — goły 413. Destroy po flushu odpowiedzi
@@ -829,6 +845,91 @@ async function handleInbox(req, res, token, action) {
   }
   res.writeHead(result.status);
   res.end();
+}
+
+// --- Ścieżka binarna: bajty załączników (/inbox/v1/:token/blob/:sha256) ---
+
+// Odmowa na ścieżce binarnej. Destroy dopiero po flushu odpowiedzi (wzorzec 413 z /ask):
+// klient PUT-a może wciąż pompować megabajty, a bez destroy Node dumpowałby resztę
+// strumienia w nieskończoność. Kody intruzów (403/404/405) idą bez treści.
+function rejectBlob(req, res, decision) {
+  // Connection: close, bo za chwilę ubijamy gniazdo. Bez tego klient z pulą połączeń
+  // (undici/fetch) uznaje socket za żywy, wysyła nim NASTĘPNE żądanie i dostaje twarde
+  // „fetch failed" — odmowa jednego transferu psułaby wtedy kolejną, poprawną operację.
+  res.setHeader('Connection', 'close');
+  res.once('finish', () => req.destroy());
+  if (decision.json) {
+    return json(res, decision.json, decision.status);
+  }
+  res.writeHead(decision.status);
+  return res.end();
+}
+
+// PUT: bajty ze strumienia żądania wprost do magazynu. Limit i sha256 liczy
+// writeBlobFromStream — hash z URL to deklaracja nadawcy, nie dowód. Odpowiedź niesie
+// `deduped`, bo powtórzony upload tej samej treści jest sukcesem bez zapisu (R4), co czyni
+// PUT bezpiecznym do retry po timeoucie.
+async function streamBodyToFile(req, res, decision) {
+  try {
+    const result = await inboxBlobs.writeBlobFromStream(req, decision.sha256, decision.maxBytes);
+    return json(res, {
+      v: INBOX_API_VERSION,
+      sha256: result.sha256,
+      size: result.size,
+      deduped: result.deduped,
+    });
+  } catch (err) {
+    if (err instanceof inboxBlobs.InboxBlobError) {
+      // Błąd DLA UPRAWNIONEGO klienta (token już trafiony), więc niesie kod przyczyny:
+      // bez niego klient nie wie, czy ponawiać (zerwany transfer), czy przeliczyć plik
+      // (rozjazd hasha), czy odpuścić (za duży). Magazyn sprzątnął już plik tymczasowy.
+      return rejectBlob(req, res, {
+        status: blobErrorStatus(err.code),
+        json: { v: INBOX_API_VERSION, error: err.code },
+      });
+    }
+    throw err;
+  }
+}
+
+// GET: bajty z magazynu do odpowiedzi. Content-Length bierzemy z RZECZYWISTEGO rozmiaru
+// pliku, nie z `size_bytes` w metadanych — deklaracja nadawcy i zawartość dysku to dwie
+// różne rzeczy, a rozjazd zawiesiłby klienta czekającego na brakujące bajty.
+// Świadomie BEZ Content-Disposition: nazwa pliku pochodzi od nadawcy i trafiłaby do nagłówka
+// (klient i tak zna ją z metadanych wiadomości).
+function streamFileToResponse(res, decision) {
+  let stream;
+  try {
+    stream = inboxBlobs.openBlobRead(decision.sha256);
+  } catch (err) {
+    if (err instanceof inboxBlobs.InboxBlobError && err.code === 'blob_not_found') {
+      // Metadane są, bajtów nie ma (wygasły / skasowane) — 404 bez treści, jak brak dostępu.
+      res.writeHead(404);
+      return res.end();
+    }
+    throw err;
+  }
+  const size = fs.statSync(inboxBlobs.blobPath(decision.sha256)).size;
+  res.writeHead(200, {
+    'Content-Type': decision.attachment.mime || 'application/octet-stream',
+    'Content-Length': size,
+  });
+  // Zerwanie w połowie po obu stronach: bez tych dwóch listenerów zostaje albo otwarty
+  // deskryptor (klient rozłączony), albo uncaughtException (błąd odczytu w trakcie pipe).
+  stream.on('error', () => res.destroy());
+  res.on('close', () => stream.destroy());
+  stream.pipe(res);
+}
+
+async function handleInboxBlob(req, res, { token, param }) {
+  const decision = authorizeBlobRequest({ token, method: req.method, sha256: param });
+  if (decision.status !== 200) {
+    return rejectBlob(req, res, decision);
+  }
+  if (decision.op === 'upload') {
+    return await streamBodyToFile(req, res, decision);
+  }
+  return streamFileToResponse(res, decision);
 }
 
 // === Server ===
@@ -866,7 +967,7 @@ const server = http.createServer(async (req, res) => {
     // Tożsamość członka wyprowadzana z tokenu; matcher przed guardem XFF (kontrakt wyżej).
     const inboxMatch = matchInboxToken(req.url);
     if (inboxMatch) {
-      return await handleInbox(req, res, inboxMatch.token, inboxMatch.action);
+      return await handleInbox(req, res, inboxMatch);
     }
 
     // Block non-webhook requests from external sources (Tailscale Funnel)

@@ -1,5 +1,5 @@
 Branch: `feature/zalaczniki-w-skrzynce`
-Ostatnia aktualizacja: 2026-09-03
+Ostatnia aktualizacja: 2026-09-03 (faza 1)
 
 # Załączniki w Skrzynce Team OS — kontekst
 
@@ -29,3 +29,17 @@ przy pierwszym pobraniu, więc wcześniej nie ma czego wskazać).
 ## Dziennik
 
 <!-- execute-wf dopisuje tu zmiany i decyzje per faza -->
+
+### 2026-09-03 — Faza 1: Magazyn bajtów na hubie (IU-1, IU-2, IU-3)
+
+- **Zaimplementowane:** tabela `inbox_attachments` + funkcje warstwy danych (`lib/inbox-db.js`),
+  magazyn blobów na dysku ze strumieniowym hashowaniem (`lib/inbox-blobs.js` — nowy),
+  binarne endpointy `PUT/GET /inbox/v1/:token/blob/:sha256` (`lib/inbox-api.js`, `server.js`).
+- **Walidacja:** pełna suita `node --test` — 1145/1145 PASS. Testy fazy (4 pliki) — 133/133 PASS.
+  Projekt nie ma typecheckera, lintera ani buildu (czysty CommonJS + `node:test`).
+- **Odchylenia od planu** (opisane w planie technicznym, sekcja „Odchylenia — faza 1"):
+  walidacja kształtu metadanych w `addAttachments`, `findAttachmentForUser` w warstwie danych,
+  `INBOX_BLOBS_DIR` + override `CLAUDE_CRON_INBOX_BLOBS_DIR` w `lib/config.js`,
+  `handleInbox(req, res, match)` zamiast czterech argumentów, `Connection: close` na odmowach binarnych.
+- **Zero nowych zależności.** Kontrakt `matchInboxToken` zmieniony na `{token, action, param}`
+  — trzy istniejące asercje zaktualizowane do nowego kształtu (pełny `deepStrictEqual`, bez osłabienia).

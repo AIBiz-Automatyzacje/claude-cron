@@ -68,14 +68,19 @@ before(async () => {
       CLAUDE_CRON_PORT: String(PORT),
       CLAUDE_CRON_DB_PATH: path.join(tmpDir, 'claude-cron.db'),
       CLAUDE_CRON_INBOX_DB_PATH: path.join(tmpDir, 'inbox.db'),
+      // Test PISZE bajty załączników — magazyn też musi być tymczasowy.
+      CLAUDE_CRON_INBOX_BLOBS_DIR: path.join(tmpDir, 'inbox-blobs'),
       WEBHOOK_BASE_URL: FUNNEL_URL,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   await waitForServerReady(server);
+  // Ta sama baza co spawnowany serwer — połączenie fixture'owe testu.
+  inboxDb.setInboxDbPath(path.join(tmpDir, 'inbox.db'));
 });
 
 after(() => {
+  inboxDb.close();
   if (server) server.kill('SIGKILL');
   if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -245,4 +250,207 @@ test('POST /api/inbox/members z duplikatem imienia → 409; bez name → 400', a
     body: JSON.stringify({}),
   });
   assert.equal(noName.status, 400);
+});
+
+// ──────── Ścieżka binarna: /inbox/v1/:token/blob/:sha256 ────────
+
+const crypto = require('node:crypto');
+
+// Bezpośredni dostęp do bazy huba WYŁĄCZNIE jako fixture (patrz sendWithAttachment).
+const inboxDb = require('./lib/inbox-db');
+
+const sha256Hex = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+const blobUrl = (token, sha) => url(`/inbox/v1/${token}/blob/${sha}`);
+
+// Ile plików leży w magazynie blobów (bez katalogu tmp) — dowód, że zapis NIE nastąpił
+// i że po odrzuconym transferze nie został plik tymczasowy.
+function blobStoreFiles() {
+  const dir = path.join(tmpDir, 'inbox-blobs');
+  if (!fs.existsSync(dir)) return [];
+  const out = [];
+  const walk = (d) => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else out.push(full);
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+// Wiadomość z załącznikiem — nadaje uprawnienie do odczytu bajtów. Wiadomość idzie przez
+// HTTP (realna ścieżka), a wiersz metadanych dokłada test WPROST do bazy huba: `send`
+// z listą `attachments` powstaje dopiero w IU-5, a tutaj potrzebny jest wyłącznie
+// ISTNIEJĄCY wiersz wskazujący na sha256 — to on jest przedmiotem reguły uczestnictwa.
+// Zapis z drugiego procesu jest bezpieczny: baza huba chodzi w WAL z busy_timeout.
+async function sendWithAttachment(senderToken, toUser, attachment) {
+  const res = await fetch(url(`/inbox/v1/${senderToken}/send`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to_user: toUser, type: 'task', title: 'Z plikiem' }),
+  });
+  assert.equal(res.status, 200, 'wiadomość nośnik załącznika powstaje');
+  const { message } = await res.json();
+  inboxDb.addAttachments(inboxDb.getInboxDb(), message.id, [attachment]);
+  return message;
+}
+
+test('PUT blob: bajty przechodzą przez pełny stos HTTP i wracają GET-em bit w bit', async () => {
+  // Arrange — treść z bajtami spoza ASCII: dowód, że ścieżka binarna NIE przeszła przez
+  // readTextBody (setEncoding('utf8') zamieniłby je w U+FFFD i hash by się nie zgodził).
+  const sender = await createMember('BlobNadawca');
+  const bytes = Buffer.from([0x00, 0xff, 0xfe, 0x42, 0x80, 0x01, 0xc3, 0x28]);
+  const sha = sha256Hex(bytes);
+
+  // Act — upload
+  const put = await fetch(blobUrl(sender.token, sha), { method: 'PUT', body: bytes });
+
+  // Assert — 200 i metryki transferu
+  assert.equal(put.status, 200);
+  const body = await put.json();
+  assert.equal(body.v, 1);
+  assert.equal(body.sha256, sha);
+  assert.equal(body.size, bytes.length);
+  assert.equal(body.deduped, false, 'pierwszy upload realnie zapisuje bajty');
+
+  // Arrange — uprawnienie do odczytu bierze się z uczestnictwa w wiadomości
+  const receiver = await createMember('BlobOdbiorca');
+  await sendWithAttachment(sender.token, 'BlobOdbiorca', {
+    filename: 'dane.bin',
+    size_bytes: bytes.length,
+    mime: 'application/octet-stream',
+    sha256: sha,
+  });
+
+  // Act — pobranie przez adresata
+  const get = await fetch(blobUrl(receiver.token, sha));
+
+  // Assert — te same bajty, poprawne nagłówki
+  assert.equal(get.status, 200);
+  assert.equal(get.headers.get('content-type'), 'application/octet-stream');
+  assert.equal(get.headers.get('content-length'), String(bytes.length));
+  const downloaded = Buffer.from(await get.arrayBuffer());
+  assert.deepEqual(downloaded, bytes, 'bajty przeżyły round-trip bez uszkodzenia');
+});
+
+test('PUT blob: powtórzony upload tej samej treści → 200 deduped, jeden plik w magazynie (R4)', async () => {
+  // Arrange
+  const member = await createMember('BlobDedup');
+  const bytes = Buffer.from('dokładnie ta sama treść');
+  const sha = sha256Hex(bytes);
+
+  // Act
+  const first = await (await fetch(blobUrl(member.token, sha), { method: 'PUT', body: bytes })).json();
+  const second = await (await fetch(blobUrl(member.token, sha), { method: 'PUT', body: bytes })).json();
+
+  // Assert — drugi przebieg to sukces BEZ ponownego zapisu (dlatego retry uploadu jest bezpieczny)
+  assert.equal(first.deduped, false);
+  assert.equal(second.deduped, true);
+  assert.equal(second.sha256, sha);
+  assert.equal(blobStoreFiles().filter((f) => f.endsWith(sha)).length, 1, 'jedne bajty, nie dwie kopie');
+});
+
+test('PUT blob: treść o innym hashu niż w URL → 400, blob nie powstaje', async () => {
+  // Arrange — deklaracja nadawcy celowo nie pasuje do treści
+  const member = await createMember('BlobKlamca');
+  const declared = sha256Hex(Buffer.from('coś zupełnie innego'));
+
+  // Act
+  const res = await fetch(blobUrl(member.token, declared), { method: 'PUT', body: Buffer.from('podmieniona treść') });
+
+  // Assert — hub liczy sumę sam; podstawienie treści pod cudzy hash odrzucone
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, 'hash_mismatch');
+  assert.equal(blobStoreFiles().filter((f) => f.endsWith(declared)).length, 0, 'blob nie powstał');
+  assert.equal(blobStoreFiles().filter((f) => f.endsWith('.part')).length, 0, 'plik tymczasowy sprzątnięty');
+});
+
+test('PUT blob: ciało większe niż limit → 413, plik tymczasowy nie zostaje', async () => {
+  // Arrange — 26 MB przy limicie 25 MB
+  const member = await createMember('BlobGrubas');
+  const tooBig = Buffer.alloc(26 * 1024 * 1024, 7);
+  const sha = sha256Hex(tooBig);
+
+  // Act
+  const res = await fetch(blobUrl(member.token, sha), { method: 'PUT', body: tooBig });
+
+  // Assert
+  assert.equal(res.status, 413);
+  assert.equal(blobStoreFiles().filter((f) => f.endsWith(sha)).length, 0, 'bajty odrzucone');
+  assert.equal(blobStoreFiles().filter((f) => f.endsWith('.part')).length, 0, 'brak śmiecia po przerwanym transferze');
+});
+
+test('PUT blob: nieznany token → 403 bez treści, magazyn nietknięty', async () => {
+  // Arrange
+  const bytes = Buffer.from('tajne dane intruza');
+  const sha = sha256Hex(bytes);
+
+  // Act
+  const res = await fetch(blobUrl('token-nieistniejacy', sha), { method: 'PUT', body: bytes });
+
+  // Assert
+  assert.equal(res.status, 403);
+  assert.equal(await res.text(), '', 'intruz nie dostaje treści diagnostycznej');
+  assert.equal(blobStoreFiles().filter((f) => f.endsWith(sha)).length, 0);
+});
+
+test('GET blob: członek spoza wiadomości → 404 — sam hash nie jest uprawnieniem', async () => {
+  // Arrange — Nadawca wysyła plik do Adresata; Obcy zna hash (wycieka do renderu Skrzynki)
+  const sender = await createMember('PrywNadawca');
+  await createMember('PrywOdbiorca');
+  const obcy = await createMember('PrywObcy');
+  const bytes = Buffer.from('poufny raport kwartalny');
+  const sha = sha256Hex(bytes);
+  assert.equal((await fetch(blobUrl(sender.token, sha), { method: 'PUT', body: bytes })).status, 200);
+  await sendWithAttachment(sender.token, 'PrywOdbiorca', {
+    filename: 'raport.txt',
+    size_bytes: bytes.length,
+    mime: 'text/plain',
+    sha256: sha,
+  });
+
+  // Act — Obcy próbuje pobrać bajty po samym hashu
+  const res = await fetch(blobUrl(obcy.token, sha));
+
+  // Assert — 404, nie 403: kod nie zdradza, że bajty są na hubie
+  assert.equal(res.status, 404);
+  assert.equal(await res.text(), '');
+
+  // Assert — nadawca (strona wiadomości) pobiera te same bajty bez problemu
+  const legit = await fetch(blobUrl(sender.token, sha));
+  assert.equal(legit.status, 200);
+  assert.equal(Buffer.from(await legit.arrayBuffer()).toString(), 'poufny raport kwartalny');
+});
+
+test('blob: zła metoda → 405; sha256 spoza wzorca → 400 (ścieżka na dysku nie powstaje)', async () => {
+  // Arrange
+  const member = await createMember('BlobMetody');
+  const sha = sha256Hex(Buffer.from('x'));
+
+  // Act + Assert — POST nie jest metodą binarną
+  assert.equal((await fetch(blobUrl(member.token, sha), { method: 'POST', body: 'x' })).status, 405);
+
+  // Act + Assert — parametr spoza [a-f0-9]{64} nigdy nie dociera do path.join
+  const bad = await fetch(url(`/inbox/v1/${member.token}/blob/nie-jest-hashem`));
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json()).error, 'invalid_sha256');
+});
+
+test('blob przez Funnel (X-Forwarded-For) przechodzi — matcher stoi przed guardem XFF', async () => {
+  // Arrange
+  const member = await createMember('BlobFunnel');
+  const bytes = Buffer.from('plik z zewnątrz tailnetu');
+  const sha = sha256Hex(bytes);
+
+  // Act — ruch z Funnela niesie XFF; endpoint binarny jest publiczny jak reszta /inbox/v1
+  const res = await fetch(blobUrl(member.token, sha), {
+    method: 'PUT',
+    headers: { 'X-Forwarded-For': '203.0.113.9' },
+    body: bytes,
+  });
+
+  // Assert
+  assert.equal(res.status, 200, 'guard XFF nie może zabić publicznego endpointu binarnego');
+  assert.equal((await res.json()).sha256, sha);
 });

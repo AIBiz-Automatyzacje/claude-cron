@@ -199,7 +199,7 @@ idzie przez `node:test` i smoke operatora. Żaden scenariusz nie jest oznaczony 
 
 **Zależy od:** Brak
 
-- [ ] **IU-1: Schemat i warstwa danych załączników**
+- [x] **IU-1: Schemat i warstwa danych załączników**
 
 **Cel:** Tabela metadanych załączników w `data/inbox.db` plus operacje odczytu i zapisu w jedynej warstwie,
 która dotyka bazy skrzynki.
@@ -247,7 +247,7 @@ która dotyka bazy skrzynki.
 
 ---
 
-- [ ] **IU-2: Magazyn blobów na dysku huba**
+- [x] **IU-2: Magazyn blobów na dysku huba**
 
 **Cel:** Moduł zapisu i odczytu bajtów adresowanych treścią, poza drzewem vaulta, z deduplikacją.
 
@@ -296,7 +296,7 @@ limitu **przed** implementacją zapisu.
 
 ---
 
-- [ ] **IU-3: Endpointy binarne w API huba**
+- [x] **IU-3: Endpointy binarne w API huba**
 
 **Cel:** `PUT` i `GET` bajtów pod `/inbox/v1/:token/blob/:sha256`, z autoryzacją po uczestnictwie w wątku
 i osobnym kubłem rate-limitu.
@@ -353,6 +353,32 @@ i osobnym kubłem rate-limitu.
 **Weryfikacja:**
 - `node --test lib/inbox-api.test.js` przechodzi bez błędów.
 - `node --test server.inbox.http.test.js` przechodzi bez błędów.
+
+#### Odchylenia — faza 1 (2026-09-03, zrealizowane)
+
+Zmiany względem litery planu, przyjęte w implementacji fazy 1:
+
+- **IU-1** — `addAttachments` waliduje kształt CAŁEJ partii przed pierwszym `INSERT`-em
+  (sha256 = 64 hex, `filename` bez separatora ścieżki i NUL, `size_bytes` nieujemny integer,
+  limity długości `filename`/`mime`). Plan tej bramki nie wymieniał, ale sha256 jest kluczem
+  ścieżki blobu w IU-2 — bez walidacji tutaj zapis bajtów byłby podatny na path traversal,
+  a R2 („wszystko albo nic") zależałoby od tego, czy wołający owinął operację transakcją.
+- **IU-3** — `findAttachmentForUser(sha256, user)` dołożona do `lib/inbox-db.js` (poza listą `Pliki:`).
+  Autoryzacja odczytu po uczestnictwie wymaga JOIN-a `inbox_attachments`↔`inbox`; budowanie SQL
+  w `lib/inbox-api.js` złamałoby granicę modułów (API jest czystą funkcją NAD warstwą danych).
+- **IU-2/IU-3** — `INBOX_BLOBS_DIR` (`data/inbox-blobs`) w `lib/config.js` z override
+  `CLAUDE_CRON_INBOX_BLOBS_DIR` (lustro `CLAUDE_CRON_INBOX_DB_PATH`). Config jest jedynym źródłem
+  stałych i ścieżek; bez override testy HTTP na żywym procesie pisałyby bajty do realnego
+  `data/inbox-blobs` (in-process setter nie sięga spawnowanego dziecka).
+- **IU-3** — `handleInbox(req, res, match)` zamiast `(req, res, token, action)`: potrzebny trzeci
+  segment URL-a i rozgałęzienie binarne przed `readTextBody`.
+- **IU-3** — odmowy na ścieżce binarnej wysyłają `Connection: close`. Bez tego `req.destroy()`
+  po odmowie zostawia klientowi z pulą połączeń (undici/fetch) martwy socket, a NASTĘPNE,
+  poprawne żądanie pada twardym `fetch failed` (wykryte testem: 6,3 s i FAIL → 0,23 s i PASS).
+- **IU-3** — trzy istniejące asercje `matchInboxToken` w `lib/inbox-api.test.js` zaktualizowane
+  o `param: null`. To wymuszona planem zmiana KONTRAKTU, nie osłabienie: nadal `deepStrictEqual`
+  na pełnym kształcie obiektu.
+- Zero nowych zależności w całej fazie.
 
 ### Faza 2 — Wysyłka z załącznikami
 
