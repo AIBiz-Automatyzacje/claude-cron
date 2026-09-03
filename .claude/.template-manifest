@@ -11,9 +11,9 @@
 .claude/agents/performance-oracle.md
 .claude/agents/repo-research-analyst.md
 .claude/agents/security-sentinel.md
+.claude/agents/spec-compliance-reviewer.md
 .claude/agents/spec-flow-analyzer.md
 .claude/agents/web-research-specialist.md
-.claude/docs/dev-pipeline.md
 .claude/hooks/error-handling-reminder.sh
 .claude/hooks/stop-build-check-enhanced.sh
 .claude/rules/coding-rules.md
@@ -52,7 +52,6 @@
 .claude/skills/coolify-manager/references/wordpress_fixes.md
 .claude/skills/coolify-manager/scripts/check_health.sh
 .claude/skills/coolify-manager/scripts/install_coolify_cli.sh
-.claude/skills/dev-autopilot/SKILL.md
 .claude/skills/dev-brainstorm/SKILL.md
 .claude/skills/dev-compound-refresh/SKILL.md
 .claude/skills/dev-compound/SKILL.md
@@ -63,6 +62,8 @@
 .claude/skills/dev-docs/SKILL.md
 .claude/skills/dev-ideate/SKILL.md
 .claude/skills/dev-plan/SKILL.md
+.claude/skills/dev-pr/SKILL.md
+.claude/skills/dev-prep/SKILL.md
 .claude/skills/figma-design-to-code/SKILL.md
 .claude/skills/freshness-audit/SKILL.md
 .claude/skills/gemini/SKILL.md
@@ -111,9 +112,13 @@
 .claude/templates/smoke-autopilot/smoke-autopilot-kontekst.md
 .claude/templates/smoke-autopilot/smoke-autopilot-plan.md
 .claude/templates/smoke-autopilot/smoke-autopilot-zadania.md
+.claude/workflows/__tests__/bloker-srodowiska.test.mjs
+.claude/workflows/__tests__/sceptycy-p2.test.mjs
+.claude/workflows/__tests__/wybor-nitow.test.mjs
 .claude/workflows/dev-autopilot-wf.js
 .claude/workflows/dev-compound-wf.js
 .claude/workflows/dev-docs-complete-wf.js
 .claude/workflows/dev-docs-execute-wf.js
 .claude/workflows/dev-docs-review-wf.js
+.claude/workflows/dev-pr-wf.js
 .claude/workflows/freshness-audit-wf.js
