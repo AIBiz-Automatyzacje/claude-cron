@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Team OS — wysłanie taska/query do skrzynki zespołowej przez hub.
-// Args: --to <nick> --title "..." [--content "..." | --content-file <ścieżka>] --type task|query [--thread <uuid>]
+// Args: --to <nick> --title "..." [--content "..." | --content-file <ścieżka>] --type task|query [--thread <uuid>] [--attach <ścieżka>]...
 //
 // Mieszka W REPO (nie w vaultcie) — ten sam powód co close.mjs: kopia w vaultcie nie jest
 // objęta `npm test` i cicho rozjeżdża się z repo (kopia inbox-client sprzed PR #5 nie miała
@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parseArgs } from './args.mjs';
+import { prepareAttachments } from './attachments.mjs';
 import * as inboxClient from './inbox-client.mjs';
 import { readContent } from './content-arg.mjs';
 import { loadEnv } from './skill-env.mjs';
@@ -29,7 +30,7 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
   const content = readContent(args);
 
   if (!to || !title) {
-    throw new Error('Usage: send.mjs --to <nick> --title "..." [--content "..." | --content-file <ścieżka>] --type task|query [--thread <uuid>]');
+    throw new Error('Usage: send.mjs --to <nick> --title "..." [--content "..." | --content-file <ścieżka>] --type task|query [--thread <uuid>] [--attach <ścieżka>]');
   }
   // Brak cichego defaultu: nowa wiadomość MUSI mieć jawny --type (task vs query → inny
   // render u odbiorcy i inna ścieżka domknięcia).
@@ -40,13 +41,20 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
     throw new Error(`Invalid --type: ${type}`);
   }
 
-  const { message } = await client.send({
+  // Bajty PRZED wiadomością (upload dwufazowy): pad progu albo któregokolwiek transferu
+  // znaczy, że wiadomość w ogóle nie powstaje (R2) — a nie że dojdzie bez pliku.
+  const attachments = await prepareAttachments(args.attach, { client });
+
+  const body = {
     to_user: to,
     type,
     title,
     content: content ?? null,
     thread_id: thread ?? null,
-  });
+  };
+  if (attachments.length > 0) body.attachments = attachments;
+
+  const { message } = await client.send(body);
 
   const out = {
     id: message.id,

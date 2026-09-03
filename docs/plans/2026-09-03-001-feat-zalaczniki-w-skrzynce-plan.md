@@ -490,6 +490,40 @@ utworzenie wiadomości.
 - `node --test scripts/inbox/attachments.test.mjs scripts/inbox/send.test.mjs` przechodzi bez błędów.
 - `node --test lib/inbox-api.test.js lib/inbox-db.test.js` przechodzi bez błędów (regresja fazy 1).
 
+#### Odchylenia — faza 2 (2026-09-03, zrealizowane)
+
+**Status:** wszystkie scenariusze testowe IU-4 i IU-5 napisane i przechodzą; obie pozycje
+„Weryfikacja" fazy 2 wykonane (`node --test scripts/inbox/attachments.test.mjs scripts/inbox/send.test.mjs`
+oraz `node --test lib/inbox-api.test.js lib/inbox-db.test.js` — bez błędów). Pełna suita: 1200/1201 PASS,
+jedyny FAIL to flake infrastruktury workera na `server.inbox.http.test.js` (PASS 3/3 w izolacji).
+
+Zmiany względem litery planu, przyjęte w implementacji fazy 2:
+
+- **IU-4** — `uploadBlob` wysyła bajty jako `Buffer` (`readFile`), nie strumieniem. Retry musi wysłać
+  DOKŁADNIE te same bajty, a zużytego strumienia nie da się odtworzyć; dodatkowo `Content-Length`
+  pozwala hubowi odrzucić za duży plik przed transferem (`streamBodyToFile` sprawdza `content-length`).
+  Plan wymagał strumienia wyłącznie dla `downloadBlob` — tam jest.
+- **IU-4** — wspólny refaktor transportu: `fetchWithTimeout`/`attemptRequest` przyjmują gotowe
+  `body`/`headers` oraz `timeoutMs` (default `REQUEST_TIMEOUT_MS`); wydzielone `runWithRetry`
+  i `actionUrl`. Zachowanie ścieżki tekstowej bez zmian.
+- **IU-4** — redakcja tokenu rozszerzona na komunikat „błąd sieci" (`describeFetchFailure`).
+  Wcześniej `err.message` z undici (pełny URL z tokenem w ścieżce) szedł surowy do komunikatu —
+  domknięcie istniejącej dziury w tym samym module.
+- **IU-5** — `handleSend` wymaga nie tylko istnienia blobu (`blobs.hasBlob`), ale też śladu wgrania
+  tych bajtów PRZEZ TEGO nadawcę (`inboxDb.isBlobUploader`). To lustro `findAttachmentForUser`
+  z fazy 1: bez tego znajomość cudzego hasha pozwalałaby podpiąć cudzy plik pod własną wiadomość.
+  Kod błędu: `400 unknown_attachment`.
+- **IU-5** — `MAX_ATTACHMENTS_PER_MESSAGE = 10` na granicy API. To nie kwota miejsca (te wycofano),
+  tylko limit kształtu inputu: bez niego jedno żądanie 64 KB każe hubowi zrobić tysiące odczytów
+  dysku przed insertem.
+- **IU-5** — magazyn blobów wstrzykiwany do `handleInboxRequest` jako opcja `blobs`
+  (default `lib/inbox-blobs`), wzorzec istniejącego wstrzykiwania `inboxDb`; `server.js` bez zmian.
+- **IU-5** — `sendMessage` zwraca teraz ZAWSZE pole `attachments` (pusta tablica przy braku) —
+  spójny kształt zamiast pola warunkowego.
+- **IU-5** — `reply.mjs` nadal wymaga `--content`; wiadomość „sam plik bez treści" byłaby zmianą
+  kontraktu komendy, poza zakresem IU.
+- Zero nowych zależności w całej fazie.
+
 ### Faza 3 — Odbiór: render, odhaczenie, zapis do vaulta
 
 **Zależy od:** Faza 2

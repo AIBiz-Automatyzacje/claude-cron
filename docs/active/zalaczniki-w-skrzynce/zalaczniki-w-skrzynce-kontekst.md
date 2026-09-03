@@ -1,5 +1,5 @@
 Branch: `feature/zalaczniki-w-skrzynce`
-Ostatnia aktualizacja: 2026-09-03 (faza 1)
+Ostatnia aktualizacja: 2026-09-03 (faza 2)
 
 # Załączniki w Skrzynce Team OS — kontekst
 
@@ -43,3 +43,22 @@ przy pierwszym pobraniu, więc wcześniej nie ma czego wskazać).
   `handleInbox(req, res, match)` zamiast czterech argumentów, `Connection: close` na odmowach binarnych.
 - **Zero nowych zależności.** Kontrakt `matchInboxToken` zmieniony na `{token, action, param}`
   — trzy istniejące asercje zaktualizowane do nowego kształtu (pełny `deepStrictEqual`, bez osłabienia).
+
+### 2026-09-03 — Faza 2: Wysyłka z załącznikami (IU-4, IU-5)
+
+- **Zaimplementowane:** operacje binarne klienta huba `uploadBlob`/`downloadBlob` z osobnym
+  `BINARY_TIMEOUT_MS = 180 s` i zapisem przez plik tymczasowy + `rename`
+  (`scripts/inbox/inbox-client.mjs`); przygotowanie załączników nadawcy — próg 25 MB przed
+  transferem, sha256, upload (`scripts/inbox/attachments.mjs` — nowy); powtarzalna flaga
+  `--attach` (`scripts/inbox/args.mjs`) wpięta w `send.mjs` i `reply.mjs`; walidacja
+  `attachments` na granicy API + krótka transakcja wiadomość-plus-metadane
+  (`lib/inbox-api.js`, `lib/inbox-db.js`).
+- **Walidacja:** pełna suita `node --test` — 1200/1201 PASS; jedyny FAIL to flake infrastruktury
+  workera na `server.inbox.http.test.js` (PASS 3/3 w izolacji), nie defekt. Testy fazy
+  (5 plików) — 185/185 PASS. Projekt nie ma typecheckera, lintera ani buildu.
+- **Odchylenia od planu:** opisane w planie technicznym, sekcja „Odchylenia — faza 2"
+  (`docs/plans/2026-09-03-001-feat-zalaczniki-w-skrzynce-plan.md`) — m.in. upload bajtów jako
+  `Buffer` zamiast strumienia (retry musi wysłać te same bajty), warunek „to TEN nadawca wgrał
+  te bajty" w `handleSend` oraz `MAX_ATTACHMENTS_PER_MESSAGE = 10`.
+- **Zero nowych zależności.** Audyt error-handlingu diffu: brak `console.log` i pustych `catch`;
+  jedyny nowy log to `console.warn` z prefiksem modułu (konwencja projektu, lustro `lib/inbox-blobs.js`).

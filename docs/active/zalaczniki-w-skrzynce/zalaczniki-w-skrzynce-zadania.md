@@ -59,21 +59,8 @@ Notatka wykonawcza (IU-2): to pierwszy kod strumieniowy i pierwsze hashowanie w 
 - [x] Weryfikacja: `node --test server.inbox.http.test.js` przechodzi bez błędów
 
 ## Do poprawy po review fazy 1
+Zamkniete cyklem fix: 14 pozycji — pelna tresc findingow i uzasadnienia w `review-faza-1.md`.
 
-- [x] 🟠 [P2] **server.js:914** — `streamFileToResponse` ustawia `Content-Type` wprost z `attachment.mime` (pole nadawcy, walidowane tylko na długość ≤255 w `lib/inbox-db.js:481`), bez `X-Content-Type-Options: nosniff` i bez `Content-Disposition: attachment`, na PUBLICZNYM endpoincie z `Access-Control-Allow-Origin: *`. Nadawca wysyła `text/html` ze skryptem, ofiara otwiera link — skrypt wykonuje się na origin huba, a token ofiary siedzi w tym samym URL-u (`location.href`) → przejęcie tożsamości w hubie. Napraw: serwuj `application/octet-stream` poza wąską allowlistą, zawsze dokładaj `nosniff` + `Content-Disposition: attachment`, a w `normalizeAttachment` waliduj kształt mime wzorcem `^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$` (dziś mime z CRLF przechodzi i zamienia pobranie w 500). Dołóż testy odmowy dla `text/html`, mime z CRLF i `image/svg+xml`.
-- [x] 🟠 [P2] **lib/inbox-db.js:553** — `findAttachmentForUser` autoryzuje po „jesteś stroną JAKIEJKOLWIEK wiadomości wskazującej ten sha256", a `sendMessage` pozwala wysłać wiadomość do samego siebie i nie sprawdza, kto wgrał bajty → obcy członek, który zna hash, robi `send` do siebie z tym `sha256` i pobiera cudzy plik (hash staje się uprawnieniem). Napraw w warstwie danych, zanim faza 2 zbuduje na tym API: zapamiętaj wgrywającego (kolumna `uploaded_by` na ścieżce PUT albo tabela `inbox_blob_uploads(sha256, uploaded_by, created_at)`) i wymagaj w `findAttachmentForUser`, żeby wiersz pochodził od nadawcy, który te bajty realnie wgrał — albo odrzucaj takie załączniki w `send`. Test odmowy: obcy członek z wiadomością do samego siebie → 404 na GET.
-- [x] 🟠 [P2] **lib/inbox-blobs.js:155** — dedup (R4) wykrywany dopiero po przyjęciu i zapisaniu całego pliku: `writeBlobFromStream` otwiera fd na tmp (linia 118), przepompowuje strumień i dopiero w `if (fs.existsSync(target))` kasuje świeżą kopię — checkbox IU-3 obiecuje „200 bez ponownego zapisu". Napraw: po `assertValidSha256(expectedSha)` dodaj short-circuit `if (hasBlob(expectedSha)) return { sha256: expectedSha, size: fs.statSync(blobPath(expectedSha)).size, deduped: true };` PRZED `fs.mkdirSync(tmpDir)`/`fs.openSync`, a w `server.js` w `streamBodyToFile` (linia 872) przy `deduped === true` ustaw `res.setHeader('Connection','close')` + `res.once('finish', () => req.destroy())` (wzorzec `rejectBlob`). Test: drugi PUT nie tworzy pliku w `tmp` i nie czyta całego ciała.
-- [x] 🟠 [P2] **lib/inbox-blobs.js:140** — moduł niszczy strumień, którego nie jest właścicielem: w bloku catch woła `stream.destroy()` na `req` serwera HTTP, choć cyklem życia gniazda zarządza skorupa `server.js` (`rejectBlob` ubija socket dopiero po flushu odpowiedzi 413/400) — dwa miejsca zabijają ten sam socket w odwrotnej kolejności, a przyszły wołający spoza HTTP (klient fazy 2 z `createReadStream`) straciłby własny strumień. Napraw: usuń linię `if (typeof stream.destroy === 'function') stream.destroy();` — moduł sprząta wyłącznie plik tymczasowy (`out.destroy()` + `removeTemp`).
-- [x] 🟠 [P2] **server.js:912** — `streamFileToResponse` otwiera strumień PRZED `statSync`/`writeHead` i nie sprząta go, gdy któraś z linii 912–915 rzuci (listenery `'error'`/`'close'` dopinane dopiero po `writeHead`): mime z CR/LF → `ERR_INVALID_CHAR` w `res.writeHead` → 500 z globalnego catch, a deskryptor zostaje otwarty na zawsze; powtarzany GET (30/min z kubła binarnego) wyczerpuje deskryptory huba (EMFILE). Napraw: policz `size` i zbuduj nagłówki PRZED `openBlobRead`, albo owiń linie 912–915 w try/catch z `stream.destroy()` przed rzutem.
-- [x] 🟠 [P2] **lib/inbox-api.js:88** — `INBOX_URL_PATTERN` dopuszcza opcjonalny trzeci segment dla KAŻDEJ akcji, nie tylko binarnej, więc `GET /inbox/v1/<token>/ping/smiec` zwraca 200 zamiast 404, a `POST /inbox/v1/<token>/pull/x` wykonuje pełny pull — wbrew komentarzowi nad regexem i checkboxowi IU-3 („nadmiarowe segmenty nie przechodzą"). Napraw: w `matchInboxToken` odrzucaj `param !== null` dla akcji spoza `BINARY_ACTIONS`; test `/inbox/v1/tok/pull/x` → `null`.
-- [x] 🟡 [P3] **server.js:912** — `const size = fs.statSync(inboxBlobs.blobPath(decision.sha256)).size;` biegnie po `openBlobRead`, więc skasowanie blobu między tymi operacjami (retencja fazy 4) daje 500 zamiast obiecanego 404. Zamień na `let size; try { size = fs.statSync(inboxBlobs.blobPath(decision.sha256)).size; } catch (err) { if (err.code === 'ENOENT') { stream.destroy(); res.writeHead(404); return res.end(); } throw err; }`.
-- [x] 🟡 [P3] **server.js:872** — `streamBodyToFile` ignoruje `Content-Length` i odkrywa przekroczenie limitu dopiero po zapisaniu 25 MB. Dodaj na początku funkcji, przed `await inboxBlobs.writeBlobFromStream(…)`: `const declared = Number(req.headers['content-length']); if (Number.isFinite(declared) && declared > decision.maxBytes) return rejectBlob(req, res, { status: 413, json: { v: INBOX_API_VERSION, error: 'too_large' } });`.
-- [x] 🟡 [P3] **lib/inbox-api.js:71** — wpis `blob: ['PUT', 'GET'],` w `ENDPOINT_METHODS` to martwy kod (akcje binarne odrzucane fail-closed w kroku 0, realną bramkę metody trzyma `authorizeBlobRequest` w linii 257) i jedyny element mapy o innym typie niż reszta. Usuń wpis, zostaw w jego miejsce jednolinijkowy komentarz, że metody akcji binarnych rozstrzyga `authorizeBlobRequest`.
-- [x] 🟡 [P3] **lib/inbox-blobs.js:141** — `removeTemp(tmpFile)` biegnie przy wciąż otwartym deskryptorze (`out.destroy()` zamyka fd asynchronicznie), co na Windows pada EPERM/EBUSY i zostawia `.part` przy każdym przerwanym transferze. W bloku catch zamień `out.destroy();` na `out.destroy(); await once(out, 'close').catch(() => {});` przed `removeTemp(tmpFile)`.
-- [x] 🟡 [P3] **lib/inbox-db.js:464** — guard nazwy pliku przepuszcza `.` i `..`, które w fazie 3 trafią do `path.join` i wskażą katalog zamiast pliku (EISDIR/EPERM przy odbiorze). W tym samym `if` dorzuć warunek `filename === '.' || filename === '..'` z tym samym błędem `invalid_attachment`.
-- [x] 🟡 [P3] **lib/inbox-blobs.js:161** — `fs.mkdirSync(path.dirname(target))` i `fs.renameSync(tmpFile, target)` leżą poza blokiem try, więc błąd finalizacji (ENOSPC/EACCES/EXDEV/EPERM) zostawia `.part` na zawsze i wypuszcza nietypowany `Error`. Owiń te dwie linie w `try { … } catch (err) { removeTemp(tmpFile); throw err; }`.
-- [x] 🟡 [P3] **lib/inbox-blobs.test.js:102** — granica limitu nieprzybita (jedyny test przekroczenia to 50 B przy `maxBytes=30`, więc `>` ↔ `>=` w `lib/inbox-blobs.js:126` przeszłoby niezauważone). Dopisz test: treść o dokładnie `maxBytes` bajtach zapisuje się poprawnie (`deduped:false`, plik istnieje), a `maxBytes+1` rzuca `InboxBlobError` z code `too_large`.
-- [x] 🟡 [P3] **server.inbox.http.test.js:456** — gałąź `blob_not_found` (`server.js:903–907`: metadane są, bajtów nie ma) bez testu, a po fazie 4 to normalny stan. Dopisz test HTTP: wyślij wiadomość przez `sendWithAttachment` BEZ uprzedniego PUT-a bajtów i asertuj 404 z pustym ciałem na GET blobu przez stronę wiadomości.
 
 ## Operator checklist faza 1
 
@@ -85,33 +72,33 @@ Zależy od: Faza 1
 
 ### IU-4: Klient huba — operacje binarne (feature-builder-data)
 
-- [ ] Modyfikuj: `scripts/inbox/inbox-client.mjs` — `BINARY_TIMEOUT_MS = 180_000` jako OSOBNA stała; `REQUEST_TIMEOUT_MS = 15_000` zostaje dla `pull`/`done`, bo jego ciasnota jest tam celowa
-- [ ] Modyfikuj: `scripts/inbox/inbox-client.mjs` — `uploadBlob(sha256, filePath)` RETRYUJE (w odróżnieniu od `send`), bo kluczem deduplikacji jest treść: powtórzenie po timeoucie trafia w istniejący blob bez skutków ubocznych
-- [ ] Modyfikuj: `scripts/inbox/inbox-client.mjs` — `downloadBlob(sha256, destPath)` zapisuje do pliku tymczasowego i robi `rename` po sukcesie; przerwany transfer nie zostawia pliku wyglądającego na kompletny
-- [ ] Test (unit): `scripts/inbox/inbox-client.test.mjs`
-- [ ] Test: [Unit] `uploadBlob` po jednym `AbortError` ponawia i kończy sukcesem
-- [ ] Test: [Unit] `uploadBlob` używa `BINARY_TIMEOUT_MS`, nie `REQUEST_TIMEOUT_MS`
-- [ ] Test: [Unit] `downloadBlob` przy zerwaniu w połowie nie zostawia pliku docelowego
-- [ ] Test: [Unit] Komunikat błędu z URL-em zawierającym token jest zredagowany
+- [x] Modyfikuj: `scripts/inbox/inbox-client.mjs` — `BINARY_TIMEOUT_MS = 180_000` jako OSOBNA stała; `REQUEST_TIMEOUT_MS = 15_000` zostaje dla `pull`/`done`, bo jego ciasnota jest tam celowa
+- [x] Modyfikuj: `scripts/inbox/inbox-client.mjs` — `uploadBlob(sha256, filePath)` RETRYUJE (w odróżnieniu od `send`), bo kluczem deduplikacji jest treść: powtórzenie po timeoucie trafia w istniejący blob bez skutków ubocznych
+- [x] Modyfikuj: `scripts/inbox/inbox-client.mjs` — `downloadBlob(sha256, destPath)` zapisuje do pliku tymczasowego i robi `rename` po sukcesie; przerwany transfer nie zostawia pliku wyglądającego na kompletny
+- [x] Test (unit): `scripts/inbox/inbox-client.test.mjs`
+- [x] Test: [Unit] `uploadBlob` po jednym `AbortError` ponawia i kończy sukcesem
+- [x] Test: [Unit] `uploadBlob` używa `BINARY_TIMEOUT_MS`, nie `REQUEST_TIMEOUT_MS`
+- [x] Test: [Unit] `downloadBlob` przy zerwaniu w połowie nie zostawia pliku docelowego
+- [x] Test: [Unit] Komunikat błędu z URL-em zawierającym token jest zredagowany
 - [ ] Weryfikacja: `node --test scripts/inbox/inbox-client.test.mjs` przechodzi bez błędów
 
 ### IU-5: Wysyłka plików przez `send` i `reply` (feature-builder-data)
 
-- [ ] Stwórz: `scripts/inbox/attachments.mjs` — `prepareAttachments(paths)`: `stat` → próg 25 MB sprawdzany PRZED jakimkolwiek transferem → `sha256` z pliku → `uploadBlob`; próg mierzy wyłącznie pojedynczy plik, bez limitu sumy wiadomości
-- [ ] Modyfikuj: `scripts/inbox/args.mjs` — powtarzalna flaga `--attach <ścieżka>`, jedna na plik; świadomie nie lista rozdzielana separatorem, bo ścieżki zawierają spacje, a wszystko przechodzące przez parser linii poleceń PowerShella potrafi się cicho rozpaść
-- [ ] Modyfikuj: `scripts/inbox/send.mjs` — wysyłka wiadomości dopiero po udanym uploadzie WSZYSTKICH plików; pad któregokolwiek uploadu = wiadomość nie powstaje (R2)
-- [ ] Modyfikuj: `scripts/inbox/reply.mjs` — ta sama ścieżka załączników co w `send.mjs`
-- [ ] Modyfikuj: `lib/inbox-api.js` — `handleSend` waliduje `attachments` na granicy (długość listy, wzorzec sha256, limity `filename` i `size_bytes`) i weryfikuje istnienie każdego blobu NA ŚWIEŻO tuż przed insertem, bo między uploadem a `send` mija kilkanaście sekund
-- [ ] Modyfikuj: `lib/inbox-db.js` — wstawienie wiadomości i rekordów załączników w jednej, KRÓTKIEJ transakcji; transfer jest już zakończony, więc transakcja nie trzyma blokady przez czas sieci
-- [ ] Test (unit): `scripts/inbox/attachments.test.mjs`
-- [ ] Test (unit): `scripts/inbox/send.test.mjs`
-- [ ] Test: [Unit] Dwa `--attach` dają dwa rekordy w jednej wiadomości
-- [ ] Test: [Unit] Plik 26 MB → odmowa PRZED wywołaniem `uploadBlob` (mock klienta nie dostaje żadnego żądania)
-- [ ] Test: [Unit] Pad uploadu drugiego pliku → `send` nie jest wołany w ogóle (R2)
-- [ ] Test: [Unit] Ten sam plik wysłany dwa razy → drugi upload trafia w istniejący blob, powstają dwa rekordy metadanych wskazujące jeden `sha256` (R4)
-- [ ] Test: [Unit] `handleSend` z `sha256` nieistniejącym na hubie → 400, wiadomość nie powstaje
-- [ ] Test: [Unit] `handleSend` z `attachments` niebędącym tablicą albo z nadmiarową liczbą pozycji → 400
-- [ ] Test: [Unit] Ścieżka do pliku, który nie istnieje → czytelny błąd przed transferem
+- [x] Stwórz: `scripts/inbox/attachments.mjs` — `prepareAttachments(paths)`: `stat` → próg 25 MB sprawdzany PRZED jakimkolwiek transferem → `sha256` z pliku → `uploadBlob`; próg mierzy wyłącznie pojedynczy plik, bez limitu sumy wiadomości
+- [x] Modyfikuj: `scripts/inbox/args.mjs` — powtarzalna flaga `--attach <ścieżka>`, jedna na plik; świadomie nie lista rozdzielana separatorem, bo ścieżki zawierają spacje, a wszystko przechodzące przez parser linii poleceń PowerShella potrafi się cicho rozpaść
+- [x] Modyfikuj: `scripts/inbox/send.mjs` — wysyłka wiadomości dopiero po udanym uploadzie WSZYSTKICH plików; pad któregokolwiek uploadu = wiadomość nie powstaje (R2)
+- [x] Modyfikuj: `scripts/inbox/reply.mjs` — ta sama ścieżka załączników co w `send.mjs`
+- [x] Modyfikuj: `lib/inbox-api.js` — `handleSend` waliduje `attachments` na granicy (długość listy, wzorzec sha256, limity `filename` i `size_bytes`) i weryfikuje istnienie każdego blobu NA ŚWIEŻO tuż przed insertem, bo między uploadem a `send` mija kilkanaście sekund
+- [x] Modyfikuj: `lib/inbox-db.js` — wstawienie wiadomości i rekordów załączników w jednej, KRÓTKIEJ transakcji; transfer jest już zakończony, więc transakcja nie trzyma blokady przez czas sieci
+- [x] Test (unit): `scripts/inbox/attachments.test.mjs`
+- [x] Test (unit): `scripts/inbox/send.test.mjs`
+- [x] Test: [Unit] Dwa `--attach` dają dwa rekordy w jednej wiadomości
+- [x] Test: [Unit] Plik 26 MB → odmowa PRZED wywołaniem `uploadBlob` (mock klienta nie dostaje żadnego żądania)
+- [x] Test: [Unit] Pad uploadu drugiego pliku → `send` nie jest wołany w ogóle (R2)
+- [x] Test: [Unit] Ten sam plik wysłany dwa razy → drugi upload trafia w istniejący blob, powstają dwa rekordy metadanych wskazujące jeden `sha256` (R4)
+- [x] Test: [Unit] `handleSend` z `sha256` nieistniejącym na hubie → 400, wiadomość nie powstaje
+- [x] Test: [Unit] `handleSend` z `attachments` niebędącym tablicą albo z nadmiarową liczbą pozycji → 400
+- [x] Test: [Unit] Ścieżka do pliku, który nie istnieje → czytelny błąd przed transferem
 - [ ] Weryfikacja: `node --test scripts/inbox/attachments.test.mjs scripts/inbox/send.test.mjs` przechodzi bez błędów
 - [ ] Weryfikacja: `node --test lib/inbox-api.test.js lib/inbox-db.test.js` przechodzi bez błędów (regresja fazy 1)
 

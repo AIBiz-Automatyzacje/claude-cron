@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Team OS — odpowiedź na wiadomość w wątku, przez hub.
-// Args: --thread-id <uuid> [--content "..." | --content-file <ścieżka>] [--title "..."] [--to <nick>]
+// Args: --thread-id <uuid> [--content "..." | --content-file <ścieżka>] [--title "..."] [--to <nick>] [--attach <ścieżka>]...
 //
 // Mieszka W REPO (nie w vaultcie) — ten sam powód co close.mjs/send.mjs: kopie w vaultcie
 // nie są objęte `npm test` i cicho rozjeżdżają się z repo. Skill `deleguj` woła:
@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parseArgs } from './args.mjs';
+import { prepareAttachments } from './attachments.mjs';
 import * as inboxClient from './inbox-client.mjs';
 import { readContent } from './content-arg.mjs';
 import { loadEnv } from './skill-env.mjs';
@@ -60,13 +61,20 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
   const toUser = to ?? (original.from_user === pulled.user ? original.to_user : original.from_user);
   const replyTitle = title || (original ? `Re: ${original.title}` : 'Re: (wątek)');
 
-  const { message } = await client.send({
+  // Bajty PRZED wiadomością (upload dwufazowy) — patrz send.mjs. Prepare idzie PO ustaleniu
+  // adresata: nieznany wątek ma się wywalić przed transferem, nie po nim.
+  const attachments = await prepareAttachments(args.attach, { client });
+
+  const body = {
     thread_id: threadId,
     to_user: toUser,
     type: 'reply',
     title: replyTitle,
     content,
-  });
+  };
+  if (attachments.length > 0) body.attachments = attachments;
+
+  const { message } = await client.send(body);
 
   const out = {
     id: message.id,
