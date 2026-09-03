@@ -272,6 +272,19 @@ function handleRunsList(res, params) {
   return json(res, db.getRuns({ limit: limit ?? 50, offset: offset ?? 0, job_id, status, hideRoutine, fields }));
 }
 
+// Jedno miejsce na pytanie „czy ta instancja jest hubem skrzynki" — odpowiedź czytają DWA
+// niezależne konsumenty (panel przez /api/env i guard retencji), a rozjazd kopii dałby panel
+// twierdzący co innego niż przemiatanie. `memberCount` liczymy LENIWIE: bez WEBHOOK_BASE_URL
+// odpowiedź i tak brzmi „nie", a listMembers() otwierałoby i migrowało data/inbox.db co tick
+// na każdej maszynie bez skrzynki.
+function currentIsInboxHub() {
+  return isInboxHub({
+    inboxHubUrl,
+    webhookBaseUrl: WEBHOOK_BASE_URL,
+    memberCount: WEBHOOK_BASE_URL ? inboxDb.listMembers().length : 0,
+  });
+}
+
 async function handleApi(req, res) {
   const { method, path: urlPath, segments, params } = matchRoute(req.method, req.url);
 
@@ -295,11 +308,7 @@ async function handleApi(req, res) {
   // onboarding admina padł: skrzynka istnieje, tylko `INBOX_HUB_URL` nie zdążył się zapisać,
   // a bez zakładki nie dałoby się tego naprawić z dashboardu.
   if (method === 'GET' && urlPath === '/api/env') {
-    const isHub = isInboxHub({
-      inboxHubUrl,
-      webhookBaseUrl: WEBHOOK_BASE_URL,
-      memberCount: inboxDb.listMembers().length,
-    });
+    const isHub = currentIsInboxHub();
     return json(res, {
       vps_configured: !!VPS_API_URL,
       webhook_base_url: WEBHOOK_BASE_URL,
@@ -1214,14 +1223,7 @@ scheduler.start();
 // transferów. Guard jest FUNKCJĄ liczoną przy każdym przemiataniu, nie wartością z linii
 // startu: `inboxHubUrl` wypełnia asynchroniczny import wyżej, a lista członków zmienia się
 // w locie — policzony raz odpowiadałby na stan sprzed odczytu pliku sekretu.
-inboxRetention.startInboxRetention({
-  isHub: () =>
-    isInboxHub({
-      inboxHubUrl,
-      webhookBaseUrl: WEBHOOK_BASE_URL,
-      memberCount: inboxDb.listMembers().length,
-    }),
-});
+inboxRetention.startInboxRetention({ isHub: currentIsInboxHub });
 
 server.listen(PORT, () => {
   console.log(`\n🫀  Puls running at http://localhost:${PORT}`);
