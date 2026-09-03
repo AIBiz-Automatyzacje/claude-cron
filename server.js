@@ -870,8 +870,29 @@ function rejectBlob(req, res, decision) {
 // `deduped`, bo powtórzony upload tej samej treści jest sukcesem bez zapisu (R4), co czyni
 // PUT bezpiecznym do retry po timeoucie.
 async function streamBodyToFile(req, res, decision) {
+  // Zadeklarowany rozmiar odrzucamy PRZED transferem — bez tego hub przyjmuje i zapisuje
+  // 25 MB tylko po to, żeby je skasować. Deklaracja nie jest dowodem (limit i tak pilnuje
+  // strumień), ale gdy klient sam się przyznaje, nie ma po co pompować bajtów.
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > decision.maxBytes) {
+    return rejectBlob(req, res, { status: 413, json: { v: INBOX_API_VERSION, error: 'too_large' } });
+  }
+  // Skrót dedupu wolno dać wyłącznie temu, kto tę treść już raz zweryfikowanie wgrał
+  // (retry, ten sam plik do wielu adresatów). Dla kogoś obcego pominięcie transferu
+  // zamieniałoby znajomość hasha w dowód posiadania pliku — i dawało dostęp do cudzych bajtów.
+  const alreadyUploaded = inboxDb.isBlobUploader(decision.sha256, decision.member.name);
   try {
-    const result = await inboxBlobs.writeBlobFromStream(req, decision.sha256, decision.maxBytes);
+    const result = await inboxBlobs.writeBlobFromStream(req, decision.sha256, decision.maxBytes, {
+      skipIfPresent: alreadyUploaded,
+    });
+    // Ślad wgrania zapisujemy po ZWERYFIKOWANYM transferze (hash policzył hub).
+    if (!alreadyUploaded) inboxDb.recordBlobUpload(decision.sha256, decision.member.name);
+    if (result.deduped && alreadyUploaded) {
+      // Ciała nie przeczytaliśmy — klient może wciąż pompować megabajty, więc po flushu
+      // odpowiedzi ubijamy gniazdo (wzorzec rejectBlob), zamiast dumpować resztę w próżnię.
+      res.setHeader('Connection', 'close');
+      res.once('finish', () => req.destroy());
+    }
     return json(res, {
       v: INBOX_API_VERSION,
       sha256: result.sha256,
@@ -895,24 +916,59 @@ async function streamBodyToFile(req, res, decision) {
 // GET: bajty z magazynu do odpowiedzi. Content-Length bierzemy z RZECZYWISTEGO rozmiaru
 // pliku, nie z `size_bytes` w metadanych — deklaracja nadawcy i zawartość dysku to dwie
 // różne rzeczy, a rozjazd zawiesiłby klienta czekającego na brakujące bajty.
-// Świadomie BEZ Content-Disposition: nazwa pliku pochodzi od nadawcy i trafiłaby do nagłówka
-// (klient i tak zna ją z metadanych wiadomości).
+// Wąska allowlista typów, które wolno oddać KLIENTOWI pod ich własnym mime. Wszystko poza nią
+// (w tym text/html i image/svg+xml — oba wykonują skrypt po otwarciu w przeglądarce) schodzi
+// do application/octet-stream. Lista jest allowlistą, nie blocklistą, bo mime pochodzi od
+// nadawcy: nowy niebezpieczny typ ma domyślnie NIE przechodzić.
+const SAFE_DOWNLOAD_MIME = new Set([
+  'application/octet-stream',
+  'application/pdf',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'text/plain',
+]);
+
+function safeDownloadMime(mime) {
+  return SAFE_DOWNLOAD_MIME.has(mime) ? mime : 'application/octet-stream';
+}
+
+// Content-Disposition: attachment ZAWSZE, bez nazwy pliku: nazwa pochodzi od nadawcy
+// (klient i tak zna ją z metadanych wiadomości), ale samo "attachment" pilnuje, żeby
+// przeglądarka niczego tu nie renderowała.
 function streamFileToResponse(res, decision) {
+  // Nagłówki liczymy PRZED otwarciem strumienia. Odwrotna kolejność zostawiała otwarty
+  // deskryptor za każdym razem, gdy statSync/writeHead rzuciło (np. ENOENT po skasowaniu
+  // blobu w międzyczasie) — powtarzany GET wyczerpywał deskryptory huba (EMFILE).
+  let size;
+  try {
+    size = fs.statSync(inboxBlobs.blobPath(decision.sha256)).size;
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    // Metadane są, bajtów nie ma (wygasły / skasowane) — 404 bez treści, jak brak dostępu.
+    res.writeHead(404);
+    return res.end();
+  }
+
   let stream;
   try {
     stream = inboxBlobs.openBlobRead(decision.sha256);
   } catch (err) {
     if (err instanceof inboxBlobs.InboxBlobError && err.code === 'blob_not_found') {
-      // Metadane są, bajtów nie ma (wygasły / skasowane) — 404 bez treści, jak brak dostępu.
       res.writeHead(404);
       return res.end();
     }
     throw err;
   }
-  const size = fs.statSync(inboxBlobs.blobPath(decision.sha256)).size;
   res.writeHead(200, {
-    'Content-Type': decision.attachment.mime || 'application/octet-stream',
+    'Content-Type': safeDownloadMime(decision.attachment.mime),
     'Content-Length': size,
+    // Endpoint jest PUBLICZNY (przez Funnel) i odpowiada z globalnym ACAO:*, a mime pochodzi
+    // od nadawcy — bez nosniff przeglądarka zgadywałaby typ z treści i wykonała podstawiony
+    // HTML/skrypt na ORIGINIE HUBA, gdzie token ofiary siedzi w tym samym URL-u.
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Disposition': 'attachment',
   });
   // Zerwanie w połowie po obu stronach: bez tych dwóch listenerów zostaje albo otwarty
   // deskryptor (klient rozłączony), albo uncaughtException (błąd odczytu w trakcie pipe).
@@ -968,6 +1024,13 @@ const server = http.createServer(async (req, res) => {
     const inboxMatch = matchInboxToken(req.url);
     if (inboxMatch) {
       return await handleInbox(req, res, inboxMatch);
+    }
+    // URL pod /inbox/, którego matcher nie uznał (nieznana wersja, nadmiarowy segment) to
+    // błąd konstrukcji adresu — 404 bez treści. Bez tego żądanie spadało do SPA fallbacku
+    // i wracało 200 z index.html, więc pomyłka klienta wyglądała na sukces.
+    if (req.url.startsWith('/inbox/')) {
+      res.writeHead(404);
+      return res.end();
     }
 
     // Block non-webhook requests from external sources (Tailscale Funnel)
