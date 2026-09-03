@@ -16,6 +16,7 @@ const keepAwake = require('./lib/keep-awake');
 const inboxSeed = require('./lib/inbox-seed');
 const inboxDb = require('./lib/inbox-db');
 const { isInboxHub } = require('./lib/inbox-hub');
+const inboxRetention = require('./lib/inbox-retention');
 const { getInstallVersion } = require('./lib/version');
 const updater = require('./lib/updater');
 const { describeEnvUsage, readPersistedEnvCached } = require('./lib/persisted-env');
@@ -1208,6 +1209,20 @@ import('./scripts/inbox/env-loader.mjs')
 // Start scheduler
 scheduler.start();
 
+// Retencja bajtów załączników skrzynki (R11) — przemiatanie IN-PROCESS na hubie, świadomie
+// nie jako script-job: drugi proces otwierałby drugie połączenie do `inbox.db` w trakcie
+// transferów. Guard jest FUNKCJĄ liczoną przy każdym przemiataniu, nie wartością z linii
+// startu: `inboxHubUrl` wypełnia asynchroniczny import wyżej, a lista członków zmienia się
+// w locie — policzony raz odpowiadałby na stan sprzed odczytu pliku sekretu.
+inboxRetention.startInboxRetention({
+  isHub: () =>
+    isInboxHub({
+      inboxHubUrl,
+      webhookBaseUrl: WEBHOOK_BASE_URL,
+      memberCount: inboxDb.listMembers().length,
+    }),
+});
+
 server.listen(PORT, () => {
   console.log(`\n🫀  Puls running at http://localhost:${PORT}`);
   console.log(`   Press Ctrl+C to stop\n`);
@@ -1221,6 +1236,7 @@ process.on('SIGINT', () => {
   console.log('\n[shutdown] Stopping...');
   keepAwake.stop();
   scheduler.stop();
+  inboxRetention.stopInboxRetention();
   db.close();
   server.close(() => process.exit(0));
 });
@@ -1228,6 +1244,7 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   keepAwake.stop();
   scheduler.stop();
+  inboxRetention.stopInboxRetention();
   db.close();
   server.close(() => process.exit(0));
 });

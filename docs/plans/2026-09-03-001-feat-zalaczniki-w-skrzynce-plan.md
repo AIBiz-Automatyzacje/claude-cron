@@ -728,7 +728,7 @@ Zmiany względem litery planu, przyjęte w implementacji fazy 3:
 
 **Zależy od:** Faza 3
 
-- [ ] **IU-9: Retencja bajtów na hubie**
+- [x] **IU-9: Retencja bajtów na hubie**
 
 **Cel:** Kasowanie bajtów 14 dni po domknięciu wątku oraz twardo 90 dni od wysłania, z zachowaniem metadanych.
 
@@ -786,7 +786,7 @@ test przechodzi przy złamanym zachowaniu.
 
 ---
 
-- [ ] **IU-10: Kaskada przy odwołaniu dostępu**
+- [x] **IU-10: Kaskada przy odwołaniu dostępu**
 
 **Cel:** `revokeMember` usuwa wiadomości i załączniki członka, nie zostawiając osieroconych bajtów.
 
@@ -833,6 +833,31 @@ test przechodzi przy złamanym zachowaniu.
 
 **Operator checklist:**
 - [ ] Po wdrożeniu na hub: sprawdź, że `data/inbox-blobs/` powstało i ma właściciela `claude`.
+
+#### Odchylenia — faza 4 (2026-09-03, zrealizowane)
+
+- **Warunek kasowania bloba: „żadna ŻYWA referencja", nie `countBlobRefs(sha256) == 0`.** Podejście IU-9 łączyło
+  dwa wykluczające się zdania: „rekord metadanych zostaje" oraz „blob kasowany gdy `countBlobRefs` osiągnie zero".
+  `countBlobRefs` liczy wiersze `inbox_attachments`, więc przy zachowanych metadanych nigdy nie spadnie do zera
+  i retencja nie zwolniłaby ani jednego bajta. Zaimplementowana jest intencja: `computeExpiredAttachments`
+  zwraca `blobsToDelete` z hashami, których WSZYSTKIE wiersze wygasły. `countBlobRefs` zostaje nietknięte —
+  jest właściwym narzędziem w IU-10, gdzie rewokacja faktycznie kasuje wiersze.
+- **Dwa zapytania ODCZYTU dołożone do `lib/inbox-db.js`** (`listAttachmentsForRetention`, `listBlobUploads`),
+  mimo że IU wymienia tylko `inbox-retention.js` i `server.js`. `inbox-db.js` jest jedyną warstwą SQL huba,
+  a stawianie zapytań poza nią złamałoby granicę modułu. Zero zmian schematu, wyłącznie `SELECT`-y; domknięcie
+  wątku liczone przez `EXISTS`, nie `SUM(status <> 'done')` — agregat wraca na części buildów `node:sqlite`
+  jako BigInt i cicho psuł by arytmetykę progów.
+- **Rewokacja kasuje też ślady `inbox_blob_uploads` odwołanego członka** (`uploaded_by = name`) — poza literalnym
+  brzmieniem Podejścia, ale to jego dane, a zostawione wskazywałyby na bajty, których już nie ma (przemiatanie
+  próbowałoby ich co godzinę jako sierot). Ślady innych osób o tym samym hashu zostają nietknięte, więc niczyje
+  uprawnienie do pobrania się nie zmienia.
+- **`revokeMember(id, { deleteBlobFn, warn })`** — drugi, opcjonalny argument DI wyłącznie dla testu padu
+  `unlink`. Produkcyjne wywołanie w `server.js` i kontrakt zwracanego `boolean` bez zmian.
+- **20 testów retencji zamiast 8 scenariuszy z listy** — dołożone to lustrzane przypadki po drugiej stronie
+  każdego progu (bez nich test „13 dni zostaje" przechodzi przy kodzie, który nie kasuje nigdy), fail-closed
+  na uszkodzonym znaczniku czasu oraz kontrakt SQL obu nowych zapytań.
+
+---
 
 ## Wpływ systemowy
 

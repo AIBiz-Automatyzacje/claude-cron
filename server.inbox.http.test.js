@@ -195,6 +195,45 @@ test('DELETE /api/inbox/members/:id odwołuje członka; jego token przestaje dzi
   assert.equal((await fetch(url(`/api/inbox/members/${member.id}`), { method: 'DELETE' })).status, 404);
 });
 
+test('DELETE /api/inbox/members/:id kasuje dane członka: wiadomość, rekord załącznika i bajty (R13)', async () => {
+  // Arrange — nadawca wgrywa bajty i wysyła je adresatowi PEŁNĄ ścieżką HTTP
+  const sender = await createMember('KaskadaNadawca');
+  const receiver = await createMember('KaskadaOdbiorca');
+  const bytes = Buffer.from('treść do skasowania przy rewokacji');
+  const sha = sha256Hex(bytes);
+  assert.equal((await fetch(blobUrl(sender.token, sha), { method: 'PUT', body: bytes })).status, 200);
+
+  const sendRes = await inboxCall(sender.token, 'send', {
+    body: {
+      to_user: 'KaskadaOdbiorca',
+      type: 'task',
+      title: 'Do skasowania',
+      attachments: [{ sha256: sha, filename: 'kaskada.txt', size_bytes: bytes.length, mime: 'text/plain' }],
+    },
+  });
+  assert.equal(sendRes.status, 200);
+  const { message } = await sendRes.json();
+  assert.equal(blobStoreFiles().filter((f) => f.endsWith(sha)).length, 1, 'bajty leżą w magazynie przed rewokacją');
+
+  // Act — odwołanie dostępu adresata
+  const delRes = await fetch(url(`/api/inbox/members/${receiver.id}`), { method: 'DELETE' });
+  assert.equal(delRes.status, 200);
+
+  // Assert — po członku nie zostaje ani wiersz, ani bajt (odczyt tej samej bazy co serwer)
+  const db = inboxDb.getInboxDb();
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM inbox WHERE id = ?').get(message.id).n, 0, 'wiadomość skasowana');
+  assert.equal(
+    db.prepare('SELECT COUNT(*) AS n FROM inbox_attachments WHERE sha256 = ?').get(sha).n,
+    0,
+    'rekord załącznika skasowany'
+  );
+  assert.equal(blobStoreFiles().filter((f) => f.endsWith(sha)).length, 0, 'bajty nie zostają osierocone na dysku');
+
+  // Assert — token adresata jest martwy; nadawca dalej działa
+  assert.equal((await inboxCall(receiver.token, 'ping', { method: 'GET' })).status, 403);
+  assert.equal((await inboxCall(sender.token, 'ping', { method: 'GET' })).status, 200);
+});
+
 test('CSRF: POST /api/inbox/members z obcym Origin → 403, członek NIE powstaje (token nie wycieka)', async () => {
   // Arrange — liczba członków przed próbą ataku
   const before = (await (await fetch(url('/api/inbox/members'))).json()).length;

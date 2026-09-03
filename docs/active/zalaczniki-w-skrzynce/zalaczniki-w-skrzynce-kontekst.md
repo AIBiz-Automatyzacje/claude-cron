@@ -1,5 +1,5 @@
 Branch: `feature/zalaczniki-w-skrzynce`
-Ostatnia aktualizacja: 2026-09-03 (faza 3)
+Ostatnia aktualizacja: 2026-09-03 (faza 4)
 
 # Załączniki w Skrzynce Team OS — kontekst
 
@@ -83,3 +83,23 @@ przy pierwszym pobraniu, więc wcześniej nie ma czego wskazać).
 - **Zero nowych zależności.** Audyt error-handlingu diffu: zero pustych `catch` (każdy raportuje
   `console.warn`/`console.error` z prefiksem modułu — konwencja skryptów CLI projektu), zero `console.log`
   w kodzie serwera.
+
+### 2026-09-03 — Faza 4: Retencja, sprzątanie i rewokacja (IU-9, IU-10)
+
+- **Zaimplementowane:** `lib/inbox-retention.js` — czyste funkcje progowe `computeExpiredAttachments`
+  (14 dni od domknięcia wątku, twardo 90 dni od wysłania) i `computeOrphanedBlobs` (karencja 24 h na bajty
+  wgrane, nigdy nieprzypisane do wiadomości), nad nimi przemiatanie `sweepInboxRetention` z wstrzykiwanymi
+  zależnościami oraz pętla `startInboxRetention` (co godzinę, `unref`) wpięta w `server.js` pod guardem
+  `isInboxHub()` liczonym PRZY KAŻDYM TICKU. Kasowane są wyłącznie bajty — rekord metadanych zostaje, żeby
+  render pokazał trzeci stan wiersza. `revokeMember` (`lib/inbox-db.js`) dostał kaskadę R13: wiadomości
+  członka, rekordy ich załączników i ślady wgrań w jednej transakcji, bajty bez pozostałych referencji
+  kasowane dopiero PO commicie, pad `unlink` to `warn`, nie rzut.
+- **Walidacja:** pełna suita `node --test` — 1279/1279 PASS, exit 0, zero flake'ów. Projekt nie ma
+  typecheckera, lintera ani buildu.
+- **Decyzja korygująca plan:** warunek kasowania bloba to „żadna ŻYWA (niewygasła) referencja", a nie
+  `countBlobRefs(sha256) == 0` — ten drugi jest niewykonywalny razem z zachowaniem metadanych. Szczegóły
+  i pozostałe odchylenia w planie technicznym, sekcja „Odchylenia — faza 4"
+  (`docs/plans/2026-09-03-001-feat-zalaczniki-w-skrzynce-plan.md`).
+- **Zero nowych zależności.** Audyt error-handlingu diffu: zero pustych `catch` (każdy raportuje `warn`
+  z prefiksem modułu albo robi ROLLBACK i re-throw), zero `console.log` poza wstrzykiwalnym domyślnym
+  loggerem przemiatania — konwencja projektu, który nie ma structured loggera ani Sentry.
