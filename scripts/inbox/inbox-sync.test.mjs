@@ -14,7 +14,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { main } from './inbox-sync.mjs';
-import { renderAttachmentLine } from './inbox-pull.mjs';
+import { attachmentFileName, renderAttachmentLine } from './inbox-pull.mjs';
 
 const ID_TASK = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ID_MSG = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -152,7 +152,7 @@ test('sekwencja: pobranie następuje PRZED pushem i PRZED pullem', async (t) => 
   assert.ok(download < done, 'pobranie musi poprzedzać push domykający wątki');
   assert.ok(download < lastPull, 'pobranie musi poprzedzać pull regenerujący Skrzynkę');
   // Szew hub↔plik: bajty naprawdę wylądowały w vaultcie.
-  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, 'raport.pdf'), 'utf8'), FILE_CONTENT);
+  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, attachmentFileName('raport.pdf', FILE_SHA)), 'utf8'), FILE_CONTENT);
 });
 
 test('maszyna w roli agenta: sync nie pobiera niczego, ale push i pull lecą normalnie (R10)', async (t) => {
@@ -206,7 +206,7 @@ test('jeden wątek, dwa odhaczenia: plik ląduje w vaultcie mimo domknięcia wą
   await main({ client, role: 'client' });
 
   assert.equal(
-    fs.readFileSync(path.join(attachmentsDir, MONTH, 'raport.pdf'), 'utf8'),
+    fs.readFileSync(path.join(attachmentsDir, MONTH, attachmentFileName('raport.pdf', FILE_SHA)), 'utf8'),
     FILE_CONTENT,
     'plik z domkniętego w tym samym runie wątku musi trafić do vaulta',
   );

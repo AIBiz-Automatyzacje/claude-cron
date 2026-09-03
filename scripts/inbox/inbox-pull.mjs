@@ -6,7 +6,6 @@
 // - Dane bierze z huba (`client.pull()`); oznaczanie pending → delivered robi hub.
 // Odpalane co 1 min przez launchd/cron. Zero Claude CLI.
 
-import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
@@ -103,48 +102,45 @@ function formatAttachmentSize(bytes) {
   return `${value.toFixed(1).replace('.', ',')} ${unit}`;
 }
 
-// Lustro MAX_NAME_ATTEMPTS z attachments.mjs: downloader przy kolizji nazw dokłada sufiks
-// porządkowy, więc render musi przejrzeć TĘ SAMĄ serię kandydatów.
-const MAX_NAME_ATTEMPTS = 50;
+// Tożsamość załącznika (rozmiar + sha256), nie goła nazwa, rozstrzyga „czy to mój plik":
+// nazwa pochodzi od nadawcy i nie jest unikalna — dwie wiadomości od różnych osób z plikiem
+// `raport.pdf` w tym samym miesiącu dawały ten sam werdykt, więc druga renderowała się jako
+// „pobrana" i osadzała CUDZY plik pod własnym podpisem, bez checkboxa do pobrania właściwego.
+//
+// Tożsamość niesie NAZWA PLIKU NA DYSKU: skrót sha256 w sufiksie. Dzięki temu render kosztuje
+// jedno `stat` na załącznik i NIGDY nie czyta zawartości — a render biegnie przy każdym pullu,
+// czyli co minutę przez job inbox sync (hashowanie w tej pętli blokowałoby event loop na
+// dziesiątki MB odczytu za każdym razem). Downloader zapisuje pod DOKŁADNIE tą nazwą
+// (`pickDownloadDestination` w attachments.mjs) — to kontrakt renderu z pobieraniem.
+export const SHA_NAME_LEN = 12;
 
-function sha256OfFileSync(filePath) {
-  return createHash('sha256').update(fsSync.readFileSync(filePath)).digest('hex');
+export function attachmentFileName(filename, sha256) {
+  // Hub bez sha256 w metadanych (instalacja sprzed IU-6) — zostaje goła nazwa nadawcy.
+  if (typeof sha256 !== 'string' || sha256 === '') return filename;
+  const ext = path.extname(filename);
+  const stem = filename.slice(0, filename.length - ext.length);
+  return `${stem} (${sha256.slice(0, SHA_NAME_LEN)})${ext}`;
 }
 
 // Stan „pobrany" wynika WYŁĄCZNIE z obecności pliku na dysku (R8) — zero zapisu stanu
 // gdziekolwiek, bo blok między markerami jest nadpisywany w całości przy każdym pullu.
-//
-// Rozstrzyga TOŻSAMOŚĆ załącznika (rozmiar + sha256), nigdy sama nazwa: nazwa pochodzi od
-// nadawcy i nie jest unikalna. Dwie wiadomości od różnych osób z plikiem `raport.pdf` w tym
-// samym miesiącu dawały wcześniej ten sam werdykt — druga renderowała się jako „pobrana"
-// i osadzała CUDZY plik pod własnym podpisem, bez checkboxa pozwalającego pobrać właściwy.
-// Hash liczymy dopiero, gdy zgadza się rozmiar, więc w typowym przebiegu jest to jeden
-// odczyt pliku, a rozjazd rozmiaru kosztuje samo `stat`.
-// Zwraca NAZWĘ pliku na dysku (może być z sufiksem kolizji) albo false.
+// Zwraca NAZWĘ pliku na dysku (ze skrótem sha) albo false.
 function defaultIsDownloaded(month, filename, att = {}) {
   const dir = process.env.INBOX_ATTACHMENTS_DIR;
   if (!dir) return false;
-  const ext = path.extname(filename);
-  const stem = filename.slice(0, filename.length - ext.length);
-  const size = Number(att.size_bytes);
-  const sha = typeof att.sha256 === 'string' && att.sha256 !== '' ? att.sha256 : null;
-
-  for (let n = 1; n <= MAX_NAME_ATTEMPTS; n++) {
-    const candidate = n === 1 ? filename : `${stem} (${n})${ext}`;
-    let st;
-    try {
-      st = fsSync.statSync(path.join(dir, month, candidate));
-    } catch {
-      // Pierwsza dziura w serii = koniec kandydatów (downloader zajmuje pierwsze wolne miejsce).
-      return false;
-    }
-    if (!st.isFile()) return false;
-    if (Number.isFinite(size) && st.size !== size) continue;
-    // Hub bez sha256 w metadanych (instalacja sprzed IU-6) — zostaje dawne rozstrzyganie nazwą.
-    if (sha === null) return candidate;
-    if (sha256OfFileSync(path.join(dir, month, candidate)) === sha) return candidate;
+  const candidate = attachmentFileName(filename, att.sha256);
+  let st;
+  try {
+    st = fsSync.statSync(path.join(dir, month, candidate));
+  } catch {
+    return false;
   }
-  return false;
+  if (!st.isFile()) return false;
+  // Rozmiar dokłada się do skrótu w nazwie: plik ucięty w połowie (przerwany zapis spoza
+  // naszej ścieżki, konflikt Obsidian Sync) nie może uchodzić za kompletne pobranie.
+  const size = Number(att.size_bytes);
+  if (Number.isFinite(size) && st.size !== size) return false;
+  return candidate;
 }
 
 // Trzy stany, rozstrzygane wyłącznie dyskiem i metadanymi:

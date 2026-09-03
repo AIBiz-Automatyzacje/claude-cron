@@ -8,7 +8,7 @@ import path from 'node:path';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { attachmentMonth, mergeFrontmatter, renderAttachmentLine, replaceBetweenMarkers, renderDelegatedCallout, renderThreadCallout, safeAttachmentName, SKRZYNKA_TEMPLATE, updateSkrzynkaFile } from './inbox-pull.mjs';
+import { attachmentFileName, attachmentMonth, mergeFrontmatter, renderAttachmentLine, replaceBetweenMarkers, renderDelegatedCallout, renderThreadCallout, safeAttachmentName, SKRZYNKA_TEMPLATE, updateSkrzynkaFile } from './inbox-pull.mjs';
 import { parseCheckedCallouts, parseRequestedDownloads } from './inbox-push.mjs';
 
 const T0 = '2026-07-24T07:12:00.000Z';
@@ -371,7 +371,9 @@ test('dwie wiadomości z plikiem o TEJ SAMEJ nazwie: pobrany jest tylko ten o zg
   withAttachmentsDir(t);
   const moja = 'TRESC-OD-MARCINA';
   const cudza = 'TRESC-OD-KOGOS-INNEGO';
-  fsSync.writeFileSync(path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07', 'raport.pdf'), moja);
+  // Plik na dysku niesie skrót sha256 w nazwie, więc render rozstrzyga tożsamość samym `stat`.
+  const naDysku = attachmentFileName('raport.pdf', sha256Of(moja));
+  fsSync.writeFileSync(path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07', naDysku), moja);
 
   const pobrany = { id: ATT_A, filename: 'raport.pdf', size_bytes: moja.length, mime: 'application/pdf', sha256: sha256Of(moja) };
   const obcy = { id: ATT_B, filename: 'raport.pdf', size_bytes: cudza.length, mime: 'application/pdf', sha256: sha256Of(cudza) };
@@ -379,34 +381,68 @@ test('dwie wiadomości z plikiem o TEJ SAMEJ nazwie: pobrany jest tylko ten o zg
   const linia1 = renderAttachmentLine(pobrany, '2026-07');
   const linia2 = renderAttachmentLine(obcy, '2026-07');
 
-  assert.ok(linia1.includes('![[Zasoby/inbox-zalaczniki/2026-07/raport.pdf]]'), 'mój plik jest osadzony');
+  assert.ok(linia1.includes(`![[Zasoby/inbox-zalaczniki/2026-07/${naDysku}]]`), 'mój plik jest osadzony');
   assert.ok(!linia1.includes('Pobierz'));
   assert.ok(linia2.includes('- [ ] Pobierz'), 'cudzy plik o tej samej nazwie NIE jest moim pobraniem');
   assert.ok(!linia2.includes('![['), 'nie osadzamy cudzego pliku pod tym markerem');
 });
 
-test('ta sama nazwa i ten sam ROZMIAR, inna treść: rozstrzyga hash, nie stat', (t) => {
+test('ta sama nazwa i ten sam ROZMIAR, inna treść: rozstrzyga sha z nazwy, nie sama nazwa', (t) => {
   withAttachmentsDir(t);
   const moja = 'AAAAAAAA';
   const cudza = 'BBBBBBBB'; // ten sam rozmiar
-  fsSync.writeFileSync(path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07', 'raport.pdf'), cudza);
+  fsSync.writeFileSync(
+    path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07', attachmentFileName('raport.pdf', sha256Of(cudza))),
+    cudza
+  );
 
   const mojAtt = { id: ATT_A, filename: 'raport.pdf', size_bytes: moja.length, sha256: sha256Of(moja) };
   assert.ok(renderAttachmentLine(mojAtt, '2026-07').includes('- [ ] Pobierz'));
 });
 
-test('kolizja nazw: plik zapisany z sufiksem jest rozpoznany i osadzony pod swoją nazwą', (t) => {
+test('odmowa: plik pod GOŁĄ nazwą od nadawcy nie jest uznany za pobrany', (t) => {
   withAttachmentsDir(t);
-  const cudza = 'STARA';
-  const moja = 'NOWA-TRESC';
-  const mc = path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07');
-  fsSync.writeFileSync(path.join(mc, 'raport.pdf'), cudza);
-  fsSync.writeFileSync(path.join(mc, 'raport (2).pdf'), moja);
+  const moja = 'TRESC';
+  // Plik podrzucony do vaulta pod nazwą nadawcy (ręcznie albo przez inną wiadomość) —
+  // bez skrótu w nazwie nie ma dowodu tożsamości, więc checkbox „Pobierz" zostaje.
+  fsSync.writeFileSync(path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07', 'raport.pdf'), moja);
 
   const mojAtt = { id: ATT_A, filename: 'raport.pdf', size_bytes: moja.length, sha256: sha256Of(moja) };
   const linia = renderAttachmentLine(mojAtt, '2026-07');
-  assert.ok(linia.includes('![[Zasoby/inbox-zalaczniki/2026-07/raport (2).pdf]]'), linia);
-  assert.ok(!linia.includes('Pobierz'));
+  assert.ok(linia.includes('- [ ] Pobierz'), linia);
+  assert.ok(!linia.includes('![['), 'nie osadzamy pliku o nieustalonej tożsamości');
+});
+
+test('odmowa: plik o właściwej nazwie, ale UCIĘTY (inny rozmiar) nie jest pobraniem', (t) => {
+  withAttachmentsDir(t);
+  const pelna = 'PELNA-TRESC-PLIKU';
+  const naDysku = attachmentFileName('raport.pdf', sha256Of(pelna));
+  fsSync.writeFileSync(path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07', naDysku), 'PELNA');
+
+  const mojAtt = { id: ATT_A, filename: 'raport.pdf', size_bytes: pelna.length, sha256: sha256Of(pelna) };
+  const linia = renderAttachmentLine(mojAtt, '2026-07');
+  assert.ok(linia.includes('- [ ] Pobierz'), linia);
+  assert.ok(!linia.includes('![['), 'niekompletny plik nie jest osadzany');
+});
+
+test('render NIE czyta zawartości plików: przy pobranym załączniku zero readFileSync', (t) => {
+  withAttachmentsDir(t);
+  const tresc = 'X'.repeat(4096);
+  const naDysku = attachmentFileName('raport.pdf', sha256Of(tresc));
+  fsSync.writeFileSync(path.join(process.env.INBOX_ATTACHMENTS_DIR, '2026-07', naDysku), tresc);
+
+  // Render biegnie przy KAŻDYM pullu (job inbox sync co minutę) — hashowanie zawartości
+  // w tej pętli blokowałoby event loop na dziesiątki MB odczytu za każdym razem.
+  const czytane = [];
+  const saved = fsSync.readFileSync;
+  fsSync.readFileSync = (...args) => { czytane.push(args[0]); return saved(...args); };
+  t.after(() => { fsSync.readFileSync = saved; });
+
+  const mojAtt = { id: ATT_A, filename: 'raport.pdf', size_bytes: tresc.length, sha256: sha256Of(tresc) };
+  const linia = renderAttachmentLine(mojAtt, '2026-07');
+
+  assert.ok(linia.includes(`![[Zasoby/inbox-zalaczniki/2026-07/${naDysku}]]`), linia);
+  assert.deepEqual(czytane, [], 'render rozstrzyga stan pobrania metadanymi, nie zawartością');
 });
 
 // ──────── treść wiadomości nie może udawać wiersza załącznika (R6) ────────

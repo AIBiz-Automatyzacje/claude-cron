@@ -11,7 +11,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, readFile, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
-import { attachmentMonth, safeAttachmentName } from './inbox-pull.mjs';
+import { attachmentFileName, attachmentMonth, safeAttachmentName } from './inbox-pull.mjs';
 import { extractInboxSection, parseRequestedDownloads } from './inbox-push.mjs';
 
 // Próg mierzy WYŁĄCZNIE pojedynczy plik — sumy wiadomości nie limitujemy (kwoty miejsca
@@ -129,10 +129,6 @@ export async function prepareAttachments(paths, { client }) {
 // lib/ tylko po jeden literał, a wartość jest zapisana w bazie i nie zmieni się bez migracji.
 export const ROLE_AGENT = 'agent';
 
-// Ile razy wolno dokładać sufiks porządkowy przy kolizji nazw, zanim uznamy sytuację za
-// patologię (setka plików „raport (n).pdf" to nie kolizja, to pętla) i zgłosimy błąd.
-const MAX_NAME_ATTEMPTS = 50;
-
 // Sanityzacja sprawdza EFEKT, nie kształt (R14). `safeAttachmentName` (jedno źródło prawdy,
 // współdzielone z renderem) sprowadza nazwę do basename bez separatorów i znaków sterujących,
 // ale sama zgodność ze wzorcem niczego nie dowodzi: dopiero `path.resolve` mówi, GDZIE plik
@@ -150,29 +146,27 @@ export function resolveAttachmentTarget(attachmentsDir, month, rawFilename) {
 
 // Rozstrzyga, dokąd zapisać bajty o danym sha256. Zwraca null, gdy plik o TEJ TREŚCI już
 // leży na dysku — pobranie jest wtedy no-opem (idempotencja: obecność pliku JEST stanem
-// pobrania, więc powtórka nie może dokładać kopii). Kolizja nazw przy INNEJ treści dostaje
-// sufiks porządkowy; pierwszy plik zostaje nietknięty, bo należy do innej wiadomości.
+// pobrania, więc powtórka nie może dokładać kopii).
+//
+// Nazwa docelowa niesie skrót sha256 (`attachmentFileName`, wspólne źródło prawdy z renderem),
+// więc kolizja nazw od nadawcy NIE jest kolizją na dysku: dwa różne `raport.pdf` dostają dwie
+// różne nazwy bez pytania o zawartość. Dlatego nie ma tu ani serii kandydatów, ani hashowania
+// istniejącego pliku — te same bajty pod tą samą nazwą rozpoznajemy jednym `stat`, a render
+// (biegnący co minutę) w ogóle nie musi czytać plików.
 export async function pickDownloadDestination(dir, name, sha256, sizeBytes) {
-  const ext = path.extname(name);
-  const stem = name.slice(0, name.length - ext.length);
-  for (let n = 1; n <= MAX_NAME_ATTEMPTS; n++) {
-    const candidate = path.join(dir, n === 1 ? name : `${stem} (${n})${ext}`);
-    let st;
-    try {
-      st = await stat(candidate);
-    } catch (err) {
-      if (err.code === 'ENOENT') return candidate;
-      throw err;
-    }
-    // Rozmiar rozstrzyga większość kolizji jednym `stat`; bez tego skrótu każda kolizja
-    // nazw kosztowała pełny odczyt i hash istniejącego pliku (do 25 MB) tylko po to,
-    // by stwierdzić, że treść jest inna.
-    if (Number.isFinite(sizeBytes) && st.size !== sizeBytes) continue;
-    if ((await sha256OfFile(candidate)) === sha256) return null;
+  const dest = path.join(dir, attachmentFileName(name, sha256));
+  let st;
+  try {
+    st = await stat(dest);
+  } catch (err) {
+    if (err.code === 'ENOENT') return dest;
+    throw err;
   }
-  throw new AttachmentError(
-    `Nie mam wolnej nazwy dla pliku ${name} w ${dir} (${MAX_NAME_ATTEMPTS} kolizji) — posprzątaj katalog.`
-  );
+  // Plik pod nazwą ze skrótem, ale o innym rozmiarze, to pobranie ucięte w połowie (albo
+  // konflikt Obsidian Sync) — render też uzna go za niepobrany, więc nadpisujemy. Sha256
+  // i tak jest weryfikowany po zapisie.
+  if (Number.isFinite(sizeBytes) && st.size !== sizeBytes) return dest;
+  return null;
 }
 
 // Indeks załączników z odpowiedzi huba: id → { sha256, filename, month }. Miesiąc bierze się
@@ -270,7 +264,7 @@ export async function downloadRequestedAttachments({
   // pobiera nigdy) zostaje nietknięte, mimo że odczyt zszedł za bramkę „czy jest co robić".
   const effectiveRole = role !== null && role !== undefined ? role : (getRole ? getRole() : null);
   if (effectiveRole === ROLE_AGENT) {
-    console.log('[inbox-attachments] rola maszyny = agent — pobrania pominięte');
+    console.warn('[inbox-attachments] rola maszyny = agent — pobrania pominięte');
     return { ...stats, role_skipped: true };
   }
 

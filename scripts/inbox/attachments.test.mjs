@@ -16,7 +16,7 @@ import {
   prepareAttachments,
   resolveAttachmentTarget,
 } from './attachments.mjs';
-import { renderAttachmentLine } from './inbox-pull.mjs';
+import { attachmentFileName, renderAttachmentLine } from './inbox-pull.mjs';
 
 let dir;
 beforeEach(() => {
@@ -229,7 +229,9 @@ test('odhaczony zalacznik → plik laduje w katalogu miesiaca pod sanityzowana n
 
   const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
 
-  const target = path.join(attachmentsDir, MONTH, 'raport.pdf');
+  // Nazwa na dysku niesie skrót sha256 — to kontrakt renderu z pobieraniem (render
+  // rozstrzyga „pobrany?" jednym `stat`, bez czytania zawartości).
+  const target = path.join(attachmentsDir, MONTH, attachmentFileName('raport.pdf', att.sha256));
   assert.equal(fs.readFileSync(target, 'utf8'), 'PDF-1');
   assert.equal(stats.downloaded, 1);
 });
@@ -241,7 +243,7 @@ test('pobranie jest akcja WYLACZNIE lokalna — zero wywolan zmieniajacych stan 
 
   await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
 
-  assert.deepEqual(client.calls, ['pull', 'downloadBlob:raport.pdf']);
+  assert.deepEqual(client.calls, ['pull', `downloadBlob:${attachmentFileName('raport.pdf', att.sha256)}`]);
   assert.ok(!client.calls.includes('done'), 'done() nie moze pasc przy pobraniu');
 });
 
@@ -252,9 +254,10 @@ test('nazwa "../../../etc/passwd" → zapis WEWNATRZ katalogu miesiaca, nigdy po
 
   await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
 
-  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, 'passwd'), 'utf8'), 'ZLE');
+  const zapisany = attachmentFileName('passwd', att.sha256);
+  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, zapisany), 'utf8'), 'ZLE');
   // Nic nie wyszlo poza katalog miesiaca — ani do vaulta, ani wyzej.
-  assert.deepEqual(fs.readdirSync(path.join(attachmentsDir, MONTH)), ['passwd']);
+  assert.deepEqual(fs.readdirSync(path.join(attachmentsDir, MONTH)), [zapisany]);
   assert.deepEqual(fs.readdirSync(attachmentsDir), [MONTH]);
 });
 
@@ -286,29 +289,49 @@ test('powtorne pobranie tego samego pliku → brak drugiego pliku i brak transfe
   const att = attachment();
   const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
   fs.mkdirSync(path.join(attachmentsDir, MONTH), { recursive: true });
-  fs.writeFileSync(path.join(attachmentsDir, MONTH, 'raport.pdf'), att.content);
+  const naDysku = attachmentFileName('raport.pdf', att.sha256);
+  fs.writeFileSync(path.join(attachmentsDir, MONTH, naDysku), att.content);
   const client = fakeHub([att]);
 
   const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
 
-  assert.deepEqual(fs.readdirSync(path.join(attachmentsDir, MONTH)), ['raport.pdf']);
+  assert.deepEqual(fs.readdirSync(path.join(attachmentsDir, MONTH)), [naDysku]);
   assert.equal(stats.already, 1);
   assert.equal(stats.downloaded, 0);
   assert.deepEqual(client.calls, ['pull'], 'bajty nie leca drugi raz');
 });
 
-test('kolizja nazw przy INNEJ tresci → drugi plik z sufiksem, pierwszy nietkniety', async () => {
+test('kolizja nazw przy INNEJ tresci → dwa pliki obok siebie, pierwszy nietkniety', async () => {
   const att = attachment({ id: ATT_ID2, content: 'NOWA TRESC' });
   const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
   fs.mkdirSync(path.join(attachmentsDir, MONTH), { recursive: true });
-  fs.writeFileSync(path.join(attachmentsDir, MONTH, 'raport.pdf'), 'STARA TRESC');
+  // Plik innej wiadomosci o TEJ SAMEJ nazwie od nadawcy — lezy pod nazwa ze SWOIM skrotem.
+  const cudzy = attachmentFileName('raport.pdf', sha256Of('STARA TRESC'));
+  fs.writeFileSync(path.join(attachmentsDir, MONTH, cudzy), 'STARA TRESC');
   const client = fakeHub([att]);
 
   const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
 
-  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, 'raport.pdf'), 'utf8'), 'STARA TRESC');
-  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, 'raport (2).pdf'), 'utf8'), 'NOWA TRESC');
+  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, cudzy), 'utf8'), 'STARA TRESC');
+  const moj = attachmentFileName('raport.pdf', att.sha256);
+  assert.notEqual(moj, cudzy, 'ta sama nazwa od nadawcy, inne nazwy na dysku');
+  assert.equal(fs.readFileSync(path.join(attachmentsDir, MONTH, moj), 'utf8'), 'NOWA TRESC');
   assert.equal(stats.downloaded, 1);
+});
+
+test('odmowa: plik o wlasciwej nazwie, ale UCIETY (inny rozmiar) nie uchodzi za pobrany', async () => {
+  const att = attachment({ content: 'PELNA TRESC PLIKU' });
+  const { skrzynka, attachmentsDir } = vault(skrzynkaWithChecked([att]));
+  fs.mkdirSync(path.join(attachmentsDir, MONTH), { recursive: true });
+  const naDysku = path.join(attachmentsDir, MONTH, attachmentFileName('raport.pdf', att.sha256));
+  fs.writeFileSync(naDysku, 'PELNA'); // przerwany zapis spoza naszej sciezki / konflikt Sync
+  const client = fakeHub([att]);
+
+  const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
+
+  assert.equal(stats.downloaded, 1, 'ucięty plik jest nadpisywany, nie uznawany za pobranie');
+  assert.equal(stats.already, 0);
+  assert.equal(fs.readFileSync(naDysku, 'utf8'), 'PELNA TRESC PLIKU');
 });
 
 test('przerwane pobranie → brak pliku docelowego, stan pozostaje "niepobrany"', async () => {
