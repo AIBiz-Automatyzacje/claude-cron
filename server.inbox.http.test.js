@@ -2,8 +2,8 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
-const http = require('node:http');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
