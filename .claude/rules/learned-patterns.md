@@ -2,7 +2,7 @@
 
 Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
 
-<!-- rule-count: 25 -->
+<!-- rule-count: 26 -->
 
 - **Top N per grupa = window function, nie flat LIMIT**: Gdy chcesz N ostatnich rekordów *na każdą grupę* (per job/user/kategoria), użyj `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` + filtr `rn <= N`. Globalny `ORDER BY id DESC LIMIT N` cicho gubi grupy o wysokiej kadencji — jedna grupa zjada całe okno.
   Source: docs/solutions/performance-issues/2026-06-23-per-job-recent-runs-window-function.md
@@ -78,3 +78,6 @@ Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane 
 
 - **Test negatywny bez wersji czerwonej jest dekoracją — asercję buduj funkcją produkcji, nie literałem**: asercja o NIEOBECNOŚCI zgadniętej nazwy (`existsSync('raport.pdf')`, gdy produkcja zapisuje `stem (sha8).ext`) jest zawsze prawdziwa i przechodzi także wtedy, gdy ucięty plik zostaje na dysku; tak samo `assert.throws` bez predykatu zaliczy literówkę w nazwie funkcji albo wyłączone `PRAGMA foreign_keys`. Nazwy i ścieżki w asercjach twórz TĄ SAMĄ funkcją/stałą co kod (`attachmentFileName`, `INBOX_BLOBS_DIR`) — a nigdy nie betonuj wartości, którą config świadomie pozwala nadpisać (`includes('/data/')` mierzy środowisko operatora, nie kontrakt). Przed zaliczeniem checkboxa `Test:` zepsuj implementację w jednej linii i zobacz czerwone; test opierający się o mechanizm systemu (chmod, symlink, blokada pliku) dostaje skip-guard po `process.platform`, bo suita na macOS nie powie NIC o Windowsie.
   Source: docs/solutions/testing-issues/2026-09-04-testy-strazniki-zawsze-zielone-asercje.md
+
+- **`:has(.klasa)` ma zasięg CAŁEGO poddrzewa — do reguł strukturalnych używaj `:has(> element)`; a funkcja rozpięta na dwa repo potrzebuje checklisty dostawy, nie tylko definicji ukończenia**: reguła „lista bez checkboxów" (`ul:not(:has(.task-list-item))`) nadająca `position: relative` przestała działać, gdy nowy wiersz renderu dołożył checkbox WEWNĄTRZ nitki — nadrzędny `ul` zaczął pasować do `:has(...)`, stracił pozycjonowanie, a `position: absolute` awatarów zakotwiczyło się na `<body>`. Zmiana była w renderze, objaw dwa poziomy wyżej, w kodzie którego nikt nie dotykał. Przy każdej nowej klasie/elemencie w renderze pytaj: (a) czy ma styl, (b) czy jego obecność nie przełącza warunku w regule wyżej (`:has`, `:not`, `:only-child`, `+`, `~`). Drugi wątek tej samej sesji: kod poszedł do repo aplikacji, a styl i opis flagi w skillu zostały w repo pluginu — flaga `--attach` istniała i działała, ale agent o niej nie wiedział, więc dla użytkownika funkcji nie było. Kontrola spójności tego nie łapie, gdy porównuje kopię z kopią (obie jednakowo przestarzałe = stan „zdrowy") — porównuj szablon z KODEM (grep klas z renderu przeciw CSS). Weryfikuj pozycjonowanie na odtworzonym DOM w przeglądarce (`offsetParent`, `getBoundingClientRect`), nie na oko — objaw braku wsparcia `:has()` w starym silniku jest identyczny i myli diagnozę.
+  Source: docs/solutions/ui-bugs/2026-09-05-nowy-element-renderu-przelacza-selektor-has-i-luka-miedzy-repo.md
