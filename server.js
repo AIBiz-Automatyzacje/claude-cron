@@ -16,11 +16,21 @@ const keepAwake = require('./lib/keep-awake');
 const inboxSeed = require('./lib/inbox-seed');
 const inboxDb = require('./lib/inbox-db');
 const { isInboxHub } = require('./lib/inbox-hub');
+const inboxRetention = require('./lib/inbox-retention');
 const { getInstallVersion } = require('./lib/version');
 const updater = require('./lib/updater');
 const { describeEnvUsage, readPersistedEnvCached } = require('./lib/persisted-env');
 const { matchWebhookToken, matchAskToken, queryParams } = require('./lib/webhook');
-const { matchInboxToken, handleInboxRequest, MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES } = require('./lib/inbox-api');
+const {
+  API_VERSION: INBOX_API_VERSION,
+  matchInboxToken,
+  handleInboxRequest,
+  isBinaryAction,
+  authorizeBlobRequest,
+  blobErrorStatus,
+  MAX_BODY_SIZE: INBOX_MAX_BODY_BYTES,
+} = require('./lib/inbox-api');
+const inboxBlobs = require('./lib/inbox-blobs');
 const { resolveNotifyConfig, buildMaskedNotifySettings, sanitizeNotifySettings } = require('./lib/notify-config');
 const { pushNotifySettings, buildPushPayload } = require('./lib/notify-push');
 
@@ -262,6 +272,19 @@ function handleRunsList(res, params) {
   return json(res, db.getRuns({ limit: limit ?? 50, offset: offset ?? 0, job_id, status, hideRoutine, fields }));
 }
 
+// Jedno miejsce na pytanie „czy ta instancja jest hubem skrzynki" — odpowiedź czytają DWA
+// niezależne konsumenty (panel przez /api/env i guard retencji), a rozjazd kopii dałby panel
+// twierdzący co innego niż przemiatanie. `memberCount` liczymy LENIWIE: bez WEBHOOK_BASE_URL
+// odpowiedź i tak brzmi „nie", a listMembers() otwierałoby i migrowało data/inbox.db co tick
+// na każdej maszynie bez skrzynki.
+function currentIsInboxHub() {
+  return isInboxHub({
+    inboxHubUrl,
+    webhookBaseUrl: WEBHOOK_BASE_URL,
+    memberCount: WEBHOOK_BASE_URL ? inboxDb.listMembers().length : 0,
+  });
+}
+
 async function handleApi(req, res) {
   const { method, path: urlPath, segments, params } = matchRoute(req.method, req.url);
 
@@ -285,11 +308,7 @@ async function handleApi(req, res) {
   // onboarding admina padł: skrzynka istnieje, tylko `INBOX_HUB_URL` nie zdążył się zapisać,
   // a bez zakładki nie dałoby się tego naprawić z dashboardu.
   if (method === 'GET' && urlPath === '/api/env') {
-    const isHub = isInboxHub({
-      inboxHubUrl,
-      webhookBaseUrl: WEBHOOK_BASE_URL,
-      memberCount: inboxDb.listMembers().length,
-    });
+    const isHub = currentIsInboxHub();
     return json(res, {
       vps_configured: !!VPS_API_URL,
       webhook_base_url: WEBHOOK_BASE_URL,
@@ -812,7 +831,14 @@ async function handleAsk(req, res, token) {
 // Cienka skorupa I/O nad handleInboxRequest (czysta funkcja w lib/inbox-api.js).
 // Cap body PODCZAS streamowania (413 zanim intruz wypompuje setki MB → OOM; body idzie
 // do parse'a PRZED autoryzacją) — MAX_BODY_SIZE współdzielone z handlerem (defense-in-depth).
-async function handleInbox(req, res, token, action) {
+async function handleInbox(req, res, match) {
+  // Rozgałęzienie PRZED readTextBody: ten helper robi req.setEncoding('utf8'), więc chunki
+  // stają się stringami i każdy bajt spoza UTF-8 zamieniłby się w U+FFFD — plik dojechałby
+  // uszkodzony, a hash i tak by się nie zgodził. Ścieżka binarna nie może go dotknąć.
+  if (isBinaryAction(match.action)) {
+    return await handleInboxBlob(req, res, match);
+  }
+  const { token, action } = match;
   const rawBody = await readTextBody(req, INBOX_MAX_BODY_BYTES);
   if (rawBody === null) {
     // Limit przekroczony / zerwany stream — goły 413. Destroy po flushu odpowiedzi
@@ -829,6 +855,238 @@ async function handleInbox(req, res, token, action) {
   }
   res.writeHead(result.status);
   res.end();
+}
+
+// --- Ścieżka binarna: bajty załączników (/inbox/v1/:token/blob/:sha256) ---
+
+// Odmowa na ścieżce binarnej. Destroy dopiero po flushu odpowiedzi (wzorzec 413 z /ask):
+// klient PUT-a może wciąż pompować megabajty, a bez destroy Node dumpowałby resztę
+// strumienia w nieskończoność. Kody intruzów (403/404/405) idą bez treści.
+// Odpowiedź wysłana, gdy klient jest w ŚRODKU pompowania megabajtów, a gniazdo zaraz potem
+// ubite, dociera do niego jako RST — a RST kasuje w jego buforze naszą odpowiedź, więc fetch
+// widzi „fetch failed" zamiast 413 i nadawca nie dowiaduje się, dlaczego plik nie przeszedł.
+// Wynik zależy od obciążenia maszyny, czyli ten sam przypadek raz przechodzi, raz nie. Dla
+// klienta UPRAWNIONEGO (token trafiony) wypijamy więc resztę ciała w próżnię i odpowiadamy
+// dopiero potem. Bajtów nigdzie nie zapisujemy, a drenaż ma twardy cap: kto po odmowie pompuje
+// dalej niż dwukrotność limitu, nie jest już uczciwym nadawcą i dostaje ubite gniazdo.
+const BLOB_DRAIN_CAP_FACTOR = 2;
+
+// Bezczynność, po której przestajemy czekać na resztę ciała. Watchdog mierzy PRZERWĘ między
+// chunkami, nie łączny czas: uczciwy nadawca pompuje bez ustanku (25 MB przez wolne łącze to
+// minuty i ma prawo je dostać), a klient, który zadeklarował 26 MB i zamilkł po 16 bajtach,
+// nie zablokuje odmowy na zawsze.
+//
+// 10 s, nie 1 s: jedna retransmisja uplinku w środku 26 MB uploadu mieści się poniżej sekundy
+// bez żadnej patologii, a uznanie takiego nadawcy za milczącego kończyło się `req.destroy()`
+// przy niedoczytanych danych — czyli RST kasującym w buforze klienta naszą odpowiedź 413.
+// Nadawca widział wtedy „fetch failed" i nie dowiadywał się, dlaczego plik nie przeszedł,
+// a wynik zależał od obciążenia łącza (raz przechodzi, raz nie). Rząd wielkości jest spójny
+// z limitem czasu klienta (REQUEST_TIMEOUT_MS w inbox-client).
+const BLOB_DRAIN_IDLE_MS = 10_000;
+
+// Callback dostaje `true`, gdy drenaż trzeba było przerwać (cap albo cisza klienta), `false`
+// gdy klient sam dokończył lub zerwał transfer. Woła się dokładnie raz — 'end', 'error',
+// 'close', cap i watchdog potrafią przyjść w dowolnej kombinacji.
+function drainRequestBody(req, capBytes, onSettled) {
+  let seen = 0;
+  let settled = false;
+  let idleTimer = null;
+  const settle = (aborted) => {
+    if (settled) return;
+    settled = true;
+    if (idleTimer) clearTimeout(idleTimer);
+    onSettled(aborted);
+  };
+  const armIdleTimer = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      // pause(): dalsze bajty zostają w buforach socketu, aż zamkniemy gniazdo.
+      req.pause();
+      settle(true);
+    }, BLOB_DRAIN_IDLE_MS);
+    idleTimer.unref();
+  };
+  // Strumień bywa już domknięty, zanim tu trafimy: `for await` w writeBlobFromStream niszczy
+  // `req` przy przerwaniu pętli (limit, rozjazd hasha). Wtedy 'end' NIE przyjdzie już nigdy,
+  // a drenaż czekałby na nie w nieskończoność — razem z odpowiedzią, której klient nie dostanie.
+  if (req.readableEnded || req.destroyed || !req.readable) return settle(false);
+  req.once('close', () => settle(false));
+  req.on('data', (chunk) => {
+    seen += chunk.length;
+    if (seen > capBytes) {
+      req.pause();
+      settle(true);
+      return;
+    }
+    armIdleTimer();
+  });
+  req.once('end', () => settle(false));
+  req.once('error', () => settle(true));
+  armIdleTimer();
+  req.resume();
+}
+
+// Connection: close + destroy po flushu. Bez nagłówka klient z pulą połączeń (undici/fetch)
+// uznaje socket za żywy, wysyła nim NASTĘPNE żądanie i dostaje twarde „fetch failed" —
+// odmowa jednego transferu psułaby wtedy kolejną, poprawną operację.
+function closeSocketAfterResponse(req, res) {
+  res.setHeader('Connection', 'close');
+  res.once('finish', () => req.destroy());
+}
+
+function drainThenRespond(req, res, maxBytes, send) {
+  drainRequestBody(req, maxBytes * BLOB_DRAIN_CAP_FACTOR, (overflowed) => {
+    if (overflowed) closeSocketAfterResponse(req, res);
+    send();
+  });
+}
+
+// `drain` włączamy WYŁĄCZNIE dla odmów kierowanych do uprawnionego klienta. Intruz (403/404)
+// zostaje przy natychmiastowym zamknięciu: nie mamy powodu przyjmować od niego bajtów.
+function rejectBlob(req, res, decision, { drain = false, maxBytes = 0 } = {}) {
+  const respond = () => {
+    if (decision.json) {
+      return json(res, decision.json, decision.status);
+    }
+    res.writeHead(decision.status);
+    return res.end();
+  };
+  if (!drain) {
+    closeSocketAfterResponse(req, res);
+    return respond();
+  }
+  return drainThenRespond(req, res, maxBytes, respond);
+}
+
+// PUT: bajty ze strumienia żądania wprost do magazynu. Limit i sha256 liczy
+// writeBlobFromStream — hash z URL to deklaracja nadawcy, nie dowód. Odpowiedź niesie
+// `deduped`, bo powtórzony upload tej samej treści jest sukcesem bez zapisu (R4), co czyni
+// PUT bezpiecznym do retry po timeoucie.
+async function streamBodyToFile(req, res, decision) {
+  // Zadeklarowany rozmiar odrzucamy PRZED transferem — bez tego hub przyjmuje i zapisuje
+  // 25 MB tylko po to, żeby je skasować. Deklaracja nie jest dowodem (limit i tak pilnuje
+  // strumień), ale gdy klient sam się przyznaje, nie ma po co pompować bajtów.
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > decision.maxBytes) {
+    return rejectBlob(
+      req,
+      res,
+      { status: 413, json: { v: INBOX_API_VERSION, error: 'too_large' } },
+      { drain: true, maxBytes: decision.maxBytes }
+    );
+  }
+  // Skrót dedupu wolno dać wyłącznie temu, kto tę treść już raz zweryfikowanie wgrał
+  // (retry, ten sam plik do wielu adresatów). Dla kogoś obcego pominięcie transferu
+  // zamieniałoby znajomość hasha w dowód posiadania pliku — i dawało dostęp do cudzych bajtów.
+  const alreadyUploaded = inboxDb.isBlobUploader(decision.sha256, decision.member.name);
+  try {
+    const result = await inboxBlobs.writeBlobFromStream(req, decision.sha256, decision.maxBytes, {
+      skipIfPresent: alreadyUploaded,
+    });
+    // Ślad wgrania zapisujemy po ZWERYFIKOWANYM transferze (hash policzył hub).
+    if (!alreadyUploaded) inboxDb.recordBlobUpload(decision.sha256, decision.member.name);
+    const payload = {
+      v: INBOX_API_VERSION,
+      sha256: result.sha256,
+      size: result.size,
+      deduped: result.deduped,
+    };
+    if (result.deduped && alreadyUploaded) {
+      // Ciała nie przeczytaliśmy — klient wciąż pompuje megabajty, a odpowiedź wysłana teraz
+      // i domknięta destroyem zginęłaby w RST (patrz drainRequestBody). Wypijamy więc resztę
+      // w próżnię, z tym samym twardym capem, i odpowiadamy dopiero potem.
+      return drainThenRespond(req, res, decision.maxBytes, () => json(res, payload));
+    }
+    return json(res, payload);
+  } catch (err) {
+    if (err instanceof inboxBlobs.InboxBlobError) {
+      // Błąd DLA UPRAWNIONEGO klienta (token już trafiony), więc niesie kod przyczyny:
+      // bez niego klient nie wie, czy ponawiać (zerwany transfer), czy przeliczyć plik
+      // (rozjazd hasha), czy odpuścić (za duży). Magazyn sprzątnął już plik tymczasowy.
+      return rejectBlob(
+        req,
+        res,
+        { status: blobErrorStatus(err.code), json: { v: INBOX_API_VERSION, error: err.code } },
+        { drain: true, maxBytes: decision.maxBytes }
+      );
+    }
+    throw err;
+  }
+}
+
+// GET: bajty z magazynu do odpowiedzi. Content-Length bierzemy z RZECZYWISTEGO rozmiaru
+// pliku, nie z `size_bytes` w metadanych — deklaracja nadawcy i zawartość dysku to dwie
+// różne rzeczy, a rozjazd zawiesiłby klienta czekającego na brakujące bajty.
+// Wąska allowlista typów, które wolno oddać KLIENTOWI pod ich własnym mime. Wszystko poza nią
+// (w tym text/html i image/svg+xml — oba wykonują skrypt po otwarciu w przeglądarce) schodzi
+// do application/octet-stream. Lista jest allowlistą, nie blocklistą, bo mime pochodzi od
+// nadawcy: nowy niebezpieczny typ ma domyślnie NIE przechodzić.
+const SAFE_DOWNLOAD_MIME = new Set([
+  'application/octet-stream',
+  'application/pdf',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'text/plain',
+]);
+
+function safeDownloadMime(mime) {
+  return SAFE_DOWNLOAD_MIME.has(mime) ? mime : 'application/octet-stream';
+}
+
+// Content-Disposition: attachment ZAWSZE, bez nazwy pliku: nazwa pochodzi od nadawcy
+// (klient i tak zna ją z metadanych wiadomości), ale samo "attachment" pilnuje, żeby
+// przeglądarka niczego tu nie renderowała.
+function streamFileToResponse(res, decision) {
+  // Nagłówki liczymy PRZED otwarciem strumienia. Odwrotna kolejność zostawiała otwarty
+  // deskryptor za każdym razem, gdy statSync/writeHead rzuciło (np. ENOENT po skasowaniu
+  // blobu w międzyczasie) — powtarzany GET wyczerpywał deskryptory huba (EMFILE).
+  let size;
+  try {
+    size = fs.statSync(inboxBlobs.blobPath(decision.sha256)).size;
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    // Metadane są, bajtów nie ma (wygasły / skasowane) — 404 bez treści, jak brak dostępu.
+    res.writeHead(404);
+    return res.end();
+  }
+
+  let stream;
+  try {
+    stream = inboxBlobs.openBlobRead(decision.sha256);
+  } catch (err) {
+    if (err instanceof inboxBlobs.InboxBlobError && err.code === 'blob_not_found') {
+      res.writeHead(404);
+      return res.end();
+    }
+    throw err;
+  }
+  res.writeHead(200, {
+    'Content-Type': safeDownloadMime(decision.attachment.mime),
+    'Content-Length': size,
+    // Endpoint jest PUBLICZNY (przez Funnel) i odpowiada z globalnym ACAO:*, a mime pochodzi
+    // od nadawcy — bez nosniff przeglądarka zgadywałaby typ z treści i wykonała podstawiony
+    // HTML/skrypt na ORIGINIE HUBA, gdzie token ofiary siedzi w tym samym URL-u.
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Disposition': 'attachment',
+  });
+  // Zerwanie w połowie po obu stronach: bez tych dwóch listenerów zostaje albo otwarty
+  // deskryptor (klient rozłączony), albo uncaughtException (błąd odczytu w trakcie pipe).
+  stream.on('error', () => res.destroy());
+  res.on('close', () => stream.destroy());
+  stream.pipe(res);
+}
+
+async function handleInboxBlob(req, res, { token, param }) {
+  const decision = authorizeBlobRequest({ token, method: req.method, sha256: param });
+  if (decision.status !== 200) {
+    return rejectBlob(req, res, decision);
+  }
+  if (decision.op === 'upload') {
+    return await streamBodyToFile(req, res, decision);
+  }
+  return streamFileToResponse(res, decision);
 }
 
 // === Server ===
@@ -866,7 +1124,14 @@ const server = http.createServer(async (req, res) => {
     // Tożsamość członka wyprowadzana z tokenu; matcher przed guardem XFF (kontrakt wyżej).
     const inboxMatch = matchInboxToken(req.url);
     if (inboxMatch) {
-      return await handleInbox(req, res, inboxMatch.token, inboxMatch.action);
+      return await handleInbox(req, res, inboxMatch);
+    }
+    // URL pod /inbox/, którego matcher nie uznał (nieznana wersja, nadmiarowy segment) to
+    // błąd konstrukcji adresu — 404 bez treści. Bez tego żądanie spadało do SPA fallbacku
+    // i wracało 200 z index.html, więc pomyłka klienta wyglądała na sukces.
+    if (req.url.startsWith('/inbox/')) {
+      res.writeHead(404);
+      return res.end();
     }
 
     // Block non-webhook requests from external sources (Tailscale Funnel)
@@ -953,6 +1218,13 @@ import('./scripts/inbox/env-loader.mjs')
 // Start scheduler
 scheduler.start();
 
+// Retencja bajtów załączników skrzynki (R11) — przemiatanie IN-PROCESS na hubie, świadomie
+// nie jako script-job: drugi proces otwierałby drugie połączenie do `inbox.db` w trakcie
+// transferów. Guard jest FUNKCJĄ liczoną przy każdym przemiataniu, nie wartością z linii
+// startu: `inboxHubUrl` wypełnia asynchroniczny import wyżej, a lista członków zmienia się
+// w locie — policzony raz odpowiadałby na stan sprzed odczytu pliku sekretu.
+inboxRetention.startInboxRetention({ isHub: currentIsInboxHub });
+
 server.listen(PORT, () => {
   console.log(`\n🫀  Puls running at http://localhost:${PORT}`);
   console.log(`   Press Ctrl+C to stop\n`);
@@ -966,6 +1238,7 @@ process.on('SIGINT', () => {
   console.log('\n[shutdown] Stopping...');
   keepAwake.stop();
   scheduler.stop();
+  inboxRetention.stopInboxRetention();
   db.close();
   server.close(() => process.exit(0));
 });
@@ -973,6 +1246,7 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   keepAwake.stop();
   scheduler.stop();
+  inboxRetention.stopInboxRetention();
   db.close();
   server.close(() => process.exit(0));
 });

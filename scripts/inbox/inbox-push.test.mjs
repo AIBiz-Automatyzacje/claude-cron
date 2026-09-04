@@ -10,6 +10,8 @@ import {
   archivePath,
   archiveThreadMarker,
   extractInboxSection,
+  parseCheckedCallouts,
+  parseRequestedDownloads,
   renderArchiveThread,
   replaceArchiveThreadBlock,
 } from './inbox-push.mjs';
@@ -186,4 +188,41 @@ test('archiwum: cudzy marker wątku zacytowany w treści NIE porywa bloku obcej 
   assert.ok(!literal.test(out), 'marker w treści musi być zneutralizowany');
 
   await fs.rm(tmp, { recursive: true, force: true });
+});
+
+// ──────── parser pobrań (IU-7, R6/R9) ────────
+// Akcja lokalna: rozpoznajemy ją OSOBNĄ funkcją, żeby nigdy nie trafiła do `client.done()`.
+const ATT_A = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+test('parseRequestedDownloads: odhaczony wiersz Pobierz zwraca id załącznika', () => {
+  const section = `> - [x] Pobierz — <span class="os-att">📎 baner.png</span> %% att:${ATT_A} %%`;
+  assert.deepEqual(parseRequestedDownloads(section), [{ attachment_id: ATT_A }]);
+});
+
+test('parseRequestedDownloads: nieodhaczony wiersz nie generuje żądania', () => {
+  const section = `>   - [ ] Pobierz — 📎 baner.png %% att:${ATT_A} %%`;
+  assert.deepEqual(parseRequestedDownloads(section), []);
+});
+
+test('parseRequestedDownloads: uszkodzony marker jest pomijany bez rzutu (error case)', () => {
+  assert.deepEqual(parseRequestedDownloads('>   - [x] Pobierz — 📎 baner.png %% att: %%'), []);
+  assert.deepEqual(parseRequestedDownloads('>   - [x] Pobierz — 📎 baner.png'), []);
+  assert.deepEqual(parseRequestedDownloads(''), []);
+});
+
+test('parseRequestedDownloads: nie łapie akcji hubowych, a parseCheckedCallouts nie łapie Pobierz (R9)', () => {
+  const section = [
+    `>   - [x] Pobierz — 📎 baner.png %% att:${ATT_A} %%`,
+    '> - [x] Zrobione',
+    `> %% id:${'a'.repeat(8)}-aaaa-4aaa-8aaa-${'a'.repeat(12)} thread:${THREAD} %%`,
+  ].join('\n');
+
+  const pobrania = parseRequestedDownloads(section);
+  assert.deepEqual(pobrania, [{ attachment_id: ATT_A }]);
+
+  const hubowe = parseCheckedCallouts(section);
+  assert.equal(hubowe.length, 1);
+  assert.equal(hubowe[0].action, 'Zrobione');
+  // Wiersz „Pobierz" nie może pojawić się w akcjach idących do huba pod ŻADNĄ postacią.
+  assert.ok(!hubowe.some(h => h.id === ATT_A || String(h.action).includes('Pobierz')));
 });

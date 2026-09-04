@@ -91,6 +91,10 @@ curl -i -X POST http://localhost:7777/api/inbox/members \
 - `docs/solutions/auth-issues/2026-07-26-sekret-w-drzewie-czytanym-przez-agenta-eksfiltracja-prompt-injection.md` —
   ten sam kształt defektu na innym kanale (guard `.gitignore` broni przed gitem, nie przed agentem czytającym `cwd`).
   Wspólny wniosek: **guardy są ortogonalne, sekret potrzebuje jednego na każdy kanał**.
+- `docs/solutions/auth-issues/2026-09-03-tresc-nadawcy-jako-akcja-uprawnienie-i-kod-w-skrzynce.md` —
+  globalne `ACAO:*` opisane tutaj jest wzmacniaczem XSS-a na publicznym `/inbox/v1/:token/blob/:sha256`
+  (plik podany jako `text/html` czyta token ofiary z URL-a); tam dołożono allowlistę mime + `nosniff`
+  + `Content-Disposition`.
 
 ## Kontekst
 

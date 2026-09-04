@@ -1,0 +1,143 @@
+{
+  "wersja": 1,
+  "zadanie": "zalaczniki-w-skrzynce",
+  "fazy": [
+    {
+      "numer": 1,
+      "nazwa": "Magazyn bajtów na hubie",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": [],
+      "metryki": {
+        "liczniki": {
+          "p1": 0,
+          "p2": 6,
+          "p3": 8,
+          "operator": 1
+        },
+        "przebieg": {
+          "pominieci": [
+            "e2e"
+          ],
+          "e2eTryb": "pominiety",
+          "znalezione": 25,
+          "poDedupJs": 24,
+          "poDedupSem": 15,
+          "weryfikowane": 6,
+          "obalone": 0,
+          "p3Odrzucone": 0,
+          "e2eCheckboxy": 0,
+          "e2eStatus": "pominiety przez routing",
+          "e2ePass": 0,
+          "e2eFail": 0,
+          "e2eSkip": 0
+        }
+      }
+    },
+    {
+      "numer": 2,
+      "nazwa": "Wysyłka z załącznikami",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": [],
+      "metryki": {
+        "liczniki": {
+          "p1": 0,
+          "p2": 3,
+          "p3": 8,
+          "operator": 0
+        },
+        "przebieg": {
+          "pominieci": [
+            "e2e"
+          ],
+          "e2eTryb": "pominiety",
+          "znalezione": 24,
+          "poDedupJs": 23,
+          "poDedupSem": 12,
+          "weryfikowane": 4,
+          "obalone": 1,
+          "p3Odrzucone": 0,
+          "e2eCheckboxy": 0,
+          "e2eStatus": "pominiety przez routing",
+          "e2ePass": 0,
+          "e2eFail": 0,
+          "e2eSkip": 0
+        }
+      }
+    },
+    {
+      "numer": 3,
+      "nazwa": "Odbiór: render, odhaczenie, zapis do vaulta",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": [],
+      "metryki": {
+        "liczniki": {
+          "p1": 3,
+          "p2": 8,
+          "p3": 4,
+          "operator": 0
+        },
+        "przebieg": {
+          "pominieci": [
+            "e2e"
+          ],
+          "e2eTryb": "pominiety",
+          "znalezione": 29,
+          "poDedupJs": 29,
+          "poDedupSem": 18,
+          "weryfikowane": 14,
+          "obalone": 3,
+          "p3Odrzucone": 0,
+          "e2eCheckboxy": 0,
+          "e2eStatus": "pominiety przez routing",
+          "e2ePass": 0,
+          "e2eFail": 0,
+          "e2eSkip": 0
+        }
+      }
+    },
+    {
+      "numer": 4,
+      "nazwa": "Retencja, sprzątanie i rewokacja",
+      "execute": "done",
+      "review": "done",
+      "fix": "done",
+      "otwarteFindingi": [],
+      "metryki": {
+        "liczniki": {
+          "p1": 1,
+          "p2": 8,
+          "p3": 8,
+          "operator": 2
+        },
+        "przebieg": {
+          "pominieci": [
+            "e2e"
+          ],
+          "e2eTryb": "pominiety",
+          "znalezione": 28,
+          "poDedupJs": 28,
+          "poDedupSem": 19,
+          "weryfikowane": 9,
+          "obalone": 0,
+          "p3Odrzucone": 0,
+          "e2eCheckboxy": 0,
+          "e2eStatus": "pominiety przez routing",
+          "e2ePass": 0,
+          "e2eFail": 0,
+          "e2eSkip": 0
+        }
+      }
+    }
+  ],
+  "zakonczenie": {
+    "walidacja": "done",
+    "complete": "done",
+    "compound": "done"
+  }
+}

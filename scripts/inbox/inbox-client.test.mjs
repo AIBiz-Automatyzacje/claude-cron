@@ -5,10 +5,24 @@
 // żadnego realnego żądania HTTP ani dotknięcia produkcyjnego .env.
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { ping, pull, done, send, claimQuery, InboxClientError } from './inbox-client.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  ping,
+  pull,
+  done,
+  send,
+  claimQuery,
+  uploadBlob,
+  downloadBlob,
+  setBinaryTimeoutMs,
+  InboxClientError,
+} from './inbox-client.mjs';
 
 const HUB_URL = 'https://hub.example.ts.net';
 const TOKEN = 'deadbeef';
+const SHA = 'a'.repeat(64);
 
 const originalFetch = global.fetch;
 let savedEnv;
@@ -293,6 +307,8 @@ const methods = [
   ['done', () => done({ id: 'x', action: 'Zrobione' })],
   ['send', () => send({ to_user: 'k', type: 'task', title: 't' })],
   ['claimQuery', () => claimQuery()],
+  ['uploadBlob', () => uploadBlob(SHA, '/nieistotne')],
+  ['downloadBlob', () => downloadBlob(SHA, '/nieistotne')],
 ];
 
 for (const [name, call] of methods) {
@@ -341,4 +357,214 @@ test('send: brak to_user → czytelny błąd, fetch niewywołany', async () => {
   };
   await assert.rejects(send({ type: 'task', title: 't' }), /wymagane pole "to_user"/);
   assert.equal(fetchCalled, false);
+});
+
+// === Operacje binarne: uploadBlob / downloadBlob ===
+
+// Katalog roboczy per-case — testy dotykają PRAWDZIWEGO dysku (zapis strumieniem i rename
+// to sedno kontraktu downloadBlob), więc nigdy w drzewie repo ani w vaultcie.
+let tmpDir;
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inbox-client-blob-'));
+});
+
+afterEach(() => {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// Odpowiedź binarna: ciało jako web ReadableStream (dokładnie to, co oddaje fetch).
+function binaryResponse(chunks, { breakAfter = null } = {}) {
+  const body = new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+      if (breakAfter) controller.error(new Error(breakAfter));
+      else controller.close();
+    },
+  });
+  return { ok: true, status: 200, body };
+}
+
+test('uploadBlob: happy path — PUT na /blob/:sha256 z bajtami pliku, zwraca odpowiedź huba', async () => {
+  const file = path.join(tmpDir, 'raport.pdf');
+  fs.writeFileSync(file, 'zawartość-załącznika');
+  const calls = mockFetch([{ response: jsonResponse(200, { v: 1, sha256: SHA, size: 21, deduped: false }) }]);
+
+  const result = await uploadBlob(SHA, file);
+
+  assert.deepEqual(result, { v: 1, sha256: SHA, size: 21, deduped: false });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${HUB_URL}/inbox/v1/${TOKEN}/blob/${SHA}`);
+  assert.equal(calls[0].opts.method, 'PUT');
+  assert.equal(calls[0].opts.headers['Content-Type'], 'application/octet-stream');
+  // Bajty idą surowo, nie jako JSON — inaczej hub policzyłby inny sha256 niż nadawca.
+  assert.equal(Buffer.from(calls[0].opts.body).toString('utf8'), 'zawartość-załącznika');
+});
+
+test('uploadBlob: AbortError → PONAWIA i kończy sukcesem (klucz dedup = treść, retry bezpieczny)', async () => {
+  const file = path.join(tmpDir, 'zrzut.png');
+  fs.writeFileSync(file, 'bajty');
+  const calls = mockFetch([
+    { throw: abortError() },
+    { response: jsonResponse(200, { v: 1, sha256: SHA, size: 5, deduped: true }) },
+  ]);
+
+  const result = await uploadBlob(SHA, file);
+
+  assert.equal(result.deduped, true);
+  assert.equal(calls.length, 2);
+  // Retry wysyła DOKŁADNIE te same bajty — inaczej hub odrzuciłby transfer jako hash_mismatch.
+  assert.equal(Buffer.from(calls[1].opts.body).toString('utf8'), 'bajty');
+});
+
+test('uploadBlob: używa BINARY_TIMEOUT_MS, nie ciasnego REQUEST_TIMEOUT_MS', async () => {
+  const file = path.join(tmpDir, 'duzy.bin');
+  fs.writeFileSync(file, 'x');
+  mockFetch([{ throw: abortError() }]);
+
+  await assert.rejects(uploadBlob(SHA, file), (err) => {
+    assert.match(err.message, /limit czasu 180000 ms/);
+    return true;
+  });
+
+  // Kontrola różnicowa: ścieżka tekstowa nadal trzyma się swojego, ciasnego limitu.
+  mockFetch([{ throw: abortError() }]);
+  await assert.rejects(pull(), (err) => {
+    assert.match(err.message, /limit czasu 15000 ms/);
+    return true;
+  });
+});
+
+test('uploadBlob: zły sha256 → czytelny błąd, fetch niewywołany', async () => {
+  let fetchCalled = false;
+  global.fetch = async () => {
+    fetchCalled = true;
+    return jsonResponse(200, { v: 1 });
+  };
+  await assert.rejects(uploadBlob('nie-jest-hashem', '/dowolny'), /64 znakami/);
+  assert.equal(fetchCalled, false);
+});
+
+test('uploadBlob: nieczytelny plik → czytelny błąd, bez żądania do huba', async () => {
+  let fetchCalled = false;
+  global.fetch = async () => {
+    fetchCalled = true;
+    return jsonResponse(200, { v: 1 });
+  };
+  await assert.rejects(uploadBlob(SHA, path.join(tmpDir, 'nie-ma-mnie')), (err) => {
+    assert.ok(err instanceof InboxClientError);
+    assert.match(err.message, /nie udało się odczytać pliku/);
+    return true;
+  });
+  assert.equal(fetchCalled, false);
+});
+
+test('downloadBlob: happy path — zapisuje bajty pod destPath, tworzy brakujący katalog', async () => {
+  const dest = path.join(tmpDir, '2026-09', 'raport.pdf');
+  const calls = mockFetch([{ response: binaryResponse(['abc', 'def']) }]);
+
+  const result = await downloadBlob(SHA, dest);
+
+  assert.deepEqual(result, { path: dest, size: 6 });
+  assert.equal(fs.readFileSync(dest, 'utf8'), 'abcdef');
+  assert.equal(calls[0].url, `${HUB_URL}/inbox/v1/${TOKEN}/blob/${SHA}`);
+  assert.equal(calls[0].opts.method, 'GET');
+});
+
+test('downloadBlob: zerwanie w połowie → brak pliku docelowego i brak śmieci po tymczasowym', async () => {
+  const dest = path.join(tmpDir, 'polowiczny.pdf');
+  // Oba przebiegi (próba + retry) zrywają — inaczej retry uratowałby pobranie i nie
+  // zobaczylibyśmy stanu po awarii.
+  mockFetch([{ response: binaryResponse(['pierwsza-polowa'], { breakAfter: 'połączenie zerwane' }) }]);
+
+  await assert.rejects(downloadBlob(SHA, dest), (err) => {
+    assert.ok(err instanceof InboxClientError);
+    assert.match(err.message, /nie odpowiada/);
+    return true;
+  });
+
+  // Kluczowy niezmiennik: w vaultcie nie ma pliku wyglądającego na kompletny…
+  assert.equal(fs.existsSync(dest), false);
+  // …ani niedokończonego ogona po transferze.
+  assert.deepEqual(fs.readdirSync(tmpDir), []);
+});
+
+test('downloadBlob: strumień zamilkł po pierwszym chunku → limit czasu i pusty katalog docelowy', async () => {
+  const dest = path.join(tmpDir, 'wisi.pdf');
+  // Hub/Funnel odsyła 200 i przestaje wysyłać bajty, nie zamykając strumienia. Limit czasu MUSI
+  // obejmować transfer, nie tylko nagłówki — inaczej run syncu wisi do twardego timeoutu
+  // executora, a w vaultcie zostaje plik .part rozniesiony przez Obsidian Sync.
+  const stalled = () => ({
+    ok: true,
+    status: 200,
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('pierwszy-chunk'));
+        // celowo: żadnego close() ani error() — nadawca po prostu milczy
+      },
+    }),
+  });
+  mockFetch([{ response: stalled() }, { response: stalled() }]);
+  setBinaryTimeoutMs(60);
+  try {
+    await assert.rejects(downloadBlob(SHA, dest), (err) => {
+      assert.ok(err instanceof InboxClientError);
+      assert.match(err.message, /limit czasu 60 ms/);
+      return true;
+    });
+  } finally {
+    setBinaryTimeoutMs(null);
+  }
+
+  assert.equal(fs.existsSync(dest), false);
+  // Ani pliku docelowego, ani ogona .part po przerwanym transferze.
+  assert.deepEqual(fs.readdirSync(tmpDir), []);
+});
+
+// Skip na Windowsie: `chmod` ustawia tam wyłącznie atrybut read-only katalogu i NIE blokuje
+// tworzenia podkatalogu, więc niezapisywalności nie da się w ten sposób odtworzyć.
+test('downloadBlob: niezapisywalny katalog docelowy → błąd o katalogu, nie „przerwany transfer"', { skip: process.platform === 'win32' }, async () => {
+  const blocked = path.join(tmpDir, 'zablokowany');
+  fs.mkdirSync(blocked);
+  fs.chmodSync(blocked, 0o500); // brak prawa zapisu — mkdir podkatalogu padnie na EACCES
+  const dest = path.join(blocked, 'podkatalog', 'plik.pdf');
+  const calls = mockFetch([{ response: binaryResponse(['abc']) }]);
+
+  try {
+    await assert.rejects(downloadBlob(SHA, dest), (err) => {
+      assert.ok(err instanceof InboxClientError);
+      assert.match(err.message, /nie udało się utworzyć katalogu/);
+      assert.ok(!/przerwany transfer/.test(err.message));
+      return true;
+    });
+    // Diagnoza praw do katalogu nie jest awarią transportu — żądanie nie poleciało w ogóle.
+    assert.equal(calls.length, 0);
+  } finally {
+    fs.chmodSync(blocked, 0o700);
+  }
+});
+
+test('downloadBlob: 404 (brak uprawnienia albo brak bajtów) → czytelny błąd bez retry, zero plików', async () => {
+  const dest = path.join(tmpDir, 'obcy.pdf');
+  const calls = mockFetch([{ response: errorResponse(404, '') }]);
+
+  await assert.rejects(downloadBlob(SHA, dest), (err) => {
+    assert.ok(err instanceof InboxClientError);
+    assert.match(err.message, /odrzucił żądanie/);
+    assert.match(err.message, /404/);
+    return true;
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(fs.existsSync(dest), false);
+});
+
+test('downloadBlob: token z komunikatu błędu sieci NIE wycieka (undici cytuje pełny URL)', async () => {
+  const dest = path.join(tmpDir, 'x.pdf');
+  mockFetch([{ throw: new TypeError(`fetch failed: ${HUB_URL}/inbox/v1/${TOKEN}/blob/${SHA}`) }]);
+
+  await assert.rejects(downloadBlob(SHA, dest), (err) => {
+    assert.ok(!err.message.includes(TOKEN), `token w komunikacie: ${err.message}`);
+    assert.match(err.message, /\*\*\*/);
+    return true;
+  });
 });

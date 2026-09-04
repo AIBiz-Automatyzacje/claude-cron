@@ -55,6 +55,36 @@ export function parseCheckedCallouts(section) {
   return results;
 }
 
+// Odhaczone „Pobierz" to akcja WYŁĄCZNIE LOKALNA (R6/R9): plik ściąga się na dysk, hub
+// nie dowiaduje się o tym niczego. Dlatego osobna funkcja, a nie dopisanie `Pobierz` do
+// alternatywy w `parseCheckedCallouts` — ta druga karmi `client.done()`, które przyjmuje
+// tylko `Zrobione|Zapoznane`, więc hub odrzucałby akcję lokalną jako `invalid_action`
+// przy KAŻDYM syncu. Rozdział funkcji czyni to niemożliwym konstrukcyjnie, nie umownie.
+//
+// Przebieg po LINIACH, nie po blokach calloutu: wiersz załącznika niesie własny,
+// samodzielny marker `%% att:<uuid> %%`, więc nie zależy od kruchego grupowania po
+// prefiksie `> ` (render emituje też gołe `>`, które rozbijają callout na fragmenty).
+// Marker uszkodzony ręczną edycją (`%% att: %%` bez uuid) jest pomijany bez rzutu —
+// to wejście od człowieka edytującego plik, a sync nie może się o nie wywrócić.
+export function parseRequestedDownloads(section) {
+  const results = [];
+  for (const line of section.split('\n')) {
+    // Kotwica na kształcie renderu (`>` + wcięcie listy + `- [x] Pobierz — `), nie na luźnym
+    // `\s*` z dowolną resztą linii. Sama kotwica NIE wystarczy i nigdy nie wystarczy: linie
+    // kontynuacji treści wiadomości mają DOKŁADNIE to samo wcięcie co wiersz załącznika, więc
+    // zdalny nadawca wpisujący w treść odhaczony wiersz „Pobierz" z markerem `att:` wymuszał
+    // pobranie pliku na maszynę odbiorcy bez żadnej jego akcji. Właściwą obroną jest
+    // neutralizeContentLine w renderze (inbox-pull.mjs) — te dwie strony trzymają kontrakt
+    // razem, a tutaj odcinamy dodatkowo warianty spoza kształtu renderu (głębsze zagnieżdżenia,
+    // wiersz bez separatora metadanych).
+    if (!/^> {1,3}- \[x\] Pobierz — /.test(line)) continue;
+    const att = line.match(/%%\s*att:([a-f0-9-]{36})\s*%%/);
+    if (!att) continue;
+    results.push({ attachment_id: att[1] });
+  }
+  return results;
+}
+
 // ──────── archive ────────
 export function archivePath(archiveDir) {
   const now = new Date();

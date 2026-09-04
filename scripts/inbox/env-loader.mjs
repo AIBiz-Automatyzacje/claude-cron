@@ -2,7 +2,7 @@
 // Jedna implementacja = koniec driftu (bug: pull robił early-return przy INBOX_ENV_FILE
 // PRZED rozwiązaniem ścieżek → writeFile(undefined) FATAL).
 // Kontrakt: po loadEnv() ZAWSZE ustawione są INBOX_TODO_PATH, INBOX_SKRZYNKA_PATH,
-// INBOX_ARCHIVE_DIR — albo rzucamy czytelny błąd konfiguracji.
+// INBOX_ARCHIVE_DIR, INBOX_ATTACHMENTS_DIR — albo rzucamy czytelny błąd konfiguracji.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -101,5 +101,14 @@ export async function loadEnv() {
     // Wyprowadź z workspace'u Skrzynki: <ws>/Zadania/Skrzynka.md → <ws>/Zasoby/inbox-archive
     const ws = path.dirname(path.dirname(process.env.INBOX_SKRZYNKA_PATH));
     process.env.INBOX_ARCHIVE_DIR = path.join(ws, 'Zasoby/inbox-archive');
+  }
+  // Bezwzględna ścieżka katalogu pobranych załączników. Wyprowadzana ZE ŚCIEŻKI SKRZYNKI
+  // (jak archiwum), nie z CLAUDE_CRON_WORKSPACE: test i instalacja nietypowa ustawiają
+  // INBOX_SKRZYNKA_PATH wprost, a katalog musi zostać w TYM SAMYM vaultcie, w którym leży
+  // plik z wikilinkiem `![[Zasoby/inbox-zalaczniki/…]]` — inaczej Obsidian nie pokaże pliku,
+  // który przed chwilą pobraliśmy. Wartość jest lustrem ATTACHMENTS_REL_DIR z inbox-pull.mjs.
+  if (!process.env.INBOX_ATTACHMENTS_DIR) {
+    const ws = path.dirname(path.dirname(process.env.INBOX_SKRZYNKA_PATH));
+    process.env.INBOX_ATTACHMENTS_DIR = path.join(ws, 'Zasoby/inbox-zalaczniki');
   }
 }

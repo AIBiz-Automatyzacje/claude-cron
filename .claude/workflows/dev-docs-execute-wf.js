@@ -118,12 +118,21 @@ Faza do wykonania: ${faza}
 Referencja metodologii: przeczytaj .claude/skills/dev-docs-execute/SKILL.md sekcje 2.5, 3, 3a
 (strategia delegacji, granice scope'u, mandatory designerski kontekst).
 
-1. Przeczytaj ${sciezka}/*-plan.md, ${sciezka}/*-zadania.md, ${sciezka}/*-kontekst.md.
+1. CZYTAJ WYCINKAMI, NIE CALYMI PLIKAMI. Cztery dokumenty tego zadania to lacznie 120-175 KB, a plik
+   zadan rosnie w trakcie jednego zadania z 23 KB do 59 KB (sekcje "Do poprawy po review") i jest czytany
+   przy KAZDEJ fazie. Do zbudowania jednostek fazy ${faza} potrzebujesz czterech wycinkow. Kazdy bierz
+   przez \`grep -n\` naglowka, a potem \`Read\` z \`offset\` i \`limit\` — nigdy nie ladujesz calego pliku:
+   - z \`${sciezka}/*-plan.md\`: tabela \`## Fazy\` i sekcja \`## Zrodla\` (stamtad masz sciezke planu technicznego),
+   - z \`${sciezka}/*-zadania.md\`: blok od \`## Faza ${faza}\` do NASTEPNEGO naglowka tego samego poziomu,
+   - z \`${sciezka}/*-kontekst.md\`: sekcja \`## Designerski kontekst\`,
+   - z planu technicznego w \`docs/plans/\`: sekcja \`### Faza ${faza}\` (tam sa Implementation Units tej fazy).
+   Po wiecej siegaj TYLKO wtedy, gdy jednostka odsyla do czegos, czego w tych wycinkach nie ma
+   (np. decyzja opisana przy innej fazie). Nie czytaj dokumentow "dla kontekstu".
 1b. Przeczytaj .claude/rules/learned-patterns.md (jesli istnieje) — reguly wyprodukowane z problemow
-   rozwiazanych w poprzednich zadaniach tego projektu. Reguly istotne dla danego IU DOPISZ do jego
-   promptu (sekcja "Wyuczone reguly projektu:") — buildery nie maja gwarancji dostepu do project rules.
-2. Otworz plan techniczny w docs/plans/ (referencja "Plan techniczny:"/"origin:" w pliku planu zadania).
-   Zlokalizuj Implementation Units odpowiadajace fazie ${faza}.
+   rozwiazanych w poprzednich zadaniach tego projektu. Ten plik czytasz w CALOSCI (ok. 11 KB): reguly
+   istotne dla danego IU DOPISZ do jego promptu (sekcja "Wyuczone reguly projektu:") — buildery nie maja
+   gwarancji dostepu do project rules.
+2. W sekcji \`### Faza ${faza}\` planu technicznego zlokalizuj Implementation Units tej fazy.
 3. Jesli faza ${faza} jest juz ukonczona albo nie ma niezaznaczonych checkboxow IMPLEMENTACYJNYCH -> ustaw poza=true, iu=[].
    Do ukonczenia NIE licza sie (pomijaj calkowicie): checkboxy z prefiksem "Weryfikacja:", "Operator:",
    oznaczone "[E2E]"/"[Manual]", oraz wszystkie checkboxy w sekcjach "## Do poprawy po review fazy N"
@@ -132,7 +141,15 @@ Referencja metodologii: przeczytaj .claude/skills/dev-docs-execute/SKILL.md sekc
    Jesli ktorykolwiek IU dodaje nowa zaleznosc (biblioteka, config vite/vitest) — preferuj serial:
    rownolegle zimne vitesty po inwalidacji cache duplikuja ~16-min prace i ryzykuja watchdog-kill.
 5. Dla kazdego IU zbuduj KOMPLETNY prompt builderowi:
-   - caly blok IU doslownie (Cel, Wymagania, Pliki, Podejscie, Wzorce, Scenariusze testowe, Weryfikacja)
+   - caly blok IU doslownie (Cel, Wymagania, Pliki, Podejscie, Teksty (verbatim), Wzorce, Scenariusze testowe, Weryfikacja)
+   - DOMKNIJ ODWOLANIA DO DECYZJI. Builder pracuje w OSOBNYM kontekscie i nie widzi planu: odwolanie
+     w rodzaju "straznik regresji D2" albo "zgodnie z decyzja D7" jest dla niego pustym stringiem.
+     Dla KAZDEGO takiego odwolania w jednostce znajdz jego definicje w sekcji kluczowych decyzji planu
+     technicznego i SKOPIUJ ja do promptu jako blok "Decyzje przywolane przez to IU:" (identyfikator + tresc).
+     Udokumentowany skutek pominiecia: builder fazy 6 sam wyszukiwal plik checklisty i zostawil o tym
+     komentarz w kodzie (cta-section.ts:26) — robil prace plannera, w polowie slepo.
+     Podobnie z tekstami: gdy jednostka odsyla do "tekstow verbatim z sekcji X", wklej te teksty DOSLOWNIE.
+     Nie streszczaj i nie parafrazuj — tekst widoczny dla uzytkownika inny niz zatwierdzony to finding P2.
    - sciezka zadania ${sciezka} + numer IU
    - dla feature-builder-ui|fullstack: doklej "Mandatory designerski kontekst" z sekcji "Designerski kontekst"
      w ${sciezka}/*-kontekst.md (DESIGN.md, SPEC.md, screeny). Dla -data pomijaj.
@@ -169,8 +186,15 @@ ${podsumowanieIU}
    bez raportowania — dodaj Sentry captureError/captureException lub re-throw (zakaz pustych catch).
    Znaleziska NAPRAW przed commitem, nie odnotowuj "do zrobienia".
 ${BLOK_DLUGIE_KOMENDY}
-2. Aktualizuj ${sciezka}/*-zadania.md: oznacz ukonczone checkboxy [x] (NIE ruszaj "Weryfikacja:" — to dla review).
-3. Aktualizuj ${sciezka}/*-kontekst.md: zmiany, decyzje, "Ostatnia aktualizacja".
+2. Aktualizuj ${sciezka}/*-zadania.md: oznacz ukonczone checkboxy [x] (NIE ruszaj "Weryfikacja:" ANI zadnego
+   checkboxa z markerem [E2E]/[Manual] — "Test: [E2E]" to URUCHOMIENIE flow przez testera review, nie jego
+   napisanie; odznacza go scribe review po PASS w przegladarce. Napisany seed e2e/seeds/*.sql odhaczasz WYLACZNIE
+   w checkboxie implementacyjnym "Stwórz (e2e seed):").
+3. Aktualizuj ${sciezka}/*-kontekst.md: zmiany i decyzje tej fazy dopisz do sekcji \`## Dziennik\`
+   (jedna sekcja, chronologicznie) plus "Ostatnia aktualizacja". NIE zakladaj w tym pliku sekcji
+   "Decyzje techniczne", "Kluczowe pliki", "Odroczone do implementacji" ani "Wzorce do nasladowania" —
+   plik kontekstu ich nie ma od 2026-09-03 i nie ma ich odtwarzac. Decyzja korygujaca plan idzie
+   do planu technicznego w docs/plans/ (punkt 4), a w Dzienniku zostaje jedno zdanie i wskaznik.
 4. Aktualizuj plan techniczny w docs/plans/ (odznacz test scenarios / verification dla tej fazy).
 5. Commit inkrementalny: feat/fix/refactor([nazwa]): [co i dlaczego]. Staguj tylko zmienione pliki (nie git add .).
 

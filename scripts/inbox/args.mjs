@@ -12,6 +12,12 @@
 
 export class ArgError extends Error {}
 
+// Flagi, których wielokrotne użycie jest SENSEM, nie pomyłką: `--attach a.png --attach b.pdf`.
+// Świadomie nie lista rozdzielana separatorem — ścieżki zawierają spacje, a wszystko, co
+// przechodzi przez parser linii poleceń PowerShella, potrafi się cicho rozpaść (patrz wyżej).
+// Dla pozostałych kluczy kontrakt bez zmian: ostatnie wystąpienie wygrywa.
+const REPEATABLE_KEYS = new Set(['attach']);
+
 export function parseArgs(argv, { start = 2 } = {}) {
   const out = {};
   for (let i = start; i < argv.length; i++) {
@@ -31,7 +37,12 @@ export function parseArgs(argv, { start = 2 } = {}) {
     if (value === undefined) {
       throw new ArgError(`Brak wartości dla argumentu --${key}`);
     }
-    out[key] = value;
+    if (REPEATABLE_KEYS.has(key)) {
+      if (!out[key]) out[key] = [];
+      out[key].push(value);
+    } else {
+      out[key] = value;
+    }
     i++;
   }
   return out;
