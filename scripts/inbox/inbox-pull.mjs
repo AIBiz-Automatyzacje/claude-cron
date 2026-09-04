@@ -199,8 +199,14 @@ function renderMessage(m, isDownloaded = defaultIsDownloaded) {
   const auto = isAutoReply(m);
   const raw = auto ? (m.content || '').replace(AUTO_REPLY_PREFIX, '') : (m.content || '');
   const lines = raw.trim().split('\n').map(l => {
-    const src = l.match(/^Źródło:\s*(.+)$/);
-    return src ? `<span class="os-src">📄 ${src[1]}</span>` : neutralizeContentLine(l);
+    // Pill „Źródło:" należy do renderu auto-odpowiedzi (prefix zdejmuje `AUTO_REPLY_PREFIX`),
+    // więc dla wiadomości człowieka ta gałąź w ogóle nie istnieje — inaczej DOWOLNY nadawca
+    // wpisywał w treść linię `Źródło: …` i wychodził poza neutralizację. Sama wartość też
+    // przechodzi przez `neutralizeContentLine`: bez tego podstawiony `%% id:… thread:… %%`
+    // trafiał do calloutu jako PIERWSZE dopasowanie markera i podszywał się pod kotwicę wątku
+    // (parseCheckedCallouts w inbox-push.mjs bierze pierwsze trafienie w bloku).
+    const src = auto ? l.match(/^Źródło:\s*(.+)$/) : null;
+    return src ? `<span class="os-src">📄 ${neutralizeContentLine(src[1])}</span>` : neutralizeContentLine(l);
   });
   const who = auto
     ? `<span class="os-who">Asystent @${m.from_user}</span> <span class="os-time">· ${fmtTimeShort(m.created_at)}</span> <span class="os-auto">AUTO</span>`

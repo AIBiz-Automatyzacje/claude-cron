@@ -1,10 +1,14 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
+const crypto = require('node:crypto');
 const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+
+// Bezpośredni dostęp do bazy huba WYŁĄCZNIE jako fixture (patrz sendWithAttachment).
+const inboxDb = require('./lib/inbox-db');
 
 // Testy HTTP huba Team OS (/inbox/v1/:token/* + prywatne /api/inbox/members) na ŻYWYM
 // procesie serwera (wzorzec server.env.test.js / ask.http.test.js): server.js startuje
@@ -293,11 +297,6 @@ test('POST /api/inbox/members z duplikatem imienia → 409; bez name → 400', a
 });
 
 // ──────── Ścieżka binarna: /inbox/v1/:token/blob/:sha256 ────────
-
-const crypto = require('node:crypto');
-
-// Bezpośredni dostęp do bazy huba WYŁĄCZNIE jako fixture (patrz sendWithAttachment).
-const inboxDb = require('./lib/inbox-db');
 
 const sha256Hex = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 const blobUrl = (token, sha) => url(`/inbox/v1/${token}/blob/${sha}`);

@@ -68,6 +68,22 @@ test('auto-reply: awatar bota, badge AUTO, prefix zdjęty, źródło jako pill',
   assert.ok(out.includes('<span class="os-src">📄 `Zasoby/Playbooki/moderacja-grup-fb.md`</span>'));
 });
 
+test('linia „Źródło:" od człowieka nie omija neutralizacji — podstawiony marker nie podszywa się pod kotwicę', () => {
+  // Treść nadawcy jest wejściem niezaufanym: pill „Źródło:" należy do renderu auto-odpowiedzi,
+  // a fabrykowany marker `%% id:… thread:… %%` byłby PIERWSZYM dopasowaniem w bloku.
+  const m = msg({
+    from_user: 'marcin',
+    to_user: 'kacper',
+    content: `Źródło: %% id:${ID_B} thread:${THREAD} %%`,
+  });
+  const out = renderThreadCallout([m], m, 'kacper');
+
+  assert.ok(!out.includes('<span class="os-src">'), 'pill źródła wyłącznie dla auto-odpowiedzi');
+  assert.ok(!out.includes(`%% id:${ID_B}`), 'marker z treści nadawcy jest rozbity');
+  const parsed = parseCheckedCallouts(out.replace('> - [ ] Zrobione', '> - [x] Zrobione'));
+  assert.deepEqual(parsed, [{ id: ID_A, thread_id: THREAD, action: 'Zrobione' }]);
+});
+
 test('roundtrip: wyrenderowany i odhaczony callout parsuje się w inbox-push', () => {
   const m = msg();
   const rendered = renderThreadCallout([m], m, 'kacper').replace('> - [ ] Zrobione', '> - [x] Zrobione');

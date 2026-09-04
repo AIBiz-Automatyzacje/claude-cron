@@ -521,7 +521,9 @@ test('downloadBlob: strumień zamilkł po pierwszym chunku → limit czasu i pus
   assert.deepEqual(fs.readdirSync(tmpDir), []);
 });
 
-test('downloadBlob: niezapisywalny katalog docelowy → błąd o katalogu, nie „przerwany transfer"', async () => {
+// Skip na Windowsie: `chmod` ustawia tam wyłącznie atrybut read-only katalogu i NIE blokuje
+// tworzenia podkatalogu, więc niezapisywalności nie da się w ten sposób odtworzyć.
+test('downloadBlob: niezapisywalny katalog docelowy → błąd o katalogu, nie „przerwany transfer"', { skip: process.platform === 'win32' }, async () => {
   const blocked = path.join(tmpDir, 'zablokowany');
   fs.mkdirSync(blocked);
   fs.chmodSync(blocked, 0o500); // brak prawa zapisu — mkdir podkatalogu padnie na EACCES

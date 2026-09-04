@@ -161,6 +161,13 @@ const ATT_ID2 = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 const MSG_AT = '2026-07-24T07:12:00.000Z';
 const MONTH = '2026-07';
 
+// Zawartość katalogu miesiąca (pusta lista, gdy katalogu nie ma) — asercja „nic nie zostało"
+// musi patrzeć na FAKTYCZNE nazwy plików, bo te niosą skrót sha, nie gołą nazwę nadawcy.
+function listMonth(attachmentsDir) {
+  const dir = path.join(attachmentsDir, MONTH);
+  return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+}
+
 function sha256Of(content) {
   return createHash('sha256').update(content).digest('hex');
 }
@@ -343,7 +350,10 @@ test('przerwane pobranie → brak pliku docelowego, stan pozostaje "niepobrany"'
 
   const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
 
-  assert.equal(fs.existsSync(path.join(attachmentsDir, MONTH, 'raport.pdf')), false);
+  // Nazwa na dysku niesie skrót sha (attachmentFileName) — sprawdzanie gołego 'raport.pdf'
+  // było asercją zawsze prawdziwą, także gdy ucięty plik ZOSTAJE w vaultcie.
+  assert.equal(fs.existsSync(path.join(attachmentsDir, MONTH, attachmentFileName('raport.pdf', att.sha256))), false);
+  assert.deepEqual(listMonth(attachmentsDir), [], 'po przerwanym transferze nie zostaje żaden plik');
   assert.equal(stats.failed, 1);
   assert.equal(stats.downloaded, 0);
 });
@@ -398,7 +408,12 @@ test('hub oddaje INNE bajty niż zamówiony sha256 → plik skasowany i pad zgł
 
   const stats = await downloadRequestedAttachments({ client, skrzynkaPath: skrzynka, attachmentsDir });
 
-  assert.equal(fs.existsSync(path.join(attachmentsDir, MONTH, 'raport.pdf')), false, 'wadliwy plik nie zostaje w vaultcie');
+  assert.equal(
+    fs.existsSync(path.join(attachmentsDir, MONTH, attachmentFileName('raport.pdf', att.sha256))),
+    false,
+    'wadliwy plik nie zostaje w vaultcie'
+  );
+  assert.deepEqual(listMonth(attachmentsDir), [], 'po rozjeździe sumy nie zostaje żaden plik');
   assert.equal(stats.failed, 1);
   assert.equal(stats.downloaded, 0);
 });
