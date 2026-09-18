@@ -467,6 +467,16 @@ Linia 1: ścieżka do Claude. Linia 2: dodaje na stałe. Linia 3: dodaje do bie�
 
 Zamknij i otwórz nowy terminal — `claude` powinno działać.
 
+### 🪟 Windows: job pada w 0,3 s z `exit_code: -4058`, zero stdout
+
+`-4058` to Windowsowy ENOENT — Puls nie zdołał uruchomić `claude`. Najczęstszy powód: Claude Code zainstalowany przez **npm** (`npm i -g @anthropic-ai/claude-code`). `where claude` zwraca wtedy skrypt POSIX-owy `claude` (bez rozszerzenia) przed shimem `claude.cmd`, a tego pierwszego Windows nie odpali.
+
+Od tej wersji Puls sam omija shim i uruchamia `cli.js` z paczki npm. Jeśli błąd nadal występuje, zainstaluj Claude Code natywnie (zalecane) i zrestartuj Pulsa:
+
+```powershell
+irm https://claude.ai/install.ps1 | iex
+```
+
 ### 🪟 Windows: `install.ps1` nie chce się odpalić
 
 Execution Policy blokuje skrypt. Użyj flagi `-ExecutionPolicy Bypass`:
