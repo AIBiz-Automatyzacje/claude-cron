@@ -83,7 +83,8 @@ async function appendHistory(archiveDir, line, date) {
 function runClaude({ prompt, model, cwd }) {
   return new Promise((resolve) => {
     const args = ['-p', prompt, '--model', model, '--allowedTools', 'Read,Glob,Grep'];
-    const proc = spawn(resolveClaudeBin(), args, {
+    const { bin, argsPrefix } = resolveClaudeBin();
+    const proc = spawn(bin, [...argsPrefix, ...args], {
       cwd,
       env: buildCleanEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
