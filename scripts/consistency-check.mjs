@@ -7,13 +7,15 @@
 //   2. wersja zainstalowanego kodu (`data/version.json`, lib/version.js) — `unknown` znaczy,
 //      że instalacja nie wie, z czym pracuje, i każda diagnoza po fakcie jest zgadywaniem.
 //
-// Wynik rozjazdu to ZADANIE w vaultcie — plik w `Zadania/w_trakcie/` z `termin:` (bez terminu
-// wypada z Dashboardu i nikt go nie zobaczy) i z KOMENDĄ NAPRAWCZĄ w treści (zadanie bez
-// dźwigni jest naganiaczem i zostanie zamknięte bez naprawy).
+// Wynik rozjazdu to ZADANIE w vaultcie — od 27.09.2026 zadanie = LINIA w `Zadania/Dashboard.md`
+// (system zadań bez plików w `w_trakcie/`). Szczegóły z KOMENDĄ NAPRAWCZĄ (zadanie bez dźwigni
+// jest naganiaczem i zostanie zamknięte bez naprawy) lądują w notatce `Zadania/notatki/`,
+// podlinkowanej z linii ikoną 📎.
 //
-// Bez maszyny stanu: zadanie wisi, dopóki rozjazd istnieje. Duplikat rozpoznajemy po UKRYTYM
-// ZNACZNIKU w treści (`%% puls:consistency-check %%`), nie po tytule ani nazwie pliku —
-// tytuł zmieni się przy pierwszym porządkowaniu Dashboardu, a job zacząłby mnożyć kopie.
+// Bez maszyny stanu: zadanie wisi, dopóki w Dashboardzie jest NIEODHACZONA linia z linkiem do
+// notatki kontroli. Duplikat rozpoznajemy po ścieżce linku, nie po tytule — tytuł człowiek może
+// zmienić, a `/daily` przepisuje link bez zmian. Odhaczona i zarchiwizowana linia przy trwającym
+// rozjeździe = nowe zadanie (notatka nadpisana aktualną listą rozjazdów).
 
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -41,6 +43,7 @@ export const VERSION_FIX_COMMAND = 'ponownie uruchom instalator Pulsa (install.s
 
 const TASK_TITLE = 'Puls — kontrola spójności';
 const TASK_SLUG = 'puls-kontrola-spojnosci';
+const TASK_LINK = `Zadania/notatki/${TASK_SLUG}`;
 
 // Motyw to DWA snippety, nie jeden. Kontrola pilnowała wyłącznie `skrzynka.css`, więc
 // `dashboard-todo.css` mógł być dowolnie stary i nikt się o tym nie dowiadywał — a to on
@@ -52,7 +55,7 @@ export const THEME_SNIPPETS = [
 ];
 const SNIPPETS_DIR_RELATIVE = path.join('.obsidian', 'snippets');
 const TEMPLATE_DIR_RELATIVE = path.join('skills', 'onboard', 'templates');
-const TASKS_DIR_RELATIVE = path.join('Zadania', 'w_trakcie');
+const NOTES_DIR_RELATIVE = path.join('Zadania', 'notatki');
 const DASHBOARD_RELATIVE = path.join('Zadania', 'Dashboard.md');
 
 // Sekcja Dashboardu dla zadań z terminem „dzisiaj". Nagłówek nosi datę („## ☀️ Dzisiaj — środa 05.08"),
@@ -113,20 +116,15 @@ function formatDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
-// Treść zadania. Frontmatter zgodny z `Zadania/.szablony/szablon-zadania.md`; `termin` = dziś,
-// bo bez terminu zadanie nie trafi do żadnej sekcji Dashboardu.
+// Termin w linii Dashboardu: `DD.MM` (format `/daily` i `/utworz-zadanie`).
+function formatDayMonth(date) {
+  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// Treść notatki do zadania (bez frontmattera — samym zadaniem jest linia w Dashboardzie).
 export function renderTaskFile({ drifts, now = new Date() }) {
   const today = formatDate(now);
   const lines = [
-    '---',
-    'status: w_trakcie',
-    'priorytet: wazne',
-    `termin: ${today}`,
-    `utworzone: ${today}`,
-    'projekt:',
-    'rodzic:',
-    '---',
-    '',
     TASK_MARKER,
     '',
     `# ${TASK_TITLE}`,
@@ -134,8 +132,8 @@ export function renderTaskFile({ drifts, now = new Date() }) {
     '## Cel',
     '',
     'Puls wykrył rozjazd między tą maszyną a stanem wzorcowym. Przy każdym punkcie są kroki',
-    'naprawcze. Po naprawie zamknij to zadanie ręcznie — kontrola celowo nie kasuje zadań',
-    'z Dashboardu (drugi przebieg nie tworzy duplikatu).',
+    'naprawcze. Po naprawie zamknij to zadanie ręcznie (odhacz jego linię w Dashboardzie) —',
+    'kontrola celowo nie kasuje zadań (drugi przebieg nie tworzy duplikatu).',
     '',
     '## Do zrobienia',
     '',
@@ -150,19 +148,26 @@ export function renderTaskFile({ drifts, now = new Date() }) {
   return lines.join('\n');
 }
 
-// Linia wpisu w Dashboardzie (format z `utworz-zadanie`: link + emoji priorytetu).
-export function dashboardEntryLine(slug) {
-  return `- [ ] [[w_trakcie/${slug}|${TASK_TITLE}]] — 🟡`;
+// Linia zadania w Dashboardzie (format `/utworz-zadanie`: nazwa + link 📎 + priorytet + termin).
+export function dashboardEntryLine(now = new Date()) {
+  return `- [ ] ${TASK_TITLE} [[${TASK_LINK}|📎]] — 🟡 · ${formatDayMonth(now)}`;
 }
 
-// Wstawia wpis na początek sekcji „Dzisiaj". Brak sekcji = zwracamy treść bez zmian —
-// zadanie i tak ma `termin`, więc najbliższa regeneracja Dashboardu je pokaże.
-export function insertDashboardEntry(dashboard, slug) {
-  const entry = dashboardEntryLine(slug);
-  if (dashboard.includes(`w_trakcie/${slug}`)) return dashboard;
+// Czy w Dashboardzie wisi NIEODHACZONA linia z linkiem do notatki kontroli.
+export function hasOpenTask(dashboard) {
+  return dashboard
+    .split('\n')
+    .some((line) => /^\s*- \[ \]/.test(line) && line.includes(`[[${TASK_LINK}`));
+}
+
+// Wstawia linię na początek sekcji „Dzisiaj". Brak sekcji = dopisujemy na koniec pliku —
+// `/daily` przestawi ją do właściwej sekcji przy najbliższym przebiegu.
+export function insertDashboardEntry(dashboard, now = new Date()) {
+  const entry = dashboardEntryLine(now);
+  if (hasOpenTask(dashboard)) return dashboard;
 
   const match = DASHBOARD_TODAY_HEADING.exec(dashboard);
-  if (!match) return dashboard;
+  if (!match) return `${dashboard.replace(/\n*$/, '')}\n${entry}\n`;
 
   const headingEnd = dashboard.indexOf('\n', match.index);
   if (headingEnd === -1) return `${dashboard}\n\n${entry}\n`;
@@ -237,34 +242,6 @@ export async function resolveThemeTemplateDir({
   return null;
 }
 
-// Czy w `Zadania/w_trakcie/` wisi już zadanie kontroli — wyłącznie po znaczniku w treści.
-async function findExistingTask(tasksDir) {
-  let names = [];
-  try {
-    names = await fs.readdir(tasksDir);
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-    return null;
-  }
-
-  for (const name of names) {
-    if (!name.endsWith('.md')) continue;
-    const content = await readFileOrNull(path.join(tasksDir, name));
-    if (content !== null && content.includes(TASK_MARKER)) return path.join(tasksDir, name);
-  }
-  return null;
-}
-
-// Nazwa pliku wolna od kolizji (konwencja `utworz-zadanie`: sufiks -2, -3, …).
-async function freeTaskPath(tasksDir) {
-  for (let i = 1; i < 100; i += 1) {
-    const slug = i === 1 ? TASK_SLUG : `${TASK_SLUG}-${i}`;
-    const candidate = path.join(tasksDir, `${slug}.md`);
-    if ((await readFileOrNull(candidate)) === null) return { slug, filePath: candidate };
-  }
-  throw new Error('Nie mogę znaleźć wolnej nazwy pliku zadania');
-}
-
 // Zwraca 'no_template' | 'ok' | 'task_exists' | 'task_created' — status opisuje, CO się stało,
 // żeby log joba nie kłamał o stanie maszyny.
 export async function runConsistencyCheck({
@@ -306,25 +283,23 @@ export async function runConsistencyCheck({
     return 'ok';
   }
 
-  const tasksDir = path.join(workspace, TASKS_DIR_RELATIVE);
-  const existing = await findExistingTask(tasksDir);
-  if (existing) {
-    log(`[consistency-check] Rozjazd (${drifts.map((d) => d.id).join(', ')}) — zadanie już wisi: ${existing}`);
+  const dashboardPath = path.join(workspace, DASHBOARD_RELATIVE);
+  const dashboard = await readFileOrNull(dashboardPath);
+  if (dashboard !== null && hasOpenTask(dashboard)) {
+    log(`[consistency-check] Rozjazd (${drifts.map((d) => d.id).join(', ')}) — zadanie już wisi w Dashboardzie`);
     return 'task_exists';
   }
 
-  await fs.mkdir(tasksDir, { recursive: true });
-  const { slug, filePath } = await freeTaskPath(tasksDir);
+  // Notatka ze szczegółami — nadpisujemy aktualną listą rozjazdów (stara mogła zostać po
+  // zamkniętym zadaniu, a rozjazd wrócił albo się zmienił).
+  const notesDir = path.join(workspace, NOTES_DIR_RELATIVE);
+  await fs.mkdir(notesDir, { recursive: true });
+  const filePath = path.join(notesDir, `${TASK_SLUG}.md`);
   await fs.writeFile(filePath, renderTaskFile({ drifts, now }), 'utf8');
 
-  // Wpis w Dashboardzie to widoczność NATYCHMIAST; `termin:` w pliku to widoczność po
-  // najbliższej regeneracji. Robimy oba — brak Dashboardu nie może wywalić joba.
-  const dashboardPath = path.join(workspace, DASHBOARD_RELATIVE);
-  const dashboard = await readFileOrNull(dashboardPath);
-  if (dashboard !== null) {
-    const updated = insertDashboardEntry(dashboard, slug);
-    if (updated !== dashboard) await fs.writeFile(dashboardPath, updated, 'utf8');
-  }
+  // Brak Dashboardu nie może wywalić joba — zakładamy minimalny plik z samą linią.
+  const updated = insertDashboardEntry(dashboard ?? '# Dashboard\n', now);
+  if (updated !== dashboard) await fs.writeFile(dashboardPath, updated, 'utf8');
 
   log(`[consistency-check] Rozjazd (${drifts.map((d) => d.id).join(', ')}) — utworzono zadanie: ${filePath}`);
   return 'task_created';

@@ -1,5 +1,6 @@
-// Testy kontroli spójności (U8): rozjazd motywu/wersji → JEDNO zadanie z komendą naprawczą,
-// rozpoznawane po ukrytym znaczniku (nie po tytule), bez duplikatów przy kolejnych przebiegach.
+// Testy kontroli spójności (U8): rozjazd motywu/wersji → JEDNO zadanie (linia w Dashboardzie
+// + notatka z komendą naprawczą), rozpoznawane po linku do notatki (nie po tytule),
+// bez duplikatów przy kolejnych przebiegach.
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +12,7 @@ import {
   TASK_MARKER,
   THEME_FIX_COMMAND,
   detectDrifts,
+  hasOpenTask,
   insertDashboardEntry,
   renderTaskFile,
   resolveThemeTemplateDir,
@@ -32,11 +34,11 @@ const DASHBOARD = [
   '',
   '## 🔥 Zaległe',
   '',
-  '- [ ] [[w_trakcie/stare|Stare zadanie]] — 🟢',
+  '- [ ] Stare zadanie — 🟢 · 01.08',
   '',
   '## ☀️ Dzisiaj — środa 05.08',
   '',
-  '- [ ] [[w_trakcie/inne|Inne zadanie]] — 🟡',
+  '- [ ] Inne zadanie — 🟡 · 05.08',
   '',
 ].join('\n');
 
@@ -51,7 +53,7 @@ async function makeWorkspace({
 } = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'puls-consistency-'));
   await fs.mkdir(path.join(dir, '.obsidian', 'snippets'), { recursive: true });
-  await fs.mkdir(path.join(dir, 'Zadania', 'w_trakcie'), { recursive: true });
+  await fs.mkdir(path.join(dir, 'Zadania'), { recursive: true });
   if (vaultCss !== null) {
     await fs.writeFile(path.join(dir, '.obsidian', 'snippets', 'skrzynka.css'), vaultCss, 'utf8');
   }
@@ -77,8 +79,25 @@ function snippetsWith(overrides = {}) {
   ].map((s) => (s.file === overrides.file ? { ...s, ...overrides } : s));
 }
 
-async function listTasks(dir) {
-  return (await fs.readdir(path.join(dir, 'Zadania', 'w_trakcie'))).filter((n) => n.endsWith('.md'));
+const NOTE_REL = path.join('Zadania', 'notatki', 'puls-kontrola-spojnosci.md');
+const TASK_LINK = '[[Zadania/notatki/puls-kontrola-spojnosci|📎]]';
+
+async function readDashboard(dir) {
+  return fs.readFile(path.join(dir, 'Zadania', 'Dashboard.md'), 'utf8');
+}
+
+// Otwarte zadania kontroli = nieodhaczone linie z linkiem do notatki.
+async function openTaskLines(dir) {
+  return (await readDashboard(dir)).split('\n').filter((l) => l.startsWith('- [ ]') && l.includes(TASK_LINK));
+}
+
+async function noteExists(dir) {
+  try {
+    await fs.access(path.join(dir, NOTE_REL));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const silent = () => {};
@@ -158,29 +177,36 @@ test('wersja unknown → rozjazd version-unknown', () => {
 
 // === renderTaskFile (pure) ===
 
-test('treść zadania ma znacznik, termin i komendę naprawczą', () => {
+test('notatka zadania ma znacznik i komendę naprawczą, bez frontmattera', () => {
   const out = renderTaskFile({
     drifts: detectDrifts({ snippets: snippetsWith({ file: 'skrzynka.css', vaultCss: 'inne' }), version: VERSION_OK }),
     now: NOW,
   });
   assert.ok(out.includes(TASK_MARKER));
-  assert.match(out, /^termin: 2026-08-05$/m);
+  assert.ok(!out.startsWith('---'), 'notatka nie udaje pliku zadania');
   assert.ok(out.includes(THEME_FIX_COMMAND));
 });
 
 // === insertDashboardEntry (pure) ===
 
-test('wpis ląduje na początku sekcji Dzisiaj', () => {
-  const out = insertDashboardEntry(DASHBOARD, 'puls-kontrola-spojnosci');
+test('linia ląduje na początku sekcji Dzisiaj w formacie /daily', () => {
+  const out = insertDashboardEntry(DASHBOARD, NOW);
   const lines = out.split('\n');
   const idx = lines.findIndex((l) => l.startsWith('## ☀️ Dzisiaj'));
-  assert.match(lines[idx + 2], /w_trakcie\/puls-kontrola-spojnosci/);
-  assert.ok(out.includes('[[w_trakcie/inne|Inne zadanie]]'), 'istniejące wpisy nietknięte');
+  assert.equal(lines[idx + 2], `- [ ] Puls — kontrola spójności ${TASK_LINK} — 🟡 · 05.08`);
+  assert.ok(out.includes('- [ ] Inne zadanie — 🟡 · 05.08'), 'istniejące wpisy nietknięte');
 });
 
-test('Dashboard bez sekcji Dzisiaj → treść bez zmian', () => {
+test('Dashboard bez sekcji Dzisiaj → linia na końcu pliku (daily ją przestawi)', () => {
   const bare = '# Dashboard\n\n## 🗂️ Bez terminu\n';
-  assert.equal(insertDashboardEntry(bare, 'puls-kontrola-spojnosci'), bare);
+  const out = insertDashboardEntry(bare, NOW);
+  assert.ok(out.startsWith(bare.trimEnd()));
+  assert.ok(out.trimEnd().endsWith(`${TASK_LINK} — 🟡 · 05.08`));
+});
+
+test('odhaczona linia nie jest otwartym zadaniem', () => {
+  assert.equal(hasOpenTask(`- [x] Puls — kontrola spójności ${TASK_LINK} — 🟡 · 05.08`), false);
+  assert.equal(hasOpenTask(`- [ ] Coś innego ${TASK_LINK} — 🟡 · 05.08`), true);
 });
 
 // === runConsistencyCheck (I/O na tmp) ===
@@ -191,29 +217,26 @@ test('zgodny snippet i znana wersja → brak zadania', async () => {
   const status = await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
 
   assert.equal(status, 'ok');
-  assert.deepEqual(await listTasks(dir), []);
+  assert.deepEqual(await openTaskLines(dir), []);
+  assert.equal(await noteExists(dir), false);
 });
 
-test('snippet rozjechany → jedno zadanie z komendą, terminem i wpisem w Dashboardzie', async () => {
+test('snippet rozjechany → jedna linia w Dashboardzie + notatka z komendą', async () => {
   const { dir, templateDir } = await makeWorkspace({ vaultCss: '.os-av { color: blue; }' });
 
   const status = await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
 
   assert.equal(status, 'task_created');
-  const tasks = await listTasks(dir);
-  assert.deepEqual(tasks, ['puls-kontrola-spojnosci.md']);
+  assert.equal((await openTaskLines(dir)).length, 1);
+  assert.ok(!(await fs.readdir(path.join(dir, 'Zadania'))).includes('w_trakcie'), 'bez plików w w_trakcie/');
 
-  const content = await fs.readFile(path.join(dir, 'Zadania', 'w_trakcie', tasks[0]), 'utf8');
+  const content = await fs.readFile(path.join(dir, NOTE_REL), 'utf8');
   assert.ok(content.includes(THEME_FIX_COMMAND), 'zadanie bez komendy naprawczej jest naganiaczem');
   // Kontrakt narracji (audyt C5, 08.08): zadanie mówi wprost o ręcznym zamknięciu —
   // poprzednie „zadanie znika po ponownym przebiegu" było fałszywe (kontrola nie kasuje).
   assert.ok(content.includes('zamknij to zadanie ręcznie'), 'zadanie ma instruować ręczne zamknięcie');
   assert.ok(!content.includes('znika po ponownym przebiegu'), 'fałszywa obietnica auto-kasowania usunięta');
-  assert.match(content, /^termin: 2026-08-05$/m);
   assert.ok(content.includes(TASK_MARKER));
-
-  const dashboard = await fs.readFile(path.join(dir, 'Zadania', 'Dashboard.md'), 'utf8');
-  assert.ok(dashboard.includes('w_trakcie/puls-kontrola-spojnosci'));
 });
 
 test('drugi przebieg przy niezmienionym rozjeździe → brak drugiego zadania', async () => {
@@ -223,37 +246,49 @@ test('drugi przebieg przy niezmienionym rozjeździe → brak drugiego zadania', 
   const status = await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
 
   assert.equal(status, 'task_exists');
-  assert.equal((await listTasks(dir)).length, 1);
+  assert.equal((await openTaskLines(dir)).length, 1);
 });
 
-test('zmieniony tytuł i nazwa pliku → dalej rozpoznane po znaczniku, brak duplikatu', async () => {
+test('zmieniony tytuł linii i przeniesiona sekcja → dalej rozpoznane po linku, brak duplikatu', async () => {
   const { dir, templateDir } = await makeWorkspace({ vaultCss: '.os-av { color: blue; }' });
   await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
 
-  const tasksDir = path.join(dir, 'Zadania', 'w_trakcie');
-  const original = path.join(tasksDir, 'puls-kontrola-spojnosci.md');
-  const renamed = path.join(tasksDir, 'sprzatanie-po-pulsie.md');
-  const content = (await fs.readFile(original, 'utf8')).replace('# Puls — kontrola spójności', '# Coś zupełnie innego');
-  await fs.writeFile(renamed, content, 'utf8');
-  await fs.rm(original);
+  const dashboardPath = path.join(dir, 'Zadania', 'Dashboard.md');
+  const renamed = (await readDashboard(dir)).replace('Puls — kontrola spójności', 'Coś zupełnie innego');
+  await fs.writeFile(dashboardPath, renamed, 'utf8');
 
   const status = await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
 
   assert.equal(status, 'task_exists');
-  assert.deepEqual(await listTasks(dir), ['sprzatanie-po-pulsie.md']);
+  const open = await openTaskLines(dir);
+  assert.equal(open.length, 1);
+  assert.ok(open[0].includes('Coś zupełnie innego'));
 });
 
 test('rozjazd naprawiony → kolejny przebieg nie tworzy nic nowego', async () => {
   const { dir, templateDir } = await makeWorkspace({ vaultCss: '.os-av { color: blue; }' });
   await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
-  // Człowiek odpalił komendę naprawczą i zamknął zadanie.
-  await fs.rm(path.join(dir, 'Zadania', 'w_trakcie', 'puls-kontrola-spojnosci.md'));
+  // Człowiek odpalił komendę naprawczą i odhaczył linię.
+  const dashboardPath = path.join(dir, 'Zadania', 'Dashboard.md');
+  await fs.writeFile(dashboardPath, (await readDashboard(dir)).replace(`- [ ] Puls`, `- [x] Puls`), 'utf8');
   await fs.writeFile(path.join(dir, '.obsidian', 'snippets', 'skrzynka.css'), CSS, 'utf8');
 
   const status = await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
 
   assert.equal(status, 'ok');
-  assert.deepEqual(await listTasks(dir), []);
+  assert.deepEqual(await openTaskLines(dir), []);
+});
+
+test('zadanie odhaczone bez naprawy → rozjazd trwa, powstaje nowa linia', async () => {
+  const { dir, templateDir } = await makeWorkspace({ vaultCss: '.os-av { color: blue; }' });
+  await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
+  const dashboardPath = path.join(dir, 'Zadania', 'Dashboard.md');
+  await fs.writeFile(dashboardPath, (await readDashboard(dir)).replace(`- [ ] Puls`, `- [x] Puls`), 'utf8');
+
+  const status = await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
+
+  assert.equal(status, 'task_created');
+  assert.equal((await openTaskLines(dir)).length, 1);
 });
 
 test('stary dashboard-todo.css przy zgodnej Skrzynce → zadanie powstaje', async () => {
@@ -263,8 +298,7 @@ test('stary dashboard-todo.css przy zgodnej Skrzynce → zadanie powstaje', asyn
   const status = await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
 
   assert.equal(status, 'task_created');
-  const tasks = await listTasks(dir);
-  const content = await fs.readFile(path.join(dir, 'Zadania', 'w_trakcie', tasks[0]), 'utf8');
+  const content = await fs.readFile(path.join(dir, NOTE_REL), 'utf8');
   assert.ok(content.includes('dashboard-todo.css'), 'zadanie nazywa plik do odświeżenia');
   assert.ok(!content.includes('skrzynka.css` w vaultcie różni'), 'zgodny snippet nie jest zgłaszany');
 });
@@ -275,7 +309,7 @@ test('plugin bez dashboard-todo.css → brak zadania mimo braku pliku w vaultcie
   const status = await runConsistencyCheck({ workspace: dir, templateDir, version: VERSION_OK, now: NOW, log: silent });
 
   assert.equal(status, 'ok');
-  assert.deepEqual(await listTasks(dir), []);
+  assert.deepEqual(await openTaskLines(dir), []);
 });
 
 test('brak szablonu w pluginie → job kończy się cicho, bez zadania', async () => {
@@ -284,7 +318,7 @@ test('brak szablonu w pluginie → job kończy się cicho, bez zadania', async (
   const status = await runConsistencyCheck({ workspace: dir, templateDir: null, version: VERSION_UNKNOWN, now: NOW, log: silent });
 
   assert.equal(status, 'no_template');
-  assert.deepEqual(await listTasks(dir), []);
+  assert.deepEqual(await openTaskLines(dir), []);
 });
 
 test('brak workspace → czytelny błąd konfiguracji', async () => {
