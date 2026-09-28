@@ -232,7 +232,7 @@ export function renderThreadCallout(thread, anchor, me, isDownloaded = defaultIs
   const isFresh = thread.some(r => r.status === 'pending' || freshIds.has(r.id));
 
   const tags = [
-    isFresh ? '<span class="os-tag t-new">🆕 nowe</span>' : null,
+    isFresh ? '<span class="os-tag t-new">nowe</span>' : null,
     `<span class="os-tag t-${root.type}">${TYPE_EMOJI[root.type] || '📝'} ${TYPE_LABEL[root.type] || 'wiadomość'}</span>`,
   ].filter(Boolean).join(' ');
   const dir = root.from_user === me ? `Ty → @${root.to_user}` : `od @${root.from_user}`;
@@ -363,16 +363,16 @@ tags: [skrzynka, personal-team-os]
 cssclasses: [skrzynka]
 ---
 
-# 📬 Skrzynka
+# Skrzynka
 
-## 📥 Otrzymane
+## Otrzymane
 
 *0 nowych*
 
 %% inbox:items:start %%
 %% inbox:items:end %%
 
-## 📤 Wysłane
+## Wysłane
 
 *0 w toku*
 
@@ -436,12 +436,16 @@ async function ensureSkrzynkaFile(filePath) {
   }
 }
 
-// Normalizacja nagłówków ISTNIEJĄCYCH plików do bieżącego szablonu (decyzja 06.08:
-// „czekają na odpowiedź" kłamie przy taskach — one czekają na odhaczenie). Szablon dotyka
+// Normalizacja nagłówków ISTNIEJĄCYCH plików do bieżącego szablonu. Szablon dotyka
 // tylko NOWYCH plików, a renderer podmienia wyłącznie treść między markerami — bez tej
 // podmiany stary nagłówek zostawałby na zawsze (ta sama pułapka co frontmatter, poz. 12).
+// 06.08: „czekają na odpowiedź" kłamie przy taskach (one czekają na odhaczenie).
+// 09.2026: nagłówki bez emoji (redesign „tusz") — CSS rozpoznaje sekcje po tekście.
 function normalizeSectionHeadings(raw) {
-  return raw.replace('## 📤 Wysłane — czekają na odpowiedź', '## 📤 Wysłane');
+  return raw
+    .replace(/^# 📬 Skrzynka$/m, '# Skrzynka')
+    .replace(/^## 📥 Otrzymane$/m, '## Otrzymane')
+    .replace(/^## 📤 Wysłane(?: — czekają na odpowiedź)?$/m, '## Wysłane');
 }
 
 // eksportowane dla testu szwu (render + merge frontmattera + zapis na prawdziwym pliku)
@@ -457,10 +461,10 @@ export async function updateSkrzynkaFile(filePath, threadRows, activeForMe, dele
 
   const inboxBody = inboxCallouts.length
     ? inboxCallouts.join('\n\n')
-    : `> [!inbox-ok] 🌿 Pusto. Nikt nic od Ciebie nie chce. · ${archiveLink()}`;
+    : `> [!inbox-ok] Pusto. Nikt nic od Ciebie nie chce. · ${archiveLink()}`;
   const delegatedBody = delegatedItems.length
     ? renderDelegatedCallout(delegatedItems)
-    : '> [!inbox-ok] 🌿 Nic nie wisi na innych.';
+    : '> [!inbox-ok] Nic nie wisi na innych.';
 
   let updated = replaceBetweenMarkers(mergeFrontmatter(raw), '%% inbox:items:start %%', '%% inbox:items:end %%', inboxBody);
   updated = replaceBetweenMarkers(updated, '%% delegated:items:start %%', '%% delegated:items:end %%', delegatedBody);
@@ -511,23 +515,23 @@ function buildBanner({ inboxCount, taskCount, queryCount, topInbox, delegatedCou
   }
 
   if (inboxCount === 0 && delegatedCount === 0) {
-    lines.push('> [!inbox-ok] 🌿 Skrzynka pusta, nic nie czeka na innych. · [[Skrzynka|otwórz]]');
+    lines.push('> [!inbox-ok] Skrzynka pusta, nic nie czeka na innych. · [[Skrzynka|otwórz]]');
     return lines.join('\n');
   }
 
   if (inboxCount > 0) {
-    lines.push(`> [!inbox] 📥 **Skrzynka** — ${inboxLabel} od zespołu · [[Skrzynka|otwórz →]]`);
+    lines.push(`> [!inbox] **Skrzynka** — ${inboxLabel} od zespołu · [[Skrzynka|otwórz →]]`);
     for (const item of topInbox) lines.push('> ' + renderDashboardLine(item));
     const rest = inboxCount - topInbox.length;
     if (rest > 0) lines.push(`> - _...i ${rest} ${rest === 1 ? 'starsza' : 'starszych'} → [[Skrzynka]]_`);
   } else {
-    lines.push('> [!inbox-ok] 🌿 Skrzynka pusta. · [[Skrzynka|otwórz]]');
+    lines.push('> [!inbox-ok] Skrzynka pusta. · [[Skrzynka|otwórz]]');
   }
 
   if (delegatedCount > 0) {
     const stalePart = staleDelegatedCount > 0 ? ` (${staleDelegatedCount} stale ⚠️)` : '';
     lines.push('');
-    lines.push(`> [!delegated] 📤 **Delegowane** — ${delegatedCount} w toku${stalePart}`);
+    lines.push(`> [!delegated] **Delegowane** — ${delegatedCount} w toku${stalePart}`);
     for (const item of topDelegated) lines.push('> ' + renderDelegatedLine(item));
     const rest = delegatedCount - topDelegated.length;
     if (rest > 0) lines.push(`> - _...i ${rest} ${rest === 1 ? 'starsza' : 'starszych'} → [[Skrzynka|zobacz]]_`);

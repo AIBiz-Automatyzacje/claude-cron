@@ -29,7 +29,7 @@ test('task: awatar, pille, checkbox Zrobione z hintem, marker', () => {
   const m = msg();
   const out = renderThreadCallout([m], m, 'kacper');
   assert.match(out, /^> \[!todo\|fresh\]- Baner na live sierpniowy/);
-  assert.ok(out.includes('<span class="os-tag t-new">🆕 nowe</span>'));
+  assert.ok(out.includes('<span class="os-tag t-new">nowe</span>'));
   assert.ok(out.includes('<span class="os-tag t-task">📝 zadanie</span>'));
   assert.ok(out.includes('od @marcin'));
   assert.ok(out.includes('<span class="os-av u-marcin">M</span>'));
@@ -190,7 +190,7 @@ test('szew: normalizacja nagłówka zapisuje się TAKŻE gdy to jedyna zmiana (p
   const stable = await fs.readFile(file, 'utf8');
 
   // …po czym cofnij WYŁĄCZNIE nagłówek do starej formy (stan plików sprzed zmiany szablonu).
-  await fs.writeFile(file, stable.replace('## 📤 Wysłane', '## 📤 Wysłane — czekają na odpowiedź'), 'utf8');
+  await fs.writeFile(file, stable.replace('## Wysłane', '## 📤 Wysłane — czekają na odpowiedź'), 'utf8');
   await updateSkrzynkaFile(file, [], [], [], 'kacper');
 
   // Pułapka: `writeIfChanged` porównywał z treścią JUŻ znormalizowaną w pamięci,
@@ -213,8 +213,12 @@ test('szew: updateSkrzynkaFile domergowuje frontmatter i nie rusza markerów', a
   assert.ok(after.includes('moj_klucz: zostaje'));
   // Normalizacja nagłówka istniejącego pliku (fixture ma STARY „— czekają na odpowiedź"):
   // przy taskach ten dopisek kłamał — one czekają na odhaczenie, nie na odpowiedź.
-  assert.ok(after.includes('## 📤 Wysłane\n'), 'nowy nagłówek sekcji Wysłane');
+  assert.ok(after.includes('## Wysłane\n'), 'nowy nagłówek sekcji Wysłane');
   assert.ok(!after.includes('czekają na odpowiedź'), 'stary nagłówek znormalizowany przy pullu');
+  // 09.2026: nagłówki bez emoji — fixture ma stare „# 📬 Skrzynka" / „## 📥 Otrzymane"
+  assert.ok(after.includes('# Skrzynka\n'), 'H1 bez emoji');
+  assert.ok(after.includes('## Otrzymane\n'), 'nagłówek Otrzymane bez emoji');
+  assert.ok(!/[📬📥📤🌿]/u.test(after), 'zero emoji sekcji i stanu pustego');
   assert.ok(after.includes('%% inbox:items:start %%'));
   assert.ok(after.includes('%% delegated:items:end %%'));
   assert.match(after, /^\*1 nowa\*$/m);
