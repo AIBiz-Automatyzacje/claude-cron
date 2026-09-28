@@ -53,6 +53,14 @@ test('query ode mnie: kierunek "Ty →", checkbox Zapoznane', () => {
   assert.ok(out.includes('/deleguj reply'));
 });
 
+test('moja wiadomość w wątku: awatar z klasą me, cudza bez', () => {
+  const q = msg({ type: 'query', from_user: 'kacper', to_user: 'marcin', status: 'delivered' });
+  const reply = msg({ id: ID_B, type: 'reply', from_user: 'marcin', to_user: 'kacper', content: 'Realnie piątek.', status: 'delivered' });
+  const out = renderThreadCallout([q, reply], reply, 'kacper');
+  assert.ok(out.includes('<span class="os-av me u-kacper">K</span>'), 'moja wiadomość oznaczona');
+  assert.ok(out.includes('<span class="os-av u-marcin">M</span>'), 'cudza bez me');
+});
+
 test('auto-reply: awatar bota, badge AUTO, prefix zdjęty, źródło jako pill', () => {
   const q = msg({ type: 'query', from_user: 'kacper', to_user: 'marcin', status: 'delivered' });
   const bot = msg({

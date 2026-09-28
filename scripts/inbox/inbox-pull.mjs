@@ -30,10 +30,11 @@ const AUTO_REPLY_PREFIX = /^🤖 auto-odpowiedź asystenta:?\s*/;
 function isAutoReply(m) {
   return m.payload?.auto_reply === true || AUTO_REPLY_PREFIX.test(m.content || '');
 }
-function avatarSpan(user, { small = false, bot = false } = {}) {
+// `me` = wiadomość właściciela vaulta — CSS wyróżnia ją bez znajomości imion (plugin zespołowy).
+function avatarSpan(user, { small = false, bot = false, me = false } = {}) {
   const slug = bot ? 'bot' : String(user).toLowerCase().replace(/[^a-z0-9-]/g, '');
   const initial = bot ? '🤖' : String(user).charAt(0).toUpperCase();
-  return `<span class="os-av${small ? ' s' : ''} u-${slug}">${initial}</span>`;
+  return `<span class="os-av${small ? ' s' : ''}${me ? ' me' : ''} u-${slug}">${initial}</span>`;
 }
 
 function fmtTime(iso) {
@@ -195,7 +196,7 @@ function neutralizeContentLine(line) {
     .replaceAll('%%', `%${zeroWidth}%`);
 }
 
-function renderMessage(m, isDownloaded = defaultIsDownloaded) {
+function renderMessage(m, isDownloaded = defaultIsDownloaded, me = null) {
   const auto = isAutoReply(m);
   const raw = auto ? (m.content || '').replace(AUTO_REPLY_PREFIX, '') : (m.content || '');
   const lines = raw.trim().split('\n').map(l => {
@@ -211,7 +212,7 @@ function renderMessage(m, isDownloaded = defaultIsDownloaded) {
   const who = auto
     ? `<span class="os-who">Asystent @${m.from_user}</span> <span class="os-time">· ${fmtTimeShort(m.created_at)}</span> <span class="os-auto">AUTO</span>`
     : `<span class="os-who">@${m.from_user}</span> <span class="os-time">· ${fmtTimeShort(m.created_at)}</span>`;
-  const head = `> - ${avatarSpan(m.from_user, { bot: auto })}${who}<br>${lines[0] || ''}`;
+  const head = `> - ${avatarSpan(m.from_user, { bot: auto, me: !auto && me != null && m.from_user === me })}${who}<br>${lines[0] || ''}`;
   const cont = lines.slice(1).map(l => `>   ${l}`);
   return [head, ...cont, ...renderAttachmentLines(m, isDownloaded)].join('\n');
 }
@@ -245,7 +246,7 @@ export function renderThreadCallout(thread, anchor, me, isDownloaded = defaultIs
     ? '<span class="os-hint">odhaczenie odsyła potwierdzenie i zamyka wątek</span>'
     : '<span class="os-hint">dopytaj: `/deleguj reply --thread-id <id z dołu>` albo odhacz ✅</span>';
 
-  const messages = thread.map(m => renderMessage(m, isDownloaded)).join('\n');
+  const messages = thread.map(m => renderMessage(m, isDownloaded, me)).join('\n');
 
   return [
     `> [!${name}${isFresh ? '|fresh' : ''}]- ${root.title}`,
