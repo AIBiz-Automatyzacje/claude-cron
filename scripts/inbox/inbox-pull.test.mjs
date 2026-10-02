@@ -281,6 +281,14 @@ test('załącznik pobrany: osadzenie ![[…]] i BRAK checkboxa Pobierz (R8)', ()
   assert.ok(out.includes(`%% att:${ATT_A} %%`));
 });
 
+test('pobrany plik inny niż obrazek: link bez podglądu (notatka .md nie rozpycha karty)', () => {
+  const m = msg({ attachments: [att({ filename: 'notatka.md', mime: 'text/markdown' })] });
+  const naDysku = (month, filename) => filename === 'notatka.md';
+  const out = renderThreadCallout([m], m, 'kacper', naDysku);
+  assert.ok(out.includes('[[Zasoby/inbox-zalaczniki/2026-07/notatka.md|otwórz]]'), out);
+  assert.ok(!out.includes('![['), 'bez osadzenia');
+});
+
 test('bajty wygasłe na hubie: adnotacja bez checkboxa', () => {
   const m = msg({ attachments: [att({ blob_available: false })] });
   const out = renderThreadCallout([m], m, 'kacper', NIC_NA_DYSKU);
@@ -409,7 +417,7 @@ test('dwie wiadomości z plikiem o TEJ SAMEJ nazwie: pobrany jest tylko ten o zg
   const linia1 = renderAttachmentLine(pobrany, '2026-07');
   const linia2 = renderAttachmentLine(obcy, '2026-07');
 
-  assert.ok(linia1.includes(`![[Zasoby/inbox-zalaczniki/2026-07/${naDysku}]]`), 'mój plik jest osadzony');
+  assert.ok(linia1.includes(`[[Zasoby/inbox-zalaczniki/2026-07/${naDysku}|otwórz]]`), 'mój plik jest podlinkowany');
   assert.ok(!linia1.includes('Pobierz'));
   assert.ok(linia2.includes('- [ ] Pobierz'), 'cudzy plik o tej samej nazwie NIE jest moim pobraniem');
   assert.ok(!linia2.includes('![['), 'nie osadzamy cudzego pliku pod tym markerem');
@@ -469,7 +477,7 @@ test('render NIE czyta zawartości plików: przy pobranym załączniku zero read
   const mojAtt = { id: ATT_A, filename: 'raport.pdf', size_bytes: tresc.length, sha256: sha256Of(tresc) };
   const linia = renderAttachmentLine(mojAtt, '2026-07');
 
-  assert.ok(linia.includes(`![[Zasoby/inbox-zalaczniki/2026-07/${naDysku}]]`), linia);
+  assert.ok(linia.includes(`[[Zasoby/inbox-zalaczniki/2026-07/${naDysku}|otwórz]]`), linia);
   assert.deepEqual(czytane, [], 'render rozstrzyga stan pobrania metadanymi, nie zawartością');
 });
 

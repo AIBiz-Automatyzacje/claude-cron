@@ -144,8 +144,15 @@ function defaultIsDownloaded(month, filename, att = {}) {
   return candidate;
 }
 
+// Podgląd w Skrzynce tylko dla obrazków. Osadzona notatka `.md` (albo PDF) renderowała się
+// w karcie w całości i rozpychała wątek na kilka ekranów — inne pliki dostają sam link.
+const PREVIEW_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'bmp', 'svg']);
+function isPreviewable(name) {
+  return PREVIEW_EXTENSIONS.has(String(name).split('.').pop().toLowerCase());
+}
+
 // Trzy stany, rozstrzygane wyłącznie dyskiem i metadanymi:
-// 1) plik na dysku → osadzenie, BEZ checkboxa (odhaczenie już nic nie znaczy);
+// 1) plik na dysku → obrazek osadzony, inny plik jako link; BEZ checkboxa (odhaczenie już nic nie znaczy);
 // 2) bajty na hubie → checkbox „Pobierz" (akcja lokalna, patrz IU-7 — nigdy nie idzie do huba);
 // 3) `blob_available === false` → adnotacja o wygaśnięciu, bez checkboxa (po limicie 90 dni
 //    to ścieżka normalna, nie przypadek brzegowy). Brak pola = bajty są (hub sprzed retencji).
@@ -159,7 +166,11 @@ export function renderAttachmentLine(att, month, isDownloaded = defaultIsDownloa
   const onDisk = isDownloaded(month, name, att);
   if (onDisk) {
     const linkName = typeof onDisk === 'string' ? onDisk : name;
-    return `>   - <span class="os-att">📎 ${name}</span><br>![[${ATTACHMENTS_REL_DIR}/${month}/${linkName}]] ${marker}`;
+    const target = `${ATTACHMENTS_REL_DIR}/${month}/${linkName}`;
+    if (isPreviewable(linkName)) {
+      return `>   - <span class="os-att">📎 ${name}</span><br>![[${target}]] ${marker}`;
+    }
+    return `>   - <span class="os-att">📎 ${name}</span> [[${target}|otwórz]] ${marker}`;
   }
   if (att.blob_available === false) {
     return `>   - <span class="os-att os-att-gone">📎 ${meta} · wygasł — poproś nadawcę o ponowne wysłanie</span> ${marker}`;
