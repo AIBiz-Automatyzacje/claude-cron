@@ -14,10 +14,12 @@
 // `--to` jest awaryjnym obejściem dla wątków domkniętych (już nie ma ich w `pull`).
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { parseArgs } from './args.mjs';
 import { prepareAttachments } from './attachments.mjs';
+import { closeThread } from './close.mjs';
 import * as inboxClient from './inbox-client.mjs';
 import { readContent } from './content-arg.mjs';
 import { loadEnv } from './skill-env.mjs';
@@ -83,9 +85,29 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
     to_user: message.to_user,
     title: message.title,
     type: message.type,
+    auto_close: await autoClose({ client, threadId }),
   };
   console.log(JSON.stringify(out));
   return out;
+}
+
+// Odpowiedź = przeczytane: po wysyłce domykamy wszystko w wątku, co czeka na MNIE,
+// akcją `Zapoznane` (także task — sygnałem zwrotnym jest sama odpowiedź, a nie drugie
+// „Zrobione ✅"). Gdy druga strona odpisze, nowa wiadomość i tak wróci do Skrzynki.
+// Odpowiedź już poszła, więc pad domknięcia NIE rzuca — raportujemy go w wyniku,
+// a user może dokończyć ręcznie (`close` albo „Zapoznane").
+export async function autoClose({ client, threadId, env = process.env }) {
+  const archiveDir = env.INBOX_ARCHIVE_DIR
+    || (env.CLAUDE_CRON_WORKSPACE && path.join(env.CLAUDE_CRON_WORKSPACE, 'Zasoby/inbox-archive'));
+  // Bez archiwum nie domykamy: wątek zniknąłby ze Skrzynki bez kopii (bug, który
+  // przeniósł `close` do repo).
+  if (!archiveDir) return { closed: 0, skipped: 'brak CLAUDE_CRON_WORKSPACE — wątek zostaje otwarty' };
+  try {
+    const res = await closeThread({ client, threadId, archiveDir, actionFor: () => 'Zapoznane' });
+    return { closed: res.closed, archived: res.archived };
+  } catch (e) {
+    return { closed: 0, error: e.message };
+  }
 }
 
 // Entry-point guard przez realpath po OBU stronach — macOS symlinkuje /var i /tmp

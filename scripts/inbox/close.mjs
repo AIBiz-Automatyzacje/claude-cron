@@ -59,6 +59,17 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
     throw new Error('Usage: close.mjs --thread-id <uuid>');
   }
 
+  const out = await closeThread({ client, threadId, archiveDir: process.env.INBOX_ARCHIVE_DIR });
+  console.log(JSON.stringify(out));
+  return out;
+}
+
+// Domknięcie wątku bez I/O konsoli — woła je `main` (komenda `close`) i `reply.mjs`
+// (odpowiedź = przeczytane, więc user nie klika już „Zapoznane" po każdym odpisaniu).
+// `actionFor` rozstrzyga akcję per wiadomość: domyślnie task → `Zrobione`, reszta →
+// `Zapoznane`. `reply` podaje „zawsze Zapoznane", bo sygnałem zwrotnym dla nadawcy
+// zadania jest sama odpowiedź — automatyczne „Zrobione ✅" byłoby drugą wiadomością.
+export async function closeThread({ client, threadId, archiveDir, actionFor = defaultAction }) {
   const { user, threadRows = [] } = await client.pull();
   const thread = threadRows.filter((r) => r.thread_id === threadId);
   const mine = thread.filter((r) => r.to_user === user && r.status !== 'done');
@@ -66,14 +77,12 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
   if (mine.length === 0) {
     // Powtórzone `close` (albo wątek cudzy) trafia tutaj — zero żądań `done`, zero
     // zapisu do archiwum. Tak wygląda idempotencja tej komendy.
-    const out = {
+    return {
       thread_id: threadId,
       closed: 0,
       archived: false,
       note: 'Brak otwartych wiadomości do mnie w tym wątku (mogą już być domknięte albo należeć do drugiej strony).',
     };
-    console.log(JSON.stringify(out));
-    return out;
   }
 
   // Archiwum PRZED domknięciem w hubie i ze SNAPSHOTU z `pull()` — kolejność jest tu
@@ -84,13 +93,12 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
   // w archiwum (przy padzie w połowie pętli), a nie zniknięty wątek bez kopii.
   // Archiwum RAZ na wątek, nie raz na wiadomość: `renderArchiveThread` renderuje CAŁĄ
   // nitkę, więc zapis per rekord dołożyłby tę samą treść tyle razy, ile mam wiadomości.
-  await appendToArchive(process.env.INBOX_ARCHIVE_DIR, thread, user);
+  await appendToArchive(archiveDir, thread, user);
 
   // Sekwencyjnie, nie równolegle: hub ma rate limit per token, a wątki są krótkie.
   let closed = 0;
   for (const row of mine) {
-    const action = row.type === 'task' ? 'Zrobione' : 'Zapoznane';
-    const res = await client.done({ id: row.id, action });
+    const res = await client.done({ id: row.id, action: actionFor(row) });
     // Hub zwraca RÓŻNE wyniki dla domknięcia: 'replied' (task + Zrobione — dokłada
     // automatyczne „Zrobione ✅" do nadawcy), 'closed' (Zapoznane) i 'already_done'
     // (rekord już domknięty). Wszystkie trzy znaczą „ta wiadomość jest zamknięta" —
@@ -99,9 +107,11 @@ export async function main({ client = inboxClient, argv = process.argv } = {}) {
     if (res.result === 'closed' || res.result === 'replied' || res.result === 'already_done') closed++;
   }
 
-  const out = { thread_id: threadId, closed, archived: true };
-  console.log(JSON.stringify(out));
-  return out;
+  return { thread_id: threadId, closed, archived: true };
+}
+
+function defaultAction(row) {
+  return row.type === 'task' ? 'Zrobione' : 'Zapoznane';
 }
 
 // Entry-point guard przez realpath po OBU stronach — macOS symlinkuje /var i /tmp
