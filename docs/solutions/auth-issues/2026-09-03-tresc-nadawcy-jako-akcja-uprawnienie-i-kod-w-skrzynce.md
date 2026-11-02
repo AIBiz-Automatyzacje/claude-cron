@@ -104,7 +104,7 @@ bo ta sama nazwa trafia do wikilinku i do wnętrza spana:
 
 ```js
 export function safeAttachmentName(raw) {
-  const base = path.basename(String(raw ?? '')).replace(/[/\\:%<>"'[\]\x00-]/g, '').trim();
+  const base = path.basename(String(raw ?? '')).replace(/[/\\:%<>"'[\]\x00-\x1f]/g, '').trim();
   return base === '' || base === '.' || base === '..' ? 'zalacznik' : base;
 }
 ```
