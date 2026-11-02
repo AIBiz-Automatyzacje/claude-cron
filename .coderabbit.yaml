@@ -48,7 +48,7 @@ reviews:
       instructions: |
         Projekt bez TypeScriptu: backend to czysty CommonJS, frontend to
         vanilla JS bez buildu. Trzymaj się reguł z .claude/rules/coding-rules.md,
-        .claude/rules/learned-patterns.md i CLAUDE.md.
+        docs/learned-patterns.md, CLAUDE.md i docs/architektura/.
         Krytyczne:
         - Pliki > 300 linii = sygnalizuj refaktor
         - Funkcje > 50 linii = sygnalizuj podział; > 6 argumentów = obiekt konfiguracyjny
@@ -165,8 +165,9 @@ knowledge_base:
     enabled: true
     filePatterns:
       - ".claude/rules/coding-rules.md"
-      - ".claude/rules/learned-patterns.md"
+      - "docs/learned-patterns.md"
       - "CLAUDE.md"
+      - "docs/architektura/*.md"
   learnings:
     scope: auto
   issues:
