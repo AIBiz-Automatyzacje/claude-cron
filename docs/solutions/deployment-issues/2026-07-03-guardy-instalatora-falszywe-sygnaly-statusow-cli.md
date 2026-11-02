@@ -21,6 +21,16 @@ tags:
   - false-positive
 status: verified
 last_verified: 2026-07-03
+klasa: "dopasowanie-tekstu"
+regula: "Stan zewnętrznego CLI czytaj z zakotwiczonej, unikalnej frazy outputu (`^Status: active`) zweryfikowanej w źródłach narzędzia, a po konfiguracji granicy bezpieczeństwa potwierdź stan ponownym odczytem i testem z zewnątrz. Substring łapie `inactive`, a interaktywne CLI pod EOF potrafi wyjść z kodem 0 bez zrobienia czegokolwiek."
+paths:
+  - "scripts/install-vps.sh"
+  - "install.sh"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Guardy instalatora VPS ufały fałszywym sygnałom (3 bugi z Operator gate)

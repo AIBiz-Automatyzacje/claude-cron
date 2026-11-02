@@ -14,6 +14,15 @@ tags:
   - backfill
 status: verified
 last_verified: 2026-06-27
+klasa: "migracja-bazy"
+regula: "Backfill danych w `migrate()` owijaj sentinelem w `state` (`<feature>_done`), czytanym i pisanym przez przekazany `db`, nie gołym `UPDATE`. `migrate()` biegnie przy każdym `getDb()` i boocie, więc goły backfill clobberuje świadome zmiany usera przy każdym restarcie."
+paths:
+  - "lib/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Bare UPDATE w migrate() co restart clobberuje świadome opt-outy usera

@@ -14,6 +14,15 @@ tags:
   - node-test
 status: verified
 last_verified: 2026-07-03
+klasa: "spojnosc-dwoch-systemow"
+regula: "Po operacji zapisującej wynik do DB decyzję podejmuj na świeżym odczycie rekordu, nie na obiekcie pobranym przed operacją, a próg współdzielony przez moduły trzymaj w jednym helperze. Gdy moduł A wstrzymuje akcję, zakładając że B coś zrobi, napisz test integracyjny A+B."
+paths:
+  - "lib/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Stale-owy obiekt w pamięci vs stan w DB — martwe retry i zjadanie statusu `killed`

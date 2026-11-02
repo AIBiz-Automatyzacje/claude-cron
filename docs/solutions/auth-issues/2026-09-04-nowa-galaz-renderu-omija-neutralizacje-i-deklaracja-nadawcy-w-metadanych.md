@@ -15,6 +15,16 @@ tags:
   - team-os
 status: verified
 last_verified: 2026-09-04
+klasa: "bramka-na-jednej-drodze"
+regula: "Każda nowa gałąź renderu neutralizuje swoją wartość tym samym neutralizatorem, a wartość będącą warunkiem dla jakiegokolwiek konsumenta bierz z artefaktu po swojej stronie (`stat`, sha, ślad wgrania), nie z deklaracji nadawcy. Gałąź z wczesnym `return` omija obronę bez jej usuwania."
+paths:
+  - "scripts/inbox/**"
+  - "lib/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Nowa gałąź renderu omija istniejącą obronę; deklaracja nadawcy awansuje do roli sterującej

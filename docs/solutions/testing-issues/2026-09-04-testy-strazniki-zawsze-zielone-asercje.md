@@ -13,6 +13,18 @@ tags:
   - windows
 status: verified
 last_verified: 2026-09-04
+klasa: "test-niefalsyfikowalny"
+regula: "Nazwy i ścieżki w asercjach buduj tą samą funkcją albo stałą co produkcja, `assert.throws` dawaj z predykatem, a przed zaliczeniem testu zepsuj implementację w jednej linii i zobacz czerwone. Asercja o nieobecności zgadniętej nazwy jest zawsze prawdziwa, a test mechanizmu systemu (chmod, symlink) dostaje skip-guard po `process.platform`."
+paths:
+  - "lib/**/*.test.js"
+  - "scripts/**/*.test.mjs"
+  - "*.test.mjs"
+  - "*.test.js"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Cztery testy, które przechodziły także przy złamanym zachowaniu

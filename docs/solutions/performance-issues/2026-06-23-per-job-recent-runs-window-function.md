@@ -11,10 +11,18 @@ tags:
   - window-functions
   - row-number
   - per-partition-limit
-  - sqlite-localtime
   - query-design
 status: verified
 last_verified: 2026-06-23
+klasa: "cache-i-zapytania"
+regula: "N ostatnich rekordów na każdą grupę (job, user, kategoria) wybieraj przez `ROW_NUMBER() OVER (PARTITION BY grupa ORDER BY id DESC)` z filtrem `rn <= N`, nie globalnym `ORDER BY id DESC LIMIT N`. Flat LIMIT cicho gubi grupy, bo jedna grupa o wysokiej kadencji zjada całe okno."
+paths:
+  - "lib/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # N ostatnich runów per job — flat-limit gubi joby, użyj window function
@@ -26,17 +34,15 @@ last_verified: 2026-06-23
 - Job o wysokiej kadencji (cron `*/1`, czyli co minutę) „zjada" całe okno wyników:
   przy `SELECT * FROM runs ORDER BY id DESC LIMIT 50` ostatnie 50 rekordów należy
   w praktyce w całości do tego jednego joba.
-- Statystyki „Dziś" (today_success / today_failed) przeskakują o złą godzinę — liczba
-  resetuje się ok. 1:00–2:00 czasu lokalnego (PL) zamiast o północy.
 
 ## Root Cause
 
-1. **Flat-limit zamiast limitu per-partycja.** `ORDER BY id DESC LIMIT N` zwraca N najnowszych
-   runów w całej tabeli, nie N runów *na każdy job*. Job z dużą częstotliwością dominuje globalne
-   okno i wypycha runy innych jobów poza limit.
-2. **Granica doby w UTC zamiast lokalnej.** `date(started_at) = date('now')` w SQLite liczy obie
-   daty w UTC. Dla PL (UTC+1/+2) granica „dziś" jest przesunięta o 1–2 h — przeskok następuje
-   o 1:00/2:00 lokalnego, nie o północy.
+**Flat-limit zamiast limitu per-partycja.** `ORDER BY id DESC LIMIT N` zwraca N najnowszych
+runów w całej tabeli, nie N runów *na każdy job*. Job z dużą częstotliwością dominuje globalne
+okno i wypycha runy innych jobów poza limit.
+
+Granica doby w UTC (statystyki „Dziś”) wyszła w tej samej pracy — osobny wpis:
+[2026-06-23-sqlite-granica-doby-localtime.md](2026-06-23-sqlite-granica-doby-localtime.md).
 
 ## Rozwiązanie
 
@@ -63,22 +69,6 @@ function getRecentRunsPerJob(perJob = RECENT_RUNS_DEFAULT) {
 }
 ```
 
-Granica „dziś" liczona w czasie lokalnym po obu stronach porównania:
-
-```javascript
-function getTodayRunStats() {
-  const row = getDb().prepare(`
-    SELECT
-      COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success,
-      COALESCE(SUM(CASE WHEN status IN ('failed','timeout','killed') THEN 1 ELSE 0 END), 0) AS failed
-    FROM runs
-    WHERE started_at IS NOT NULL
-      AND date(started_at, 'localtime') = date('now', 'localtime')
-  `).get();
-  return { success: row.success, failed: row.failed };
-}
-```
-
 Uwaga dot. routingu (powiązany efekt uboczny): nowy endpoint `GET /api/runs/recent` musi być
 matchowany PRZED ogólnym matcherem `segments[1] === 'runs'`, inaczej ogólny handler `/api/runs`
 go przechwyci. Kolejność if-ów w routerze jest tu kontraktem.
@@ -97,16 +87,14 @@ node --test lib/db.test.js
 
 - Gdy potrzebujesz „top N per grupa" (per job, per user, per kategoria) — ZAWSZE
   `ROW_NUMBER() OVER (PARTITION BY ...)` + filtr `rn <= N`, nigdy globalny `LIMIT N`.
-- Każde porównanie dat „dziś/wczoraj" w SQLite — `date(kolumna,'localtime') = date('now','localtime')`.
-  Goły `date('now')` to UTC i cicho przesuwa granicę doby.
 - Per-job/per-grupa zapytanie w pętli = N+1. Jedno zapytanie z window function = 1 round-trip.
 - Waliduj parametr limitu (parseInt + dolny i górny cap) zanim trafi do query.
 
 ## Powiązane
 
-- `lib/db.js` — `getRecentRunsPerJob`, `getTodayRunStats`
-- `lib/db.test.js` — testy obu helperów (flat-limit regression, localtime boundary)
-- `server.js` — route `GET /api/runs/recent` (kolejność przed `/api/runs`), `/api/status`
+- `lib/db.js` — `getRecentRunsPerJob`
+- `lib/db.test.js` — test flat-limit regression
+- `server.js` — route `GET /api/runs/recent` (kolejność przed `/api/runs`)
 
 ## Kontekst
 

@@ -15,6 +15,17 @@ tags:
   - re-run
 status: verified
 last_verified: 2026-07-28
+klasa: "spojnosc-dwoch-systemow"
+regula: "Instalator podmieniający katalog aplikacji najpierw ubija jej procesy filtrem po ścieżce instalacji (nie po nazwie binarki), a kod testowany z gałęzi pobiera po SHA commita. Windows nie przeniesie pliku z otwartym uchwytem, a `raw.githubusercontent.com` cachuje URL-e gałęziowe przez kilka minut."
+paths:
+  - "install.ps1"
+  - "install.sh"
+  - "lib/updater.js"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Re-run instalatora na Windowsie: zablokowane pliki i cache CDN

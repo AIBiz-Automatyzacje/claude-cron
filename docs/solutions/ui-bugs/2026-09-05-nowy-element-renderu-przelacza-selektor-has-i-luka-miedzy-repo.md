@@ -16,6 +16,15 @@ tags:
   - regresja-wizualna
 status: verified
 last_verified: 2026-09-05
+klasa: "kontrakt-wspolny"
+regula: "Do reguł strukturalnych CSS używaj `:has(> element)`, nie `:has(.klasa)`, i przy każdej nowej klasie w renderze sprawdź, czy ma styl i czy nie przełącza warunku reguły wyżej. Kontrolę spójności między repo (render tu, CSS w pluginie) rób szablonem kontra kod, nie kopią kontra kopią."
+paths:
+  - "scripts/inbox/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Nowy element renderu przełącza `:has()` piętro wyżej — i luka między repo

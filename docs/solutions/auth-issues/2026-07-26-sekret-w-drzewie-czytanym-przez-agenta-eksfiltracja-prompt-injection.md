@@ -15,6 +15,17 @@ tags:
   - team-os-inbox
 status: verified
 last_verified: 2026-07-26
+klasa: "pii-i-sekrety"
+regula: "Sekret trzymaj poza drzewem `cwd` agenta LLM, któremu prompt buduje treść z zewnątrz, a przy zmianie lokalizacji wyczyść starą kopię i czytaj ją tylko jako fallback. Agent z `Read/Glob/Grep` przeczyta wszystko w `cwd` na jedno zdanie atakującego — mode 0600 i `.gitignore` tu nie chronią."
+paths:
+  - "scripts/inbox/**"
+  - "lib/**"
+  - "setup.mjs"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Sekret w katalogu, po którym czyta agent LLM = eksfiltracja jednym pytaniem

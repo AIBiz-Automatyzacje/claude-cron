@@ -16,6 +16,17 @@ tags:
   - stale-process-env
 status: verified
 last_verified: 2026-07-07
+klasa: "spojnosc-dwoch-systemow"
+regula: "Zakładaj, że zmiana env po instalacji nie dociera do żyjących procesów, i diagnozuj trzema źródłami naraz: wartość utrwalona, env procesu i kod odpowiedzi proxy (503 brak env, 502/504 sieć albo adres). Naprawa to restart serwera z nowo otwartego terminala, bo hook autostartu dziedziczy stare env sesji."
+paths:
+  - "setup.mjs"
+  - "server.js"
+  - "lib/**"
+waga: "srednia"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Proxy /api/vps/* pada mimo poprawnego User-env po re-installie

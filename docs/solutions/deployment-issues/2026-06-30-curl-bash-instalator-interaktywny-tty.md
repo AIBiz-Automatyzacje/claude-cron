@@ -16,6 +16,18 @@ tags:
   - re-run-safety
 status: verified
 last_verified: 2026-06-30
+klasa: "spojnosc-dwoch-systemow"
+regula: "W instalatorze `curl|bash` / `irm|iex` interaktywne pytania czytaj z `/dev/tty` (Unix) albo `CONIN$` (Windows) z fallbackiem, nie z dziedziczonego stdin. Stdin to pipe z treścią skryptu, więc `read` dostaje EOF i instalator cicho leci na domyślnych — testuj przez prawdziwy pipe."
+paths:
+  - "install.sh"
+  - "install.ps1"
+  - "setup.mjs"
+  - "scripts/install-vps.sh"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # curl|bash instalator nie czyta odpowiedzi usera — stdin zajęty pipe'em ze skryptem

@@ -15,6 +15,16 @@ tags:
   - auto-detekcja
 status: verified
 last_verified: 2026-07-03
+klasa: "spojnosc-dwoch-systemow"
+regula: "Auto-detekcję stanu zewnętrznego API (chat ID z `getUpdates` Telegrama) projektuj z ręcznym fallbackiem jako ścieżką pierwszej klasy. Świeży bot bywa z pustym `getUpdates` mimo dostarczonych wiadomości, a pusty wynik nie znaczy złego tokenu ani konkurencyjnego konsumenta."
+paths:
+  - "setup.mjs"
+  - "lib/telegram.js"
+waga: "srednia"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # getUpdates świeżo utworzonego bota gubi pierwsze wiadomości (lag kolejki update'ów)

@@ -14,6 +14,15 @@ tags:
   - grep-straznik
 status: verified
 last_verified: 2026-08-07
+klasa: "dopasowanie-tekstu"
+regula: "W treści niequotowanego heredoca generującego plik nie używaj backticków (także w komentarzach), a zamierzone podstawienia escapuj `\\$(…)`; pilnuj tego grep-strażnikiem w testach. Bash wykonuje backticki w całej treści `<<EOF` już przy generowaniu pliku."
+paths:
+  - "scripts/install-vps.sh"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Backtick w heredocu `<<GUARD` wykonuje `git pull` z… komentarza

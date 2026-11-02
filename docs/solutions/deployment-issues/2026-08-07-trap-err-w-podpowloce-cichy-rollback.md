@@ -16,6 +16,16 @@ tags:
   - stderr
 status: verified
 last_verified: 2026-08-07
+klasa: "sciezka-bledu"
+regula: "Handler `trap ERR` z akcjami mutującymi zaczynaj guardem `[ \"${BASH_SUBSHELL:-0}\" -gt 0 ] && exit \"$status\"`, a cały raport kieruj na stderr. `set -E` dziedziczy trap do `$(…)`, więc rollback w podpowłoce zmienia realny stan przy żywym rodzicu, a jego komunikaty giną w przechwyconym stdout."
+paths:
+  - "scripts/install-vps.sh"
+  - "install.sh"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # trap ERR w podpowłoce = cichy rollback przy żywym rodzicu

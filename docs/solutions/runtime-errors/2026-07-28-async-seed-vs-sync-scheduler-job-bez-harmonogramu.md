@@ -16,6 +16,16 @@ tags:
   - test-szwu
 status: verified
 last_verified: 2026-07-28
+klasa: "wyscig-i-wspolbieznosc"
+regula: "Gdy async operacja przy starcie tworzy stan czytany przez kod po niej, wstrzyknij jej hak wołany po realnym zapisie (`onJobCreated: () => scheduler.rescheduleAll()`), nie licz na kolejność wywołań. Test ma odtwarzać kolejność startu, bo objaw znika po restarcie, a testy jednostkowe obu stron przechodzą."
+paths:
+  - "server.js"
+  - "lib/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Job zaseedowany przy starcie nie dostaje harmonogramu

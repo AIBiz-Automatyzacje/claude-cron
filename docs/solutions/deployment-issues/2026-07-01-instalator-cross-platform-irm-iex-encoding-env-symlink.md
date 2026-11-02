@@ -19,6 +19,18 @@ tags:
   - windows
 status: verified
 last_verified: 2026-07-01
+klasa: "dopasowanie-tekstu"
+regula: "Skrypt `.ps1` ładowany przez `irm|iex` trzymaj w czystym ASCII bez BOM i bez `exit` bez guardu `$PSScriptRoot`, a entry-point w Node porównuj przez `fs.realpathSync` po obu stronach. BOM i diakrytyki łamią parser PS 5.1, a macOS symlinkuje `/var` i `/tmp`, przez co goły `path.resolve` cicho blokuje `main()`."
+paths:
+  - "install.ps1"
+  - "install.sh"
+  - "setup.mjs"
+  - "scripts/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Instalator cross-platform (irm|iex + curl|bash): 5 pułapek wykrytych na realnych maszynach

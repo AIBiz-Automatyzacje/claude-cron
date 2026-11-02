@@ -17,6 +17,16 @@ tags:
   - bash-3.2
 status: verified
 last_verified: 2026-07-02
+klasa: "sciezka-bledu"
+regula: "Rollback instalatora cofa tylko stan utworzony w tym runie i kończy się na granicy interaktywnych loginów: od niej pad zostawia stan z instrukcją wznowienia, nie odwija stosu. Rollback po loginie skasowałby świeże credentiale OAuth, a opcjonalne kroki po finalnej weryfikacji to warn, nie `trap ERR`."
+paths:
+  - "scripts/install-vps.sh"
+  - "install.sh"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Rollback-stos instalatora a granica interaktywnych loginów OAuth

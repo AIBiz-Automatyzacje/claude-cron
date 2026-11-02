@@ -15,6 +15,16 @@ tags:
   - resource-leak
 status: verified
 last_verified: 2026-07-14
+klasa: "spojnosc-dwoch-systemow"
+regula: "Zwolnienie zasobu po procesie potomnym trzymaj w idempotentnym `settle()` domykanym na `'exit'` z krótką karencją (timer z `unref()`), nie wyłącznie na `'close'`. `'close'` nie nadchodzi, gdy wnuk dziedziczy stdout/stderr i przeżywa kill rodzica, więc slot albo licznik wycieka na zawsze."
+paths:
+  - "lib/**"
+  - "scripts/inbox/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # 'close' nie nadchodzi, gdy wnuk trzyma odziedziczony pipe — wyciek slotu tła

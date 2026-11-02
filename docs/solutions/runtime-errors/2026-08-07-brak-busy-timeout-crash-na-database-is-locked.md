@@ -14,6 +14,16 @@ tags:
   - concurrency
 status: verified
 last_verified: 2026-08-07
+klasa: "wyscig-i-wspolbieznosc"
+regula: "Każde połączenie `node:sqlite` otwieraj kompletem `PRAGMA journal_mode=WAL`, `foreign_keys=ON` i `busy_timeout=5000`, także w skryptach dotykających żywej bazy, a kontrakt przybij testem. Domyślny `busy_timeout=0` zamienia każde trafienie w blokadę zapisu w natychmiastowy crash `database is locked`."
+paths:
+  - "lib/**"
+  - "scripts/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # `database is locked` zabija proces, zanim detekcja intruza zdąży go zgłosić

@@ -15,6 +15,15 @@ tags:
   - team-os
 status: verified
 last_verified: 2026-08-05
+klasa: "migracja-bazy"
+regula: "W `migrate()` rzucaj tylko na stanie schematu; na stanie danych, który naprawia kod zabity tym rzutem, degraduj do schematu legacy z wykonywalnym `warn`, a niezmiennik trzymaj w warstwie logiki. `migrate()` biegnie w `getDb()` przy każdej operacji, więc rzut blokuje także endpointy naprawcze."
+paths:
+  - "lib/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Migracja z fail-fast na DANYCH w ścieżce otwarcia połączenia ubija całą aplikację razem z lekarstwem

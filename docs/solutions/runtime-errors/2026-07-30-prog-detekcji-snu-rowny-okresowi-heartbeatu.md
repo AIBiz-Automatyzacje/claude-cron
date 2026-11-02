@@ -17,6 +17,15 @@ tags:
   - jitter
 status: verified
 last_verified: 2026-07-30
+klasa: "wartosc-graniczna"
+regula: "Próg wykrywający lukę między okresowymi śladami życia licz jako okres plus definicja zdarzenia i zawsze ostro większy od okresu tykania, a w testach dodawaj jawny jitter do `mock.timers`. Timery gwarantują tylko „nie wcześniej niż”, więc próg równy okresowi bierze każde normalne tyknięcie za zdarzenie, a `tick(period)` to ukrywa."
+paths:
+  - "lib/**"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Próg detekcji snu równy okresowi heartbeatu — każde tyknięcie brane za wybudzenie

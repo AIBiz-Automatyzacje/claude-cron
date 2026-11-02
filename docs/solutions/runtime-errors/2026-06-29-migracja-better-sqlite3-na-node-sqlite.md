@@ -17,6 +17,17 @@ tags:
   - engines
 status: verified
 last_verified: 2026-06-29
+klasa: "spojnosc-dwoch-systemow"
+regula: "Wymuś Node `>=22.13` guardem przed pierwszym top-level `require('node:sqlite')` i po migracji odpal smoke-test typów agregatów (`typeof row.n === 'number'`, fail-fast). Część buildów zwraca `COUNT(*)`/`SUM(...)` jako BigInt, co cicho psuje arytmetykę i `JSON.stringify`."
+paths:
+  - "lib/**"
+  - "server.js"
+  - "package.json"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Migracja better-sqlite3 → node:sqlite

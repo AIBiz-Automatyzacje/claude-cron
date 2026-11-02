@@ -14,6 +14,16 @@ tags:
   - review-bota
 status: verified
 last_verified: 2026-09-04
+klasa: "polkniety-blad"
+regula: "Cudzy strumień iteruj przez `stream.iterator({ destroyOnReturn: false })`, w `catch` na `fs` rozróżniaj `err.code` (ENOENT ≠ EACCES/EIO), a w zadaniu okresowym po każdej gałęzi zostaw ślad, by następny tik nie wziął rekordu ponownie. Inaczej odmowa dociera jako RST, awaria magazynu jako 400, a praca kręci się bez postępu."
+paths:
+  - "lib/**"
+  - "server.js"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # Trzy błędy sprzątania na granicy modułu

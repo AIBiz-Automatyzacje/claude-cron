@@ -14,6 +14,15 @@ tags:
   - tailscale
 status: verified
 last_verified: 2026-07-24
+klasa: "bramka-na-jednej-drodze"
+regula: "Endpoint mutujący, który zwraca albo obsługuje sekret, odrzuca cross-origin (`Origin` obecny i różny od `Host`, nieparsowalny = obcy) przed dotknięciem DB; brak `Origin` przepuszczaj. Guard XFF tego nie łapie, bo `fetch` z obcej strony do localhost idzie bez `X-Forwarded-For`, a `ACAO:*` pozwala odczytać odpowiedź."
+paths:
+  - "server.js"
+waga: "wysoka"
+szczebel: "regula"
+szczebel_powod: "konwersja learned-patterns: regula tekstowa sprzed P10, bez bramki mechanicznej"
+zrodlo: "learned-patterns (konwersja 2026-11-02)"
+ucieczki: 0
 ---
 
 # ACAO:* + guard XFF nie chroni endpointu zwracającego sekret — CSRF wykrada token
