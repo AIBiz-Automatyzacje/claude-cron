@@ -15,7 +15,7 @@ szablonie coś się zmieniło, i automatycznie to aplikuje.
 ## Model działania (ważne — tak zdecydował user)
 
 - **Zakres:** tylko maszyneria `.claude/` — `skills/`, `agents/`, `rules/`,
-  `hooks/`, `workflows/`, `templates/`, `docs/` oraz `settings.json`. **Nie** rusza
+  `hooks/`, `workflows/`, `templates/`, `scripts/`, `docs/` oraz `settings.json`. **Nie** rusza
   `settings.local.json` (lokalny), rootowego `README.md`/`CLAUDE.md` ani `docs/` projektu.
 - **Szablon zawsze wygrywa:** pliki wspólne są nadpisywane wersją z szablonu, także
   gdy były lokalnie modyfikowane. Nadpisywane i usuwane pliki najpierw trafiają do
@@ -58,6 +58,18 @@ Skrypt wypisuje ustrukturyzowany raport, który streszczasz userowi po polsku:
 - `APPLIED: …` → potwierdź, że zmiany zaaplikowano.
 - `BACKUP: <ścieżka>` → podaj userowi tę ścieżkę jako punkt odwrotu (tam są
   poprzednie wersje nadpisanych/usuniętych plików).
+- `NOWA SESJA: …` → przekaż userowi dosłownie jako ostatnie zdanie raportu: instrukcje i skille
+  są buforowane w sesji, więc `/dev-autopilot-wf` uruchomiony w tej sesji działałby na starej
+  maszynerii.
+- `RUNNER TESTÓW: <szczegół> — poprawka: <config>` (także po `STATUS: UP_TO_DATE`) → vitest albo jest
+  projektu zbiera testy maszynerii z `.claude/**` i autopilot zatrzyma się na `npm test` na starcie.
+  Przekaż userowi linię z poprawką (wpis `exclude` w pliku configu, który podaje) i zaproponuj, że ją
+  wpiszesz i zacommitujesz. Sync i tak się udał.
+- `--- DOCTOR (pierwsza instalacja) ---` + tabela + `DOCTOR_KOD: <n>` → pierwsza instalacja
+  szablonu w projekcie. Pokaż userowi tabelę. `DOCTOR_KOD: 0` = wszystkie obowiązkowe narzędzia są;
+  inny kod = wypisz wiersze `BRAK` z komendami z kolumny „Instalacja" i powiedz, że bez nich run
+  pipeline'u się zatrzyma. Sync i tak się udał — nie ponawiaj go. Ten sam sprawdzian user uruchamia
+  później sam: `bash .claude/scripts/doctor/doctor.sh`.
 
 ## Obsługa błędów
 
@@ -65,14 +77,22 @@ Skrypt wypisuje ustrukturyzowany raport, który streszczasz userowi po polsku:
   Przekaż userowi stderr z git i zasugeruj `gh auth login` / sprawdzenie sieci.
   **Nie** ponawiaj w kółko tej samej komendy.
 - `BŁĄD: brak 'git' w PATH` → git nie jest zainstalowany; zgłoś to userowi.
+- `BŁĄD: workflow(y) w szablonie nie parsują się` → w **szablonie** jest plik
+  `.claude/workflows/*.js`, którego runtime by nie zarejestrował. Skrypt nie
+  zaaplikował **niczego**, projekt jest nietknięty. To defekt po stronie szablonu, nie
+  projektu: przekaż userowi listę plików ze stdout i powiedz, że naprawa idzie do repo
+  szablonu (`node --test '.claude/workflows/__tests__/skladnia-workflowow.test.mjs'`
+  odtwarza to lokalnie). **Nie obchodź tego** kopiowaniem plików ręcznie — zepsuty
+  workflow milczy aż do pierwszego wywołania, a wtedy autopilot pada w środku fazy.
 
 Nie modyfikuj skryptu „w locie", żeby obejść błąd konfiguracji — zdiagnozuj przyczynę.
 
 ## Higiena repo
 
 Katalog backupów `.claude/.backups/` i pliki `.claude/.template-version` /
-`.claude/.template-manifest` to lokalne bookkeeping — zasugeruj userowi dodanie
-`.claude/.backups/` do `.gitignore` projektu, jeśli jeszcze go tam nie ma.
+`.claude/.template-manifest` / `.claude/.template-hashes` to lokalne bookkeeping — zasugeruj userowi dodanie
+`.claude/.backups/` do `.gitignore` projektu, jeśli jeszcze go tam nie ma. `.template-hashes` (hash gita
+każdego pliku z chwili syncu) czyta telemetria: czy run wykonał dokładnie wersję z szablonu (`run.szablon.zgodny`).
 
 ## Uwagi techniczne
 

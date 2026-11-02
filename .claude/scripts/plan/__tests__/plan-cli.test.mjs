@@ -1,0 +1,375 @@
+// CLI planowania i bramka gotowosci (PLAN-POPRAWY P13) na tymczasowym repo git: generuj → zapis docs/active/, odmowa
+// nadpisania postepu, gotowosc z kazdym powodem STOP (E2E bez srodowiska, bloker startu, galaz, brudne drzewo).
+//
+// Uruchomienie:  node --test .claude/scripts/plan/__tests__/plan-cli.test.mjs
+
+import { spawnSync, execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import test from 'node:test'
+import assert from 'node:assert/strict'
+
+import { liczE2e as liczScenariuszeE2e } from '../../dossier/dokumenty.mjs'
+import { gotowosc } from '../gotowosc.mjs'
+
+const KATALOG = dirname(fileURLToPath(import.meta.url))
+const CLI = resolve(KATALOG, '../plan.mjs')
+const FIXTURE = readFileSync(join(KATALOG, 'fixtures/plan-techniczny.md'), 'utf8')
+const PLAN = 'docs/plans/2026-10-07-001-feat-publikacja-ofert-plan.md'
+const ZADANIE = 'docs/active/publikacja-ofert'
+const PREP = 'docs/operator/publikacja-ofert-przygotowanie.md'
+
+/** @param {string} korzen @param {string[]} a */
+const git = (korzen, a) => execFileSync('git', ['-C', korzen, ...a], { stdio: 'pipe' })
+
+/** @param {{ prep?: string, env?: boolean }} [o] @returns {string} repo z planem, plikami planu i commitem na main */
+function repo(o = {}) {
+  const korzen = mkdtempSync(join(tmpdir(), 'plan-cli-'))
+  const pliki = {
+    [PLAN]: FIXTURE,
+    'docs/DESIGN.md': '#\n',
+    'docs/brainstorms/2026-10-01-publikacja-ofert-requirements.md': '#\n',
+    'docs/plans/publikacja-ofert-figma/SPEC.md': '#\n',
+    'docs/plans/publikacja-ofert-figma/lista-ofert.png': 'png',
+    'src/services/oferty-service.ts': 'const x = 1\n'.repeat(12),
+    'src/features/oferty/components/lista-ofert.tsx': 'const x = 1\n'.repeat(8),
+    [PREP]: o.prep ?? '# Przygotowanie\n\n- [ ] Klucz mapy — **[blokuje: faza 2]** (IU-2)\n- [x] Konto — **[blokuje: faza 1]**\n',
+    ...(o.env === false ? {} : { '.env.e2e': 'X=1\n' }),
+  }
+  for (const [s, t] of Object.entries(pliki)) {
+    mkdirSync(dirname(join(korzen, s)), { recursive: true })
+    writeFileSync(join(korzen, s), t)
+  }
+  writeFileSync(join(korzen, '.gitignore'), '.env.e2e\n')
+  git(korzen, ['init', '-q', '-b', 'main'])
+  git(korzen, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '-A'])
+  git(korzen, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'start'])
+  return korzen
+}
+
+// Atrapa CLI agent-browser w PATH: bramka gotowosci robi pelne sprawdzenie srodowiska (jak bootstrap), a test nie moze
+// zalezec od przegladarki zainstalowanej na maszynie.
+const ATRAPY = mkdtempSync(join(tmpdir(), 'plan-cli-bin-'))
+writeFileSync(join(ATRAPY, 'agent-browser'), '#!/bin/sh\necho "ok"\n', { mode: 0o755 })
+test.after(() => rmSync(ATRAPY, { recursive: true, force: true }))
+
+/** @param {string} korzen @param {string[]} argumenty @returns {{ kod: number | null, json: any }} */
+function cli(korzen, argumenty) {
+  const w = spawnSync(process.execPath, [CLI, ...argumenty, '--projekt', korzen], { encoding: 'utf8', env: { ...process.env, PATH: `${ATRAPY}:${process.env.PATH}` } })
+  return { kod: w.status, json: w.stdout ? JSON.parse(w.stdout) : null }
+}
+
+/** @param {string} korzen gotowe zadanie na galezi feature/ z commitem */
+function zadanieNaGalezi(korzen) {
+  git(korzen, ['checkout', '-qb', 'feature/publikacja-ofert'])
+  assert.equal(cli(korzen, ['generuj', PLAN, '--data', '2026-10-07', '--zapisz']).kod, 0)
+  git(korzen, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '-A'])
+  git(korzen, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'docs: inicjalizacja planu'])
+}
+
+/** @param {(korzen: string) => void} f @param {Parameters<typeof repo>[0]} [o] */
+function wRepo(f, o) {
+  const korzen = repo(o)
+  try {
+    f(korzen)
+  } finally {
+    rmSync(korzen, { recursive: true, force: true })
+  }
+}
+
+test('generuj --zapisz: trzy pliki zadania z licznikami; bez --zapisz nic nie powstaje', () => wRepo((k) => {
+  const sucho = cli(k, ['generuj', PLAN])
+  assert.equal(sucho.kod, 0)
+  assert.equal(existsSync(join(k, ZADANIE)), false)
+  const w = cli(k, ['generuj', PLAN, '--data', '2026-10-07', '--zapisz'])
+  assert.equal(w.kod, 0)
+  assert.deepEqual(w.json.zapisane, ['plan', 'kontekst', 'zadania'].map((r) => `${ZADANIE}/publikacja-ofert-${r}.md`))
+  assert.deepEqual(w.json.liczniki, { fazy: 2, iu: 3, implementacyjne: 10, testy: 6, weryfikacje: 4, e2e: 3, operator: 2 })
+  assert.equal(w.json.odmowa, null)
+  // Rozmiary i budzet dla telemetrii (rekord skill, pole artefakty): znaki planu technicznego i pliku zadan na dysku.
+  assert.deepEqual(w.json.rozmiary, { plan_zn: FIXTURE.length, zadania_zn: readFileSync(join(k, ZADANIE, 'publikacja-ofert-zadania.md'), 'utf8').length })
+  assert.deepEqual(w.json.budzet, { iu_z_wymiarami: 0, wydzielenia: 0 })
+}))
+
+test('generuj: plan z bledem nie daje plikow i zwraca bledy z kodem 1', () => wRepo((k) => {
+  writeFileSync(join(k, PLAN), FIXTURE.replace('**Delegate to:** feature-builder-ui', ''))
+  const w = cli(k, ['generuj', PLAN, '--zapisz'])
+  assert.equal(w.kod, 1)
+  assert.match(w.json.bledy.join('\n'), /IU-2: Delegate to/)
+  assert.equal(existsSync(join(k, ZADANIE)), false)
+}))
+
+test('generuj --nadpisz: odmowa przy stanie autopilota, raporcie review albo wpisach dziennika', () => wRepo((k) => {
+  for (const [plik, tresc] of [['.autopilot-state.json', '{}'], ['review-faza-1.md', '# R'], ['publikacja-ofert-kontekst.md', '## Dziennik\n\n- faza 1: zrobione\n']]) {
+    assert.equal(cli(k, ['generuj', PLAN, '--zapisz', '--nadpisz']).kod, 0)
+    writeFileSync(join(k, ZADANIE, plik), tresc)
+    const w = cli(k, ['generuj', PLAN, '--zapisz', '--nadpisz'])
+    assert.equal(w.kod, 1, plik)
+    assert.match(w.json.odmowa, /postępu nie nadpisuję/)
+    rmSync(join(k, ZADANIE), { recursive: true })
+  }
+}))
+
+test('generuj: istniejace zadanie bez --nadpisz odmowa; z --nadpisz odmowa, gdy zadania maja postep', () => wRepo((k) => {
+  assert.equal(cli(k, ['generuj', PLAN, '--zapisz']).kod, 0)
+  const ponownie = cli(k, ['generuj', PLAN, '--zapisz'])
+  assert.equal(ponownie.kod, 1)
+  assert.match(ponownie.json.odmowa, /już istnieje/)
+  assert.equal(cli(k, ['generuj', PLAN, '--zapisz', '--nadpisz']).kod, 0)
+  const zadania = join(k, ZADANIE, 'publikacja-ofert-zadania.md')
+  writeFileSync(zadania, readFileSync(zadania, 'utf8').replace('- [ ] Stwórz:', '- [x] Stwórz:'))
+  const postep = cli(k, ['generuj', PLAN, '--zapisz', '--nadpisz'])
+  assert.equal(postep.kod, 1)
+  assert.match(postep.json.odmowa, /postępu nie nadpisuję/)
+}))
+
+test('gotowosc: zadanie na swojej galezi z czystym drzewem przechodzi; blokery faz >= 2 tylko raportowane', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  const w = cli(k, ['gotowosc', ZADANIE])
+  assert.equal(w.kod, 0, JSON.stringify(w.json))
+  assert.equal(w.json.e2e.scenariusze, 3)
+  assert.deepEqual(w.json.przygotowanie.odroczone.map((/** @type {{ faza: number }} */ b) => b.faza), [2])
+}))
+
+test('gotowosc: STOP na E2E bez .env.e2e, blokerze startu, cudzej galezi i brudnym drzewie — kazdy osobno', () => {
+  wRepo((k) => {
+    zadanieNaGalezi(k)
+    const w = gotowosc(k, ZADANIE)
+    assert.deepEqual([w.ok, w.e2e.ok, w.plan.ok, w.przygotowanie.ok, w.git.ok], [false, false, true, true, true])
+  }, { env: false })
+  wRepo((k) => {
+    zadanieNaGalezi(k)
+    const w = gotowosc(k, ZADANIE)
+    assert.deepEqual([w.ok, w.przygotowanie.ok], [false, false])
+    assert.deepEqual(w.przygotowanie.blokujace.map((b) => b.linia), [3, 4, 5])
+  }, { prep: '# P\n\n- [ ] Konto Sentry — **[blokuje: planowanie]**\n- [ ] Klucz — **[blokuje:** faza pierwsza]\n- [ ] DSN — **[blokuje: faza 1]**\n- [x] Gotowe — **[blokuje: faza 1]**\n' })
+  wRepo((k) => {
+    zadanieNaGalezi(k)
+    git(k, ['checkout', '-q', 'main'])
+    const naMain = gotowosc(k, ZADANIE)
+    assert.deepEqual([naMain.ok, naMain.git.galaz, naMain.git.wymagana], [false, 'main', 'feature/publikacja-ofert'])
+    git(k, ['checkout', '-q', 'feature/publikacja-ofert'])
+    writeFileSync(join(k, 'src/nowy.ts'), 'x\n')
+    assert.deepEqual(gotowosc(k, ZADANIE).git.brudne, ['?? src/nowy.ts'])
+  })
+})
+
+// P22 A1: runner testow projektu zbierajacy .claude/** (live-10-demo: vitest run bez configu) wychodzi w bramce, nie w bootstrapie.
+test('gotowosc: vitest bez configu → testy.ok false z poprawka i STOP; config z include tests/ → ok', () => wRepo((k) => {
+  writeFileSync(join(k, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' }, devDependencies: { vitest: '3.2.4' } }))
+  zadanieNaGalezi(k)
+  const zle = gotowosc(k, ZADANIE, { narzedzia: { czyIgnorowany: () => true, agentBrowser: () => ({ ok: true, detal: '' }) } })
+  assert.deepEqual([zle.ok, zle.testy.ok, zle.testy.runner, zle.git.ok], [false, false, 'vitest', true])
+  assert.match(zle.testy.poprawka, /exclude: \[\.\.\.configDefaults\.exclude, '\.claude\/\*\*'\]/)
+  writeFileSync(join(k, 'vitest.config.ts'), 'export default defineConfig({ test: { include: ["tests/**/*.test.ts"] } })\n')
+  git(k, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '-A'])
+  git(k, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'test: config'])
+  const dobre = gotowosc(k, ZADANIE, { narzedzia: { czyIgnorowany: () => true, agentBrowser: () => ({ ok: true, detal: '' }) } })
+  assert.deepEqual([dobre.ok, dobre.testy.ok], [true, true])
+}))
+
+test('gotowosc: pelne sprawdzenie srodowiska jak bootstrap — bledy .env.e2e i agent-browser to STOP; brak skilla weryfikacji = uwaga', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  const zle = gotowosc(k, ZADANIE, { narzedzia: { czyIgnorowany: () => false, agentBrowser: () => ({ ok: false, detal: 'chrome: fail' }) } })
+  assert.deepEqual([zle.ok, zle.e2e.ok, zle.e2e.envE2e], [false, false, true])
+  assert.equal(zle.e2e.bledy.length, 2)
+  assert.match(zle.e2e.bledy[0], /\.env\.e2e nie jest w \.gitignore/)
+  assert.match(zle.e2e.bledy[1], /agent-browser nie dziala: chrome: fail/)
+  // Plan ma migracje, a .env.e2e (X=1) nie ma bazy e2e z ref — advisors nie pobiegnie (P17): uwaga, nie bloker.
+  assert.deepEqual(zle.e2e.uwagi, [
+    'brak skilla weryfikacji projektu (.claude/skills/weryfikacja/SKILL.md) — tester odegra scenariusze bez mapy funkcji; generator: /weryfikacja-setup',
+    'advisors nie pobiegnie: brak ref projektu e2e: ani SUPABASE_E2E_DB_URL, ani VITE_SUPABASE_URL w .env.e2e nie wskazuje projektu Supabase — dopisz SUPABASE_E2E_PROJECT_REF',
+  ])
+  const dobre = gotowosc(k, ZADANIE, { narzedzia: { czyIgnorowany: () => true, agentBrowser: () => ({ ok: true, detal: '' }) } })
+  assert.deepEqual([dobre.ok, dobre.e2e.ok, dobre.e2e.bledy], [true, true, []])
+  mkdirSync(join(k, '.claude/skills/weryfikacja'), { recursive: true })
+  writeFileSync(join(k, '.claude/skills/weryfikacja/SKILL.md'), '# W\n')
+  writeFileSync(join(k, '.env.e2e'), 'VITE_SUPABASE_URL=https://abcdefghijklmnopqrst.supabase.co\n')
+  const sprawne = { czyIgnorowany: () => true, agentBrowser: () => ({ ok: true, detal: '' }) }
+  assert.deepEqual(gotowosc(k, ZADANIE, { narzedzia: sprawne, srodowisko: {} }).e2e.uwagi, ['advisors nie pobiegnie: brak SUPABASE_ACCESS_TOKEN — Supabase → Account → Access Tokens, wpis SUPABASE_ACCESS_TOKEN=<token> w .env.e2e'])
+  const zTokenem = gotowosc(k, ZADANIE, { narzedzia: sprawne, srodowisko: { SUPABASE_ACCESS_TOKEN: 't' } })
+  assert.deepEqual([zTokenem.e2e.ok, zTokenem.e2e.uwagi], [true, []], 'advisors to uwaga, nie bloker; z tokenem i ref znika')
+}))
+
+test('gotowosc: zadanie z samymi makietami figma_screens sprawdza srodowisko jak bootstrap; bez .env.e2e przechodzi (visual diff bez przegladarki)', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  const zadania = join(k, ZADANIE, 'publikacja-ofert-zadania.md')
+  writeFileSync(zadania, readFileSync(zadania, 'utf8').replace(/\[E2E\]/g, '[Manual]'))
+  writeFileSync(join(k, ZADANIE, 'publikacja-ofert-kontekst.md'), '# K\n\n## Designerski kontekst\n\n- Screeny referencyjne: docs/plans/publikacja-ofert-figma/lista-ofert.png\n')
+  const zle = gotowosc(k, ZADANIE, { narzedzia: { czyIgnorowany: () => false, agentBrowser: () => ({ ok: true, detal: '' }) } })
+  assert.deepEqual([zle.e2e.ok, zle.e2e.scenariusze, zle.e2e.figmaScreens], [false, 0, true])
+  assert.match(zle.e2e.bledy.join('\n'), /\.env\.e2e nie jest w \.gitignore/)
+  assert.ok(!zle.e2e.uwagi.some((u) => /skilla weryfikacji/.test(u)), 'bez scenariuszy [E2E] skill weryfikacji nie jest potrzebny')
+  rmSync(join(k, '.env.e2e'))
+  const bezEnv = gotowosc(k, ZADANIE, { narzedzia: { czyIgnorowany: () => false, agentBrowser: () => ({ ok: false, detal: 'x' }) } })
+  assert.deepEqual([bezEnv.e2e.ok, bezEnv.e2e.bledy], [true, []])
+}))
+
+test('gotowosc po fazie 1: plik zmieniony przez faze nie zatrzymuje bramki (budzet wobec repo sprawdza generuj)', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  writeFileSync(join(k, 'src/services/oferty-service.ts'), 'const x = 1\n'.repeat(60))
+  git(k, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qam', 'feat: faza 1'])
+  assert.equal(cli(k, ['gotowosc', ZADANIE]).kod, 0)
+  assert.equal(cli(k, ['sprawdz', PLAN]).kod, 1)
+}))
+
+test('linie: liczba linii kodu jak ESLint dla kolumny „dziś”; brak pliku = null', () => wRepo((k) => {
+  writeFileSync(join(k, 'src/x.ts'), '// opis\n\nconst a = 1\n')
+  assert.deepEqual(cli(k, ['linie', 'src/x.ts', 'src/brak.ts']).json.linie, { 'src/x.ts': 1, 'src/brak.ts': null })
+}))
+
+test('wyjatek skryptu: kod 3 z JSON, nie kod 1 jak plan do poprawy; sciezka absolutna planu dziala', () => wRepo((k) => {
+  mkdirSync(join(k, 'docs/plans/katalog.md'))
+  const w = cli(k, ['sprawdz', 'docs/plans/katalog.md'])
+  assert.equal(w.kod, 3)
+  assert.equal(w.json.ok, false)
+  assert.equal(cli(k, ['sprawdz', join(k, PLAN)]).kod, 0)
+}))
+
+test('gotowosc: brak planu technicznego pod wskaznikiem to blad planu, nie wyjatek', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  rmSync(join(k, PLAN))
+  const w = gotowosc(k, ZADANIE)
+  assert.equal(w.plan.ok, false)
+  assert.match(w.plan.bledy[0], /brak planu technicznego \(wskaźnik w planie zadania: docs\/plans\//)
+}))
+
+// P25 A2: aplikacja z serwerem API (katalog server/ albo skrypt *:server) i sonda E2E bez tresci — sam Vite przechodzi sonde
+// fallbackiem SPA, a zapisy przez /api dostaja 404 (vibersi etapy 4–5). Uwaga przy planowaniu, nie STOP.
+test('gotowosc: serwer API bez E2E_HEALTH_TRESC = uwaga E2E z sekcja README; z trescia albo bez serwera — bez uwagi', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  const uwagaApi = (/** @type {string[]} */ u) => u.filter((t) => /serwer API/.test(t))
+  assert.deepEqual(uwagaApi(gotowosc(k, ZADANIE).e2e.uwagi), [])
+  mkdirSync(join(k, 'server'))
+  writeFileSync(join(k, 'server/app.ts'), 'export {}\n')
+  const [uwaga] = uwagaApi(gotowosc(k, ZADANIE).e2e.uwagi)
+  assert.match(uwaga ?? '', /E2E_HEALTH_TRESC/)
+  assert.match(uwaga ?? '', /Aplikacja z osobnym serwerem API/)
+  writeFileSync(join(k, '.env.e2e'), "X=1\nE2E_HEALTH=http://localhost:5174/healthz\nE2E_HEALTH_TRESC='\"status\":\"ok\"'\n")
+  assert.deepEqual(uwagaApi(gotowosc(k, ZADANIE).e2e.uwagi), [])
+  rmSync(join(k, 'server'), { recursive: true })
+  writeFileSync(join(k, '.env.e2e'), 'X=1\n')
+  writeFileSync(join(k, 'package.json'), JSON.stringify({ scripts: { 'build:server': 'esbuild server/index.ts' } }))
+  assert.equal(uwagaApi(gotowosc(k, ZADANIE).e2e.uwagi).length, 1, 'skrypt build:server tez oznacza serwer API')
+  for (const zly of ['{ zly', '{"scripts":null}']) {
+    writeFileSync(join(k, 'package.json'), zly)
+    assert.deepEqual(uwagaApi(gotowosc(k, ZADANIE).e2e.uwagi), [], `${zly}: bez uwagi i bez wyjatku bramki`)
+  }
+}))
+
+// P27 (1) (vibersi etap 5): E2E_HEALTH=<E2E_URL>/healthz, a proxy Vite tylko na /api — /healthz dostal fallback SPA (index.html),
+// sonda z E2E_HEALTH_TRESC dala STOP startu. Uwaga przy planowaniu, gdy sciezki sondy nie ma w vite.config.*.
+test('gotowosc: sciezka E2E_HEALTH na porcie Vite bez wpisu w vite.config = uwaga; w proxy, pod /api albo na porcie serwera — bez uwagi', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  const uwagaProxy = (/** @type {string[]} */ u) => u.filter((t) => /proxy Vite/.test(t))
+  const vite = (/** @type {string} */ klucze) => writeFileSync(join(k, 'vite.config.ts'), `export default { server: { proxy: { ${klucze} } } }\n`)
+  const env = (/** @type {string} */ zdrowie, tresc = "E2E_HEALTH_TRESC='ok'\n") => writeFileSync(join(k, '.env.e2e'), `X=1\nE2E_URL=http://localhost:5174\nE2E_HEALTH=${zdrowie}\n${tresc}`)
+  vite("'/api': 'http://localhost:8787'")
+  env('http://localhost:5174/healthz')
+  const [uwaga] = uwagaProxy(gotowosc(k, ZADANIE).e2e.uwagi)
+  assert.match(uwaga ?? '', /ścieżki \/healthz z E2E_HEALTH nie ma w trasach proxy vite\.config\.ts/)
+  assert.match(uwaga ?? '', /Aplikacja z osobnym serwerem API/)
+  vite("'/api': 'http://localhost:8787', '/healthz': 'http://localhost:8787'")
+  assert.deepEqual(uwagaProxy(gotowosc(k, ZADANIE).e2e.uwagi), [])
+  vite("'^/healthz': 'http://localhost:8787'")
+  assert.deepEqual(uwagaProxy(gotowosc(k, ZADANIE).e2e.uwagi), [], 'klucz proxy jako wyrazenie z ^')
+  vite("'/api': 'http://localhost:8787'")
+  env('http://localhost:5174/api/health')
+  assert.deepEqual(uwagaProxy(gotowosc(k, ZADANIE).e2e.uwagi), [], 'sciezka pod /api')
+  env('http://localhost:5174/apihealth')
+  assert.equal(uwagaProxy(gotowosc(k, ZADANIE).e2e.uwagi).length, 1, '/api nie jest prefiksem segmentu /apihealth')
+  env('http://localhost:8787/healthz')
+  assert.deepEqual(uwagaProxy(gotowosc(k, ZADANIE).e2e.uwagi), [], 'sonda wprost na porcie serwera')
+  env('http://localhost:5174')
+  assert.deepEqual(uwagaProxy(gotowosc(k, ZADANIE).e2e.uwagi), [], 'sonda na stronie glownej')
+  rmSync(join(k, 'vite.config.ts'))
+  env('http://localhost:5174/healthz')
+  assert.deepEqual(uwagaProxy(gotowosc(k, ZADANIE).e2e.uwagi), [], 'bez vite.config — projekt nie na Vite')
+}))
+
+// Recenzja S1 (P2-1, P3-3, P3-4): bez E2E_HEALTH_TRESC sonda przechodzi na kazdej trasie (rada „dodaj do proxy” psulaby trase
+// aplikacji); alias hosta to ten sam port Vite; liczą się tylko klucze proxy (bez komentarzy, `base`, aliasow), klucz z ^ = regex.
+test('gotowosc: uwaga proxy sondy tylko z E2E_HEALTH_TRESC, alias hosta, klucze proxy bez komentarzy, klucze-regexy Vite', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  const uwagaProxy = () => gotowosc(k, ZADANIE).e2e.uwagi.filter((t) => /proxy Vite/.test(t))
+  const vite = (/** @type {string} */ tresc) => writeFileSync(join(k, 'vite.config.ts'), tresc)
+  const env = (/** @type {string} */ zdrowie, tresc = "E2E_HEALTH_TRESC='ok'\n") => writeFileSync(join(k, '.env.e2e'), `X=1\nE2E_URL=http://localhost:5174\nE2E_HEALTH=${zdrowie}\n${tresc}`)
+  vite("export default { server: { proxy: { '/api': 'http://localhost:8787' } } }\n")
+  env('http://localhost:5174/login', '')
+  assert.deepEqual(uwagaProxy(), [], 'bez E2E_HEALTH_TRESC — trasa aplikacji, bez rady')
+  env('http://127.0.0.1:5174/healthz')
+  assert.equal(uwagaProxy().length, 1, '127.0.0.1 i localhost to ten sam serwer Vite')
+  const przypadki = /** @type {[string, string, number][]} */ ([
+    ["export default { base: '/', server: { proxy: { '/api': 'x' } } }", '/healthz', 1],
+    ["export default { server: { proxy: {\n  // '/healthz': 'x',\n  '/api': 'x' } } }", '/healthz', 1],
+    ["export default { resolve: { alias: { '@': '/src' } }, server: { proxy: { '/api': 'x' } } }", '/src/health', 1],
+    ["export default { server: { proxy: { '/api': { target: 'x', rewrite: (p) => p.replace(/^\\/api/, '/healthz') } } } }", '/healthz', 1],
+    ["export default { server: { proxy: { '^/api/.*': 'x' } } }", '/api/health', 0],
+    ["export default { server: { proxy: { '^/(api|healthz)': 'x' } } }", '/healthz', 0],
+    ["export default { server: { proxy: { '/healthz': 'http://localhost:8787' } } }", '/healthz/', 0],
+    ["export default { server: { proxy: { '/api/': 'x' } } }", '/api/health', 0],
+    ["export default { server: { proxy: { '^/(': 'x' } } }", '/healthz', 1],
+    ["export default { define: { '/healthz': 'x' }, server: { proxy: { '/api': 'x' } } }", '/healthz', 1],
+    ["export default { server: { proxy: { '^/healthz$': 'x' } } }", '/healthz/', 0],
+    // vibersi etap 6a: proxy z funkcji (`proxySerweraE2e(...)` z tablicy tras) — kluczy nie widac, liczy sie napis-sciezka w pliku
+    ["const TRASY = ['/api/', '/healthz'] as const\nexport default { server: { proxy: zTras(TRASY) } }", '/healthz', 0],
+    ["const TRASY = ['/api/'] as const\nexport default { server: { proxy: zTras(TRASY) } }", '/healthz', 1],
+    ["export default { server: { proxy } }", '/healthz', 1],
+  ])
+  for (const [tresc, sciezka, ile] of przypadki) {
+    vite(`${tresc}\n`)
+    env(`http://localhost:5174${sciezka}`)
+    assert.equal(uwagaProxy().length, ile, `${tresc} / ${sciezka}`)
+  }
+}))
+
+// P3 pkt 96 M15: uwagi serwera API i proxy sondy dotycza scenariuszy [E2E] — zadanie bez nich (same makiety albo nic) ich nie
+// dostaje; mutacja usuwajaca warunek `scenariusze` w gotowosc przezywala.
+test('gotowosc: serwer API i sonda poza proxy bez scenariuszy [E2E] — bez uwag (dotycza tylko scenariuszy)', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  mkdirSync(join(k, 'server'))
+  writeFileSync(join(k, 'server/app.ts'), 'export {}\n')
+  writeFileSync(join(k, 'vite.config.ts'), "export default { server: { proxy: { '/api': 'http://localhost:8787' } } }\n")
+  const env = (/** @type {string} */ tresc) => writeFileSync(join(k, '.env.e2e'), `X=1\nE2E_URL=http://localhost:5174\nE2E_HEALTH=http://localhost:5174/healthz\n${tresc}`)
+  const uwagi = (/** @type {RegExp} */ wzor) => gotowosc(k, ZADANIE).e2e.uwagi.filter((u) => wzor.test(u)).length
+  env('')
+  assert.equal(uwagi(/serwer API/), 1, 'ze scenariuszami, sonda bez tresci: uwaga serwera API')
+  env("E2E_HEALTH_TRESC='ok'\n")
+  assert.equal(uwagi(/proxy Vite/), 1, 'ze scenariuszami, sonda z trescia poza proxy: uwaga proxy')
+  const zadania = join(k, ZADANIE, 'publikacja-ofert-zadania.md')
+  writeFileSync(zadania, readFileSync(zadania, 'utf8').replace(/\[E2E\]/g, '[Manual]'))
+  assert.equal(gotowosc(k, ZADANIE).e2e.scenariusze, 0)
+  assert.equal(uwagi(/proxy Vite/), 0)
+  env('')
+  assert.equal(uwagi(/serwer API/), 0)
+}))
+
+// P25 A1: autopilot zatrzymuje sie przed faza z nieodhaczonym blokerem — bootstrap przepisuje ten wynik 1:1. vibersi etap 5:
+// pozycja „[blokuje: faza 3]” byla tylko w planie zadania i run przeszedl fazy 3–6 bez serwera Hono w E2E.
+test('blokery: nieodhaczone pozycje checklisty z numerem fazy (start = faza 1), odhaczone pominiete; bez checklisty pusto', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  const w = cli(k, ['blokery', ZADANIE])
+  assert.equal(w.kod, 0, JSON.stringify(w.json))
+  assert.deepEqual(w.json, { ok: true, checklista: PREP, blokery: [{ faza: 2, linia: 3, tresc: 'Klucz mapy — **[blokuje: faza 2]** (IU-2)' }] })
+  writeFileSync(join(k, PREP), '# P\n\n- [ ] Konto — **[blokuje: planowanie]**\n- [ ] Dostęp — **[blokuje: faza 1]**\n- [x] Klucz — **[blokuje: faza 2]**\n')
+  assert.deepEqual(cli(k, ['blokery', ZADANIE]).json.blokery.map((/** @type {{ faza: number }} */ b) => b.faza), [1, 1])
+  writeFileSync(join(k, PREP), '# P\n\n- [ ] Klucz — **[blokuje: faza 2]**\n- [ ] Konto — **[blokuje: faza 1]**\n')
+  assert.deepEqual(cli(k, ['blokery', ZADANIE]).json.blokery.map((/** @type {{ linia: number }} */ b) => b.linia), [3, 4], 'kolejnosc linii checklisty')
+  rmSync(join(k, PREP))
+  assert.deepEqual(cli(k, ['blokery', ZADANIE]).json, { ok: true, checklista: PREP, blokery: [] })
+}))
+
+test('liczScenariuszeE2e: grep precheck/completion-gate — kopie Operator: i findingi [P1-3] nie sa scenariuszami', () => {
+  const md = ['- [ ] Test: [E2E] `a` — x → y', '- [x] Test: [E2E] `b` — x → y', '- [ ] Operator: [E2E] `a`', '- [ ] 🟠 [P2] [E2E] plik',
+    '  - [ ] Test: [E2E] `c` — wciety', '- [ ] Weryfikacja: [E2E] `e2e/run-all.sh` — ok'].join('\n')
+  assert.equal(liczScenariuszeE2e(md), 2)
+})
+
+test('zle argumenty: kod 2', () => wRepo((k) => {
+  assert.equal(cli(k, ['generuj']).kod, 2)
+  assert.equal(cli(k, ['nieznane', PLAN]).kod, 2)
+  assert.equal(cli(k, ['generuj', PLAN, '--data', '7.10.2026']).kod, 2)
+  assert.equal(cli(k, ['sprawdz', 'docs/plans/brak.md']).kod, 2)
+}))

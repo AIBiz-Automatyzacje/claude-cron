@@ -28,13 +28,11 @@ Kompleksowy przewodnik integracji Sentry error tracking i performance monitoring
 
 ## Critical Rules
 
-**NIGDY NIE ŁAMIESZ TYCH ZASAD:**
-
-1. **ALL ERRORS MUST BE CAPTURED TO SENTRY** - w produkcji każdy błąd musi trafić do Sentry
-2. **NIGDY `console.error` bez Sentry** - w Edge Functions każdy `console.error` musi mieć `captureError()`
-3. **MASKUJ DANE OSOBOWE** - email musi być maskowany: `user@example.com` → `us***@example.com`
-4. **NIE WYSYŁAJ WRAŻLIWYCH DANYCH** - hasła, tokeny, klucze API NIGDY nie trafiają do Sentry
-5. **UŻYWAJ ODPOWIEDNICH POZIOMÓW** - `fatal` tylko dla krytycznych, `error` dla operacji
+1. **Nieoczekiwany błąd trafia do Sentry** — wyjątek bez obsługi, awaria usługi albo błąd bazy wysyłasz przez `logger.error` (frontend) albo `captureError` (Edge Functions), bo w produkcji tylko Sentry pokazuje go operatorowi. Oczekiwana odmowa (błąd walidacji, 401, 403, 404, przekroczony limit) zostaje odpowiedzią z kodem błędu i wpisem `logger.info` (we froncie breadcrumb bez zdarzenia), bo zdarzenia z odmów zakrywają prawdziwe awarie.
+2. **W Edge Functions błąd zapisuje `await captureError(...)`** — helper izoluje kontekst zdarzenia (`withScope`) i robi `flush` przed odpowiedzią; sam log funkcji nie wystarcza, bo nikt go nie przegląda, a izolat może zostać zamrożony, zanim zdarzenie wyjdzie. `console.*` w Edge Functions stoi tylko wewnątrz helperów z `_shared/` (`captureError` i `logger` — wzory w `resources/edge-functions-sentry.md`), bo reguły kodu wyłączają go z reszty kodu produkcyjnego.
+3. **Użytkownika identyfikuje `id`** — `setSentryUser`, `setUser` i kontekst przekazują tylko identyfikator, bez emaila i imienia, a `beforeSend` maskuje email, który trafi do zdarzenia mimo to (`us***@example.com`), bo zdarzenie widzi każdy z dostępem do projektu Sentry, a RODO wymaga minimalizacji danych.
+4. **Kontekst zdarzenia to identyfikatory i nazwy operacji** — hasła, tokeny, klucze API, nagłówek `Authorization` i ciała żądań zostają poza `setContext`, tagami i breadcrumbami, bo Sentry to zewnętrzny serwis i sekret wysłany tam trzeba uznać za ujawniony.
+5. **Poziom odpowiada skutkowi** — `fatal` tylko dla awarii całego systemu, `error` dla nieudanej operacji użytkownika, `warning` dla problemu odwracalnego (tabela Error Levels niżej), bo zawyżony poziom uczy operatora ignorować alerty.
 
 ---
 
@@ -54,7 +52,7 @@ ma gwarancji scope separation między requestami w tym samym isolate. Nadal stos
 | `await Sentry.flush()` przed `Response` | Isolate może zostać zamrożony zaraz po odpowiedzi |
 | Maskuj PII w `beforeSend` | Jeden centralny punkt dla wszystkich zdarzeń |
 
-**Zawsze używaj tego wzorca:**
+**Wzorzec kontekstu per request:**
 ```typescript
 // ŹLE - kontekst wycieknie do innych requestów
 Sentry.setTag('user_id', userId);
@@ -125,27 +123,31 @@ Sentry.withScope((scope) => {
 
 ### Edge Functions (Deno)
 
-**Każda funkcja MUSI mieć Sentry z `withScope`:**
+**Edge Function z Sentry i `withScope`:**
 ```typescript
 import { withSupabase } from 'npm:@supabase/server@^1';
 import { initSentry, captureError } from '../_shared/sentry.ts';
 
 const Sentry = initSentry('function-name');
 
-// WAŻNE: export default { fetch } + withSupabase zamiast Deno.serve.
+// export default { fetch } + withSupabase zamiast Deno.serve.
 // Tryb auth per funkcja ('user' | 'publishable' | 'secret' | 'none');
 // dla trybu innego niż 'user' -> verify_jwt = false w supabase/config.toml.
 export default {
   fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
     try {
-      // logika — ctx.supabase (RLS), ctx.userClaims?.sub = user_id
+      // logika — ctx.supabase (RLS), ctx.userClaims?.id = user_id
     } catch (error) {
-      // ZAWSZE await captureError (używa withScope + flush wewnętrznie)
+      // await captureError: withScope + flush wewnętrznie
       await captureError(error, {
         operation: 'checkout',
-        user_id: ctx.userClaims?.sub  // NIE user_email (GDPR)
+        user_id: ctx.userClaims?.id  // identyfikator, bez emaila (zasada 3)
       });
-      return new Response(JSON.stringify({ error: 'Error' }), { status: 500 });
+      // koperta błędu z reguł kodu; szczegóły tylko w Sentry
+      return Response.json(
+        { data: null, error: { code: 'INTERNAL', message: 'Operacja nie powiodła się' } },
+        { status: 500 },
+      );
     }
   }),
 };
@@ -155,12 +157,11 @@ export default {
 
 ## Context Enrichment
 
-**ZAWSZE dodawaj kontekst do błędów:**
+**Kontekst błędu (tagi, kontekst operacji, breadcrumbs):**
 
 ```typescript
-// DOBRZE - bogaty kontekst
+// DOBRZE - bogaty kontekst (użytkownika ustawia setSentryUser przy logowaniu)
 Sentry.withScope((scope) => {
-  scope.setUser({ id: userId, email: maskedEmail });
   scope.setTag('service', 'payments');
   scope.setTag('endpoint', '/checkout');
   scope.setContext('operation', {
@@ -184,10 +185,10 @@ Sentry.captureException(error); // Skąd? Co? Dla kogo?
 
 ## GDPR Compliance
 
-**Maskowanie emaili - OBOWIĄZKOWE:**
+**Użytkownik przez `id`, maskowanie emaila jako siatka (zasada 3):**
 
 ```typescript
-// W beforeSend
+// W beforeSend — email, który trafił do zdarzenia mimo zasady 3
 beforeSend(event) {
   if (event.user?.email) {
     event.user.email = event.user.email.replace(/^(.{2}).*(@.*)$/, '$1***$2');
@@ -196,12 +197,9 @@ beforeSend(event) {
 }
 
 // W setSentryUser
-export function setSentryUser(user: { id: string; email: string } | null) {
+export function setSentryUser(user: { id: string } | null) {
   if (user) {
-    Sentry.setUser({
-      id: user.id,
-      email: user.email.replace(/^(.{2}).*(@.*)$/, '$1***$2'),
-    });
+    Sentry.setUser({ id: user.id });
   } else {
     Sentry.setUser(null);
   }
@@ -215,18 +213,18 @@ export function setSentryUser(user: { id: string; email: string } | null) {
 Przed każdym PR sprawdź:
 
 - [ ] Zaimportowano Sentry lub odpowiedni helper
-- [ ] Wszystkie bloki try/catch wysyłają do Sentry
+- [ ] Każdy nieoczekiwany błąd trafia do Sentry; oczekiwane odmowy nie (zasada 1)
 - [ ] Dodano znaczący kontekst (tagi, breadcrumbs)
 - [ ] Użyto odpowiedniego poziomu błędu
 - [ ] Brak wrażliwych danych w event (hasła, tokeny)
-- [ ] Email użytkownika jest maskowany
+- [ ] Użytkownik w zdarzeniu tylko przez `id`; `beforeSend` maskuje email
 - [ ] Przetestowano ścieżki błędów
 
 ---
 
 ## Common Mistakes
 
-**NIE RÓB:**
+**Unikaj:**
 ```typescript
 // Połykanie błędów
 try {
@@ -241,12 +239,12 @@ try {
 }
 
 // Wrażliwe dane
-Sentry.setContext('auth', { token: userToken }); // NIE!
+Sentry.setContext('auth', { token: userToken }); // token w zewnętrznym serwisie
 ```
 
-**RÓB:**
+**Zamiast tego:**
 ```typescript
-// Zawsze capture + informacja dla użytkownika
+// Capture + informacja dla użytkownika
 try {
   await operation();
 } catch (error) {
@@ -269,8 +267,3 @@ Szczegółowe wzorce znajdują się w:
 
 - **[react-sentry-patterns.md](resources/react-sentry-patterns.md)** - Pełna konfiguracja React + Vite, ErrorBoundary, performance, session replay
 - **[edge-functions-sentry.md](resources/edge-functions-sentry.md)** - Wzorce dla Supabase Edge Functions (Deno), shared helpers, Stripe tracking
-
----
-
-**Skill Status**: COMPLETE
-**Progressive Disclosure**: Szczegółowe wzorce w plikach `resources/`

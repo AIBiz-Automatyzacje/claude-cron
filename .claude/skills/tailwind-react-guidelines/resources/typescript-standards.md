@@ -1,13 +1,12 @@
 # Standardy TypeScript
 
-Wytyczne TypeScript 6.x/7.x i React 19 - konfiguracja, typy, nowoczesne wzorce.
-(TS 7.0 GA 2026-07-08 — natywny kompilator; od 6.0 `strict`, `noUncheckedSideEffectImports` i nowoczesny `target` są domyślne. Wersje wg devblogs.microsoft.com/typescript — sprawdź przy podbiciu.)
+Wytyczne TypeScript i React 19 - konfiguracja, typy, nowoczesne wzorce.
 
-**Stan wersji:** TS 6.0 to aktualne GA oparte jeszcze na JS-owym kompilatorze (zmiany domyślnych:
-`strict: true` domyślnie, target ES5 usunięty — domyślny target przesunięty na nowoczesny ES).
-TS 7.0 to natywny kompilator (GA 2026-07-08, 8-12x szybszy), ale ekosystem (Vue/Svelte/Astro)
-czeka na 7.1 dla pełnego wsparcia edytorów. Dla tego stacku (Vite SPA + React) bezpieczny wybór
-to 6.x — 7.0 opcjonalnie, gdy toolchain będzie gotowy.
+**Wersja TypeScriptu:** wg package.json projektu. Od TypeScriptu 6 `strict`, `noUncheckedSideEffectImports`
+i nowoczesny `target` są domyślne (target ES5 usunięty), ale w tsconfig zapisujesz je jawnie, żeby konfiguracja
+nie zależała od wersji kompilatora. TypeScript 7 to natywny kompilator; przejście na niego to zmiana zależności,
+którą zgłaszasz, po sprawdzeniu, czy toolchain projektu (edytor, typescript-eslint, Vite) go obsługuje.
+Zmiany domyślnych przy podbiciu wersji sprawdzasz w notach wydania na devblogs.microsoft.com/typescript.
 
 ---
 
@@ -21,15 +20,19 @@ to 6.x — 7.0 opcjonalnie, gdy toolchain będzie gotowy.
         "noUnusedParameters": true,
         "noFallthroughCasesInSwitch": true,
         "noUncheckedSideEffectImports": true,
-        
-        // Moduły (standard 2026)
+
+        // Tylko składnia usuwalna bez transformacji (nowy projekt)
+        "erasableSyntaxOnly": true,
+
+        // Moduły
         "target": "ES2022",
         "lib": ["DOM", "DOM.Iterable", "ESNext"],
         "module": "ESNext",
         "moduleResolution": "bundler",
         "verbatimModuleSyntax": true,
         "allowImportingTsExtensions": true,
-        
+        "noEmit": true,
+
         // React 19
         "jsx": "react-jsx"
     }
@@ -37,34 +40,37 @@ to 6.x — 7.0 opcjonalnie, gdy toolchain będzie gotowy.
 ```
 
 **Kluczowe flagi:**
+- `strict` i `verbatimModuleSyntax` — wymagane przez reguły kodu (sekcja Type safety)
+- `erasableSyntaxOnly: true` — w nowym projekcie (reguły kodu, Type safety). Zabrania `enum`, `namespace` z kodem i parameter properties (`constructor(private x: string)`), czyli składni, której nie da się usunąć bez transformacji; zamiast `enum` — obiekt `as const` z sekcji niżej, zamiast parameter properties — pola klasy przypisane w konstruktorze
 - `moduleResolution: "bundler"` - standard dla Vite i nowoczesnych bundlerów
 - `verbatimModuleSyntax: true` - zastępuje stare `importsNotUsedAsValues` i `preserveValueImports`
 - `noUncheckedSideEffectImports` - TS 5.6+, wymusza explicit side-effect imports
+- `allowImportingTsExtensions` działa tylko z `noEmit` (albo `emitDeclarationOnly`) — w Vite pliki emituje bundler, `tsc` tylko sprawdza typy
 
 ---
 
 ## Type Imports (Inline Syntax)
 
-Preferowana składnia 2026 - jeden import z type modifier:
+Preferowana składnia - jeden import z type modifier:
 ```typescript
-// TAK - inline type imports (standard 2026)
-import { 
-    useState, 
-    useEffect, 
-    useCallback,
-    type FC, 
+// TAK - inline type imports
+import {
+    useEffect,
+    useRef,
+    useState,
+    type FC,
     type ReactNode,
-    type RefObject 
+    type RefObject
 } from 'react';
 
-import { 
-    supabase,
-    type Template,
-    type User 
-} from '@/lib/supabase';
+// Hook importuje serwis, nie klienta bazy; komponent importuje hook (warstwy: komponent → hook → serwis → klient)
+import {
+    templateService,
+    type TemplateFilters
+} from '@/services/template-service';
 
-// OK - oddzielne (gdy tylko typy)
-import type { Database } from '@/types/database';
+// OK - oddzielne (gdy tylko typy); typy tabel z wygenerowanego pliku typów
+import type { Database, Tables } from '@/types/database.types';
 
 // NIE - stary styl
 import { FC, ReactNode } from 'react'; // Jeśli to tylko typy
@@ -78,7 +84,7 @@ interface MyComponentProps {
     /** ID użytkownika */
     userId: string;
     /** Czy wyłączony */
-    disabled?: boolean;
+    isDisabled?: boolean;
     /** Callback */
     onAction?: () => void;
     /** Children */
@@ -87,7 +93,7 @@ interface MyComponentProps {
 
 export const MyComponent = ({
     userId,
-    disabled = false,
+    isDisabled = false,
     onAction,
     children
 }: MyComponentProps) => {
@@ -99,40 +105,53 @@ export const MyComponent = ({
 - JSDoc komentarze dla props
 - Opcjonalne props z `?`
 - Domyślne wartości w destrukturyzacji
+- Boolean własnego komponentu z prefiksem `is` / `has` / `should` / `can` (`isDisabled`, sekcja Nazewnictwo reguł kodu); prop przekazywany wprost do elementu HTML albo komponentu biblioteki (`disabled`, `open`) zostaje przy nazwie z ich API
 
 ---
 
 ## React 19: Ref jako Prop
 
-W React 19 `forwardRef` **nie jest już potrzebny** (zostanie oznaczony jako deprecated w przyszłym wydaniu; w 19.2 brak warningu). Ref to zwykły prop:
+W React 19 `forwardRef` **nie jest potrzebny** — React zapowiada jego wycofanie, a ref to zwykły prop. Ten sam komponent `Input` pokazuje [component-patterns.md](./component-patterns.md#react-19-ref-jako-prop): `id` wyjmujesz z propsów (`id ?? generatedId`), bo inaczej `{...props}` po `id={inputId}` nadpisze identyfikator i etykieta (`htmlFor`) wskaże nieistniejące pole.
 ```typescript
 // React 19 - ref jako prop
+import { useId, useRef } from 'react';
+
+import { cn } from '@/lib/utils';
+
 interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
     label?: string;
     error?: string;
     ref?: React.Ref<HTMLInputElement>;
 }
 
-export const Input = ({ 
-    label, 
-    error, 
+export const Input = ({
+    label,
+    error,
     ref,
+    id,
     className,
-    ...props 
+    ...props
 }: InputProps) => {
+    const generatedId = useId();
+    const inputId = id ?? generatedId;
+    const errorId = `${inputId}-error`;
+
     return (
         <div className="flex flex-col gap-1">
-            {label && <label className="text-sm font-medium">{label}</label>}
+            {label && <label htmlFor={inputId} className="text-sm font-medium">{label}</label>}
             <input
+                {...props}
                 ref={ref}
+                id={inputId}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? errorId : undefined}
                 className={cn(
                     "px-3 py-2 border rounded-md",
                     error && "border-destructive",
                     className
                 )}
-                {...props}
             />
-            {error && <span className="text-sm text-destructive">{error}</span>}
+            {error && <p id={errorId} role="alert" className="text-sm text-destructive">{error}</p>}
         </div>
     );
 };
@@ -159,25 +178,7 @@ const Input = ({ ref, ...props }: Props & { ref?: React.Ref<HTMLInputElement> })
 
 ## React 19: Async Components
 
-Komponenty mogą być async (Server Components):
-```typescript
-// Async component - zwraca Promise<JSX.Element>
-export async function UserProfile({ userId }: { userId: string }) {
-    const user = await db.users.get(userId);
-    
-    return (
-        <div>
-            <h1>{user.name}</h1>
-            <p>{user.email}</p>
-        </div>
-    );
-}
-
-// TypeScript poprawnie typuje Promise
-type AsyncComponent = () => Promise<JSX.Element>;
-```
-
-**Uwaga:** Async components działają w Server Components (frameworki SSR). W Vite SPA używaj standardowych komponentów + React Query do data fetchingu.
+Komponenty async istnieją tylko jako Server Components we frameworkach SSR i nie dotyczą Vite SPA. Tu komponent jest synchroniczny, a dane pobiera hook z TanStack Query (komponent → hook → serwis), opisany w [performance.md](./performance.md#react-query-rekomendowane-dla-spa).
 
 ---
 
@@ -190,14 +191,30 @@ const items = templates.filter(t => t.active);   // Item[]
 
 // Explicit gdy null/undefined
 const [user, setUser] = useState<User | null>(null);
-const [error, setError] = useState<Error | undefined>(undefined);
+
+// Explicit dla unii stanów — jedna unia dyskryminowana zamiast kilku flag (isLoading, error, data)
+type SaveState =
+    | { status: 'idle' }
+    | { status: 'saving' }
+    | { status: 'error'; code: string };
+const [saveState, setSaveState] = useState<SaveState>({ status: 'idle' });
 
 // Explicit dla pustych tablic
 const [items, setItems] = useState<Item[]>([]);
 
-// Explicit return types dla publicznych funkcji
-async function getItems(): Promise<Item[]> {
-    // ...
+// Explicit return types dla publicznych funkcji (utilsy, metody serwisów — itemService
+// w file-organization.md ma je przy każdej metodzie: `list: (...): Promise<ItemList> => ...`)
+export function formatDate(date: Date | string): string {
+    return new Intl.DateTimeFormat('pl-PL').format(new Date(date));
+}
+
+// Bez ręcznego typu zwracanego: komponent React (typ z JSX) i hook, który zwraca wynik
+// hooka biblioteki (useQuery, useForm) — ręczny zapis tylko powtórzyłby wywnioskowany typ
+export function useItems(filters: ItemFilters) {
+    return useQuery({
+        queryKey: itemKeys.list(filters),
+        queryFn: ({ signal }) => itemService.list(filters, signal),
+    });
 }
 ```
 
@@ -210,30 +227,33 @@ Waliduje typ BEZ poszerzania go:
 // Bez satisfies - typ poszerzony
 const config = {
     theme: 'dark',
-    debug: true,
+    isDebug: true,
 };
 // config.theme: string
 
 // Z satisfies - walidacja + literal types
 interface Config {
     theme: 'light' | 'dark';
-    debug: boolean;
+    isDebug: boolean;
 }
 
 const config = {
     theme: 'dark',
-    debug: true,
+    isDebug: true,
 } satisfies Config;
 // config.theme: "dark" (literal!)
 
-// Praktyczny przykład - routes
-const ROUTES = {
-    home: '/',
-    settings: '/settings',
-    profile: '/profile',
-} satisfies Record<string, string>;
+// Praktyczny przykład - routes (src/constants/routes.ts; jedyna definicja tras
+// w projekcie, pełna lista w file-organization.md)
+export const ROUTES = {
+    HOME: '/',
+    SETTINGS: '/settings',
+    PROFILE: '/profile',
+} as const satisfies Record<string, string>;
 
-// ROUTES.home jest typu "/" nie string
+// ROUTES.HOME jest typu "/" nie string — literał daje as const,
+// a satisfies sprawdza, że każda wartość jest stringiem.
+// Samo `satisfies Record<string, string>` zostawiłoby typ string: kontekst string poszerza literał.
 ```
 
 ---
@@ -299,23 +319,25 @@ const config = defineConfig({
 
 Blokuje niechcianą inferencję w generykach:
 ```typescript
-// Problem bez NoInfer
-function createState<T>(initial: T, defaultValue: T) {
-    return { initial, defaultValue };
+// Problem bez NoInfer: C wynika z obu argumentów, więc literówka w wartości domyślnej poszerza unię
+function createPalette<C extends string>(colors: C[], defaultColor: C) {
+    return { colors, defaultColor };
 }
-createState('hello', 42); 
-// T = string | number (niechciane poszerzenie!)
+createPalette(['red', 'green'], 'blue');
+// C = 'red' | 'green' | 'blue' — kompiluje się, choć 'blue' nie ma w palecie
 
-// Rozwiązanie z NoInfer
-function createState<T>(initial: T, defaultValue: NoInfer<T>) {
-    return { initial, defaultValue };
+// Rozwiązanie z NoInfer: C wynika tylko z `colors`, a defaultColor jest sprawdzany względem niego
+function createPalette<C extends string>(colors: C[], defaultColor: NoInfer<C>) {
+    return { colors, defaultColor };
 }
-createState('hello', 42); 
-// Error: Argument of type 'number' is not assignable to 'string'
+createPalette(['red', 'green'], 'blue');
+// Error: Argument of type '"blue"' is not assignable to parameter of type '"red" | "green"'
 
 // Praktyczne użycie - default values
-function useLocalStorage<T>(key: string, defaultValue: NoInfer<T>): T {
-    // defaultValue nie wpływa na inferencję T
+// T wynika ze schematu; defaultValue nie wpływa na inferencję, więc zły typ domyślny to błąd kompilacji.
+// Dane z localStorage przechodzą przez Zod (safeParse), nie przez `as`.
+function useLocalStorage<T>(key: string, schema: z.ZodType<T>, defaultValue: NoInfer<T>): T {
+    // ...
 }
 ```
 
@@ -339,34 +361,24 @@ function handleClick() {
 
 ## Runtime Validation z Zod
 
-TypeScript sprawdza typy tylko w compile time. Dla danych zewnętrznych użyj Zod:
+TypeScript sprawdza typy tylko w compile time. Dla danych zewnętrznych użyj Zod. Kontrakt `Item` ma jedną definicję — `src/schemas/item-schema.ts`, a serwis `itemService` (`list`, `get`, `create`, `remove`) — `src/services/item-service.ts`; oba w [file-organization.md](./file-organization.md#katalog-schemas). Tu tylko to, co z nich wynika dla typów: schemat jest zmienną (`itemSchema`, `camelCase`), typ bierzesz z `z.infer`, a `z.strictObject` odrzuca pola spoza kontraktu. Serwis przekazuje schemat do `request()`, który ma limit czasu, parsuje kopertę `{ data, error: { code, message } }` i przy `error` rzuca `ApiError(code, message, status)` — schemat jest jedynym miejscem, które zna kształt `Item`.
 ```typescript
-import { z } from 'zod';
+import { itemService } from '@/services/item-service';
+import type { Item } from '@/schemas/item-schema';
 
-// Schema
-const ItemSchema = z.object({
-    id: z.uuid(),
-    name: z.string().min(1),
-    category: z.enum(['marketing', 'sprzedaz', 'hr']),
-    created_at: z.iso.datetime(),
-});
+// Wynik ma typ Item, bo request() zwraca dane sparsowane itemSchema
+const item: Item = await itemService.get(id, signal);
+```
+```typescript
+// Safe parse — gdy zła wartość ma inną ścieżkę niż wyjątek (payload: unknown)
+import { logger } from '@/lib/logger';
+import { itemSchema } from '@/schemas/item-schema';
 
-// Typ ze schema
-type Item = z.infer<typeof ItemSchema>;
-
-// Walidacja
-async function fetchItem(id: string): Promise<Item> {
-    const response = await fetch(`/api/items/${id}`);
-    const data = await response.json();
-    return ItemSchema.parse(data); // Rzuca błąd jeśli invalid
-}
-
-// Safe parse
-const result = ItemSchema.safeParse(data);
+const result = itemSchema.safeParse(payload);
 if (result.success) {
     // result.data jest typu Item
 } else {
-    logger.error('Invalid data', result.error);
+    logger.error('ITEM_PARSE_FAILED', result.error);
 }
 ```
 
@@ -384,26 +396,31 @@ function isItem(item: unknown): item is Item {
     );
 }
 
-// Discriminated unions
-interface SuccessResponse {
-    status: 'success';
-    data: Item[];
+// Discriminated unions — koperta API z reguł kodu: { data, error: { code, message } }
+interface ApiSuccess<T> {
+    data: T;
+    error: null;
 }
 
-interface ErrorResponse {
-    status: 'error';
-    message: string;
+interface ApiFailure {
+    data: null;
+    error: { code: string; message: string };
 }
 
-type ApiResponse = SuccessResponse | ErrorResponse;
+type ApiEnvelope<T> = ApiSuccess<T> | ApiFailure;
 
-function handleResponse(response: ApiResponse) {
-    if (response.status === 'success') {
-        return response.data;
+// ApiError — klasa błędu z kodem (definicja przy wspólnym kliencie request(), file-organization.md)
+function unwrapEnvelope<T>(envelope: ApiEnvelope<T>, status: number): T {
+    if (envelope.error !== null) {
+        // Zawężone do ApiFailure: typowany błąd z kodem zamiast new Error(message)
+        throw new ApiError(envelope.error.code, envelope.error.message, status);
     }
-    throw new Error(response.message);
+    // Zawężone do ApiSuccess<T>
+    return envelope.data;
 }
 ```
+
+W kodzie aplikacji kopertę rozpakowuje wspólny `request()`; przykład pokazuje, jak `error: null` w jednym wariancie unii zawęża typ bez `as` i bez `!`.
 
 ---
 
@@ -513,9 +530,9 @@ function process(data: unknown) {
 // NIE
 const user = getUser()!;
 
-// TAK
+// TAK - zawężenie i typowany błąd z kodem (NotFoundError zbudowany jak ApiError)
 const user = getUser();
-if (!user) throw new Error('User not found');
+if (!user) throw new NotFoundError('USER_NOT_FOUND');
 ```
 
 ### Type Assertions bez walidacji
@@ -523,9 +540,11 @@ if (!user) throw new Error('User not found');
 // NIE
 const data = response as Item[];
 
-// TAK
-const data = ItemArraySchema.parse(response);
+// TAK — itemSchema z @/schemas/item-schema
+const data = z.array(itemSchema).parse(response);
 ```
+
+`as` zostaje tylko przy zawężaniu typów DOM (`event.target as HTMLInputElement` tam, gdzie TypeScript nie zna elementu) i w `as const`. Dla wartości z zewnątrz — odpowiedzi, `JSON.parse`, `localStorage`, parametrów URL — schemat Zod; dla wartości znanych w kodzie — `satisfies` albo type guard.
 
 ---
 

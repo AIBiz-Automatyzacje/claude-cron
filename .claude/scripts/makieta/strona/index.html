@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Makieta obok aplikacji</title>
+  <link rel="stylesheet" href="/__makieta/strona/styl.css">
+  <script type="module" src="/__makieta/strona/strona.mjs"></script>
+</head>
+<body>
+  <header class="naglowek">
+    <div class="pasek-punktu">
+      <div class="nawigacja">
+        <button type="button" id="poprzedni" aria-label="Poprzedni ekran">←</button>
+        <span id="licznik" class="licznik"></span>
+        <button type="button" id="nastepny" aria-label="Następny ekran">→</button>
+      </div>
+      <span id="status" class="status"></span>
+      <span id="ekran" class="ekran"></span>
+      <code id="trasa" class="trasa"></code>
+      <div id="decyzje" class="decyzje">
+        <button type="button" id="zgodne" class="decyzja decyzja--zgodne">Zgodne</button>
+        <button type="button" id="odstepstwo" class="decyzja">Odstępstwo OK</button>
+        <button type="button" id="blad" class="decyzja decyzja--blad">Zgłoś błąd</button>
+      </div>
+      <button type="button" id="zakoncz" class="zakoncz" hidden>Zakończ przegląd</button>
+    </div>
+    <div class="tresc-wiersz">
+      <dl id="opis" class="opis">
+        <div id="opis-wejscie-wiersz" hidden><dt>Jak wejść</dt> <dd id="opis-wejscie"></dd></div>
+        <div><dt>Sprawdź</dt> <dd id="opis-sprawdz"></dd></div>
+        <div id="opis-stany-wiersz"><dt>Stany</dt> <dd id="opis-stany"></dd></div>
+        <div><dt>Gdzie</dt> <dd id="opis-co"></dd></div>
+      </dl>
+      <button type="button" id="cala-tresc" aria-expanded="false" aria-controls="tresc">Pokaż całą linię</button>
+    </div>
+    <p id="tresc" class="tresc" hidden></p>
+    <form id="form-odstepstwo" class="formularz" hidden>
+      <label for="notatka-odstepstwa">Co się różni i dlaczego to OK</label>
+      <textarea id="notatka-odstepstwa" rows="2" maxlength="300" required></textarea>
+      <button type="submit">Zapisz odstępstwo</button>
+      <button type="button" class="anuluj">Anuluj</button>
+    </form>
+    <form id="form-blad" class="formularz" hidden>
+      <label for="opis-bledu">Co jest nie tak</label>
+      <textarea id="opis-bledu" rows="2" maxlength="300" required></textarea>
+      <label for="urzadzenie-bledu">Urządzenie</label>
+      <select id="urzadzenie-bledu"></select>
+      <label for="zrzut-bledu">Zrzut (opcjonalnie): wklej Cmd+V albo wybierz plik, potem zaznacz fragment myszą</label>
+      <input type="file" id="zrzut-bledu" accept="image/*">
+      <canvas id="podglad-zrzutu" class="podglad-zrzutu" hidden></canvas>
+      <button type="button" id="usun-zrzut" hidden>Usuń zrzut</button>
+      <button type="submit" id="wyslij-blad">Wyślij do sesji</button>
+      <button type="button" class="anuluj">Anuluj</button>
+    </form>
+    <form id="form-koniec" class="formularz" hidden>
+      <p id="podsumowanie" class="podsumowanie"></p>
+      <button type="submit">Wyślij do sesji</button>
+      <button type="button" class="anuluj">Wróć do przeglądu</button>
+    </form>
+    <p id="niejednoznaczny" class="komunikat" hidden>Ta sama treść punktu występuje w checkliście kilka razy — decyzję zapisz w sesji.</p>
+    <p id="komunikat" class="komunikat" role="status" aria-live="polite"></p>
+    <details id="uwagi" class="uwagi">
+      <summary id="uwagi-naglowek">Uwagi narzędzia</summary>
+      <p id="uwagi-tresc"></p>
+      <p class="wyciszony">Checklista: <span id="smoke"></span></p>
+    </details>
+  </header>
+
+  <main class="uklad">
+    <section class="aplikacja" aria-label="Aplikacja w ramkach urządzeń">
+      <div class="pasek">
+        <form id="form-adres" class="adres">
+          <label for="adres" class="ukryty">Trasa w ramkach</label>
+          <input id="adres" type="text" spellcheck="false" autocomplete="off">
+          <button type="submit">Przejdź</button>
+        </form>
+        <button type="button" id="przeladuj">Przeładuj ramki</button>
+        <label class="razem" title="Nawigacja w jednej ramce przenosi pozostałe"><input type="checkbox" id="razem" checked> Ramki razem</label>
+        <button type="button" id="tutaj" hidden>Wszystkie ramki tutaj</button>
+        <button type="button" id="w-karcie">Otwórz w karcie</button>
+        <div class="skala" role="group" aria-label="Skala ramek">
+          <button type="button" data-skala="przewijaj" aria-pressed="true" title="Najszersza ramka na szerokość kolumny, pozostałe obok — przewiń albo przeciągnij rząd">Przewijaj</button>
+          <button type="button" data-skala="wszystkie" aria-pressed="false" title="Wszystkie ramki w szerokości kolumny">Wszystkie</button>
+          <button type="button" data-skala="1:1" aria-pressed="false" title="Rozmiar rzeczywisty">1:1</button>
+        </div>
+      </div>
+      <p id="podpowiedz-logowania" class="wyciszony">Logowanie przez Google albo Facebooka: „Otwórz w karcie”, zaloguj się tam, wróć i kliknij „Przeładuj ramki” — dostawca nie otwiera się w ramce.</p>
+      <details class="urzadzenia">
+        <summary>Urządzenia</summary>
+        <div id="lista-urzadzen" class="lista-urzadzen"></div>
+        <form id="form-wymiar" class="wymiar">
+          <label for="wymiar">Własny wymiar</label>
+          <input id="wymiar" type="text" placeholder="390×844" autocomplete="off">
+          <button type="submit">Dodaj</button>
+        </form>
+        <button type="button" id="domyslne">Domyślne</button>
+      </details>
+      <details id="siec" class="siec">
+        <summary id="siec-naglowek">Sieć</summary>
+        <form id="form-siec" class="form-siec">
+          <label for="opoznienie">Opóźnienie żądań aplikacji</label>
+          <select id="opoznienie"></select>
+          <label for="blokady">Zablokuj adresy (po jednym w linii, * = dowolny ciąg)</label>
+          <textarea id="blokady" rows="2" spellcheck="false" placeholder="*/api/komentarze*"></textarea>
+          <div class="decyzje">
+            <button type="submit">Zastosuj</button>
+            <button type="reset">Wyłącz</button>
+          </div>
+        </form>
+        <p id="siec-stan" class="wyciszony"></p>
+        <p class="wyciszony">Działa na żądania wysyłane przez kod aplikacji (fetch, XHR), także do Supabase; nie obejmuje obrazów i ramek obcych usług (np. widgetu Turnstile).</p>
+      </details>
+      <p id="podpowiedz-trasy" class="wyciszony" hidden></p>
+      <div id="ramki" class="ramki"></div>
+    </section>
+    <div id="rozdzielacz" class="rozdzielacz" role="separator" aria-orientation="vertical" aria-label="Szerokość aplikacji i makiety" tabindex="0" aria-valuemin="20" aria-valuemax="80" aria-valuenow="55"></div>
+    <section class="makieta" aria-label="Makieta">
+      <div class="pasek">
+        <button type="button" id="dopasuj" aria-pressed="false">Dopasuj do wysokości</button>
+        <span id="wymiary-makiety" class="wyciszony"></span>
+      </div>
+      <p id="brak-makiety" class="komunikat" hidden>Brak PNG makiety dla tego ekranu.</p>
+      <img id="obraz-makiety" alt="Makieta ekranu" hidden>
+    </section>
+  </main>
+</body>
+</html>

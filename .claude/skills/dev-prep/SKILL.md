@@ -6,11 +6,11 @@ argument-hint: "[etap zbiorczego dokumentu wymagań, np. docs/brainstorms/mvp-re
 
 # Operator checklist etapu — przygotowanie przed `/dev-plan`
 
-**Uwaga: Aktualny rok to 2026.** Używaj tego przy datowaniu dokumentów.
+Datę do dokumentów bierz z `date +%F`.
 
 `/dev-prep` odpowiada na jedno pytanie: **co człowiek musi dostarczyć poza kodem, zanim ruszy etap**. Produkuje jeden dokument w `docs/operator/` — i nic więcej. Nazwa domyślna to `<feature-slug>-przygotowanie.md`, ale gdy w katalogu jest już seria checklist, skill dziedziczy jej konwencję (0.3).
 
-To **jedyny** dokument przygotowawczy w pipeline. `/dev-plan` go **czyta i uzupełnia** o to, co wyjdzie dopiero z Implementation Units (numery blokowanych faz, klucze wynikłe z konkretnych plików, środowisko E2E) — nie tworzy drugiej listy. `/dev-docs` sprawdza go w bramce gotowości przed autopilotem.
+To **jedyny** dokument przygotowawczy w pipeline. `/dev-plan` go **czyta i uzupełnia** o to, co wyjdzie dopiero z Implementation Units (numery blokowanych faz, klucze wynikłe z konkretnych plików, środowisko E2E) — nie tworzy drugiej listy — i sprawdza go w bramce gotowości przed autopilotem.
 
 Ten skill **nie planuje**. Nie tworzy Implementation Units, nie dobiera bibliotek, nie proponuje architektury, nie szacuje. Jeśli zaczynasz pisać „jak to zbudować" — jesteś w złym skillu, to należy do `/dev-plan`.
 
@@ -19,8 +19,8 @@ Ten skill **nie planuje**. Nie tworzy Implementation Units, nie dobiera bibliote
 ```
 /dev-brainstorm → CO budować (opcjonalny)
 /dev-prep       → CO CZŁOWIEK MUSI DOSTARCZYĆ   ← ten skill, tworzy <slug>-przygotowanie.md
-/dev-plan       → JAK budować; czyta ten dokument (0.2, 1.6) i UZUPEŁNIA go (3.7/5.2b)
-/dev-docs       → cięcie planu na fazy; sprawdza dokument w bramce gotowości
+/clear          → świeża sesja przed planowaniem
+/dev-plan       → JAK budować; czyta ten dokument (0.3, 1.6), UZUPEŁNIA go (3.7/5.2b) i sprawdza w bramce gotowości (6.6)
 dev-autopilot-wf → wykonanie
 ```
 
@@ -122,7 +122,15 @@ Ogłoś wynik jednym zdaniem. Przy **pure-data** sekcja „Makiety" nie powstaje
 
 **Nigdy nie czytaj ani nie cytuj wartości sekretów.** Operuj wyłącznie nazwami zmiennych — dokument trafia do gita.
 
-Gdy skan wymaga przeszukania wielu lokalizacji, deleguj przez Agent tool, `subagent_type: "repo-research-analyst"`, zamiast czytać plik po pliku.
+Gdy skan wymaga przeszukania wielu lokalizacji, deleguj przez Agent tool, `subagent_type: "repo-research-analyst"`, z pierwszą linią promptu `Scope: technology, architecture` i pytaniem o trasy, assety i nazwy zmiennych środowiskowych pod nią, zamiast czytać plik po pliku.
+
+#### 1.3 Narzędzia maszyny (doctor)
+
+Uruchom `bash .claude/scripts/doctor/doctor.sh`. Skrypt wylicza z projektu, czego wymaga pipeline (git, gh z logowaniem, node, menedżer z lockfile, supabase CLI przy `supabase/`, agent-browser przy checkboxach `[E2E]`, pluginy projektu, Dynamic Workflows), i wypisuje tabelę z komendą instalacji przy każdym braku.
+
+- Każdy wiersz `BRAK` przepisz do sekcji 2 jako pozycję z markerem **[blokuje: faza 1]** — run autopilota zatrzymałby się na tym narzędziu, a bramka gotowości `/dev-plan` nie przekaże zadania autopilotowi, dopóki pozycja jest otwarta. „Jak" = komenda z kolumny „Instalacja" (przy runnerze testów: wpis do configu), „Dowód" = `bash .claude/scripts/doctor/doctor.sh` pokazuje `OK` w tym wierszu.
+- Każdy wiersz `UWAGA` przepisz do sekcji 2 bez markera — nie blokuje runu.
+- Wszystkie wiersze `OK` / `nie dotyczy` → nic nie dopisuj.
 
 ### Faza 2: Wyprowadź listy
 
@@ -140,7 +148,9 @@ Każdą zapisz jako **pytanie zamknięte z wypisanymi opcjami**, nie jako temat 
 
 Konta i konsole zewnętrzne (dostawca auth, płatności, monitoring, mapy, store'y), tokeny, klucze, zmienne środowiskowe — te, które wynikają z opisu etapu i których nie widać jako już ustawionych.
 
-Dla każdej pozycji: **co**, **po co / co blokuje**, **jak** (gdzie wejść, co kliknąć, do jakiej zmiennej wpisać), **dowód wykonania** (komenda lub obserwacja).
+Dla każdej pozycji: **co**, **po co / co blokuje**, **jak** (gdzie wejść, co kliknąć, do jakiej zmiennej wpisać), **dowód wykonania** (komenda lub obserwacja). Zmienna w pliku env, który już istnieje: sprawdź nazwy kluczy (`grep -oE '^[A-Z0-9_]+=' <plik>`, bez wartości) i napisz „podmień” albo „dopisz”.
+
+**Środowisko E2E aplikacji z osobnym serwerem API.** Gdy etap dodaje albo używa tras serwera aplikacji (`/api/…`, katalog `server/`) i ma scenariusze w przeglądarce, sprawdź `.env.e2e` (nazwy kluczy): `E2E_START` musi uruchamiać serwer i Vite z proxy, a `E2E_HEALTH` z `E2E_HEALTH_TRESC` — sprawdzać trasę serwera. Brak → pozycja wg `.claude/templates/e2e-env/README.md`, sekcja „Aplikacja z osobnym serwerem API”; gdy skrypt startu powstanie dopiero w etapie, numer fazy dopisze `/dev-plan`.
 
 Oznacz każdą wartość jako 🔓 publiczną (może iść do repo) albo 🔒 sekret (nigdy do gita) i zamknij dokument sekcją **„Gdzie to ląduje"** — która wartość idzie do `.env`, która do sekretów builda, która do konfiguracji. Sekrety opisuj **nazwą zmiennej**, nigdy wartością.
 
@@ -208,7 +218,7 @@ Kolejność: <notatka, gdy pozycje zależą od siebie>
 - [ ] 🔒 **<Co zrobić>**
   - Po co: <co się stanie bez tego>
   - Jak: <gdzie wejść, co skopiować, do jakiej zmiennej>
-  - Dowód: `grep <NAZWA_ZMIENNEJ> .env.local` zwraca wartość
+  - Dowód: `grep -c '^<NAZWA_ZMIENNEJ>=.' .env.local` zwraca 1
 
 ## 3. Assety i treści
 
@@ -234,7 +244,7 @@ Po zaprojektowaniu wklej URL-e — `/dev-plan` weźmie je stąd zamiast pytać.
 Gdy **[blokuje: planowanie]** są odhaczone: `/dev-plan docs/brainstorms/mvp-requirements.md#etap-17`
 ```
 
-Sekcję bez pozycji zostaw z jedną linią „Brak — nic do przygotowania w tej kategorii." Nie usuwaj nagłówka: `/dev-plan` i `/dev-docs` szukają sekcji po numerze i tytule.
+Sekcję bez pozycji zostaw z jedną linią „Brak — nic do przygotowania w tej kategorii." Nie usuwaj nagłówka: `/dev-plan` szuka sekcji po numerze i tytule.
 
 Gdy w `docs/operator/` istnieją dokumenty z wcześniejszych etapów — **trzymaj się ich układu sekcji i nazewnictwa**, nawet jeśli różni się od szablonu powyżej. Spójność serii jest ważniejsza niż zgodność z tym skillem.
 
@@ -250,9 +260,15 @@ Decyzje: N (M z markerem `[blokuje: planowanie]`) · Konta/sekrety: N · Assety:
 Następnie zadaj `AskUserQuestion`: „Co dalej?"
 
 - `Idę dostarczyć pozycje i wracam` — zakończ. Przypomnij jedną linią: po zaprojektowaniu makiet wklej URL-e do sekcji 4, wtedy `/dev-plan` nie zapyta o Figmę.
-- `Wszystko już mam — planujmy` — **uruchom `/dev-plan <origin>` w tej sesji** (nie opisuj tylko komendy). Wcześniej sprawdź nieodhaczone pozycje **[blokuje: planowanie]**; jeśli są, wymień je i potwierdź, że użytkownik świadomie idzie dalej.
+- `Wszystko już mam — planujmy` — sprawdź nieodhaczone pozycje **[blokuje: planowanie]**; jeśli są, wymień je i potwierdź, że użytkownik świadomie idzie dalej. `/dev-plan` w tej sesji nie uruchamiasz.
 - `Popraw dokument` — wróć do Fazy 2 z jego uwagami.
 
-**Commit:** dokument jest artefaktem planowania — `/dev-docs` dociąga takie ścieżki do commitu inicjalnego na branchu feature'a (klasa (a) w jego Fazie 0). Nie commituj go sam, chyba że użytkownik poprosi.
+Skill kończysz zawsze tą samą linią następnego kroku (przy każdej odpowiedzi poza `Popraw dokument`):
 
-**Tryb pipeline:** przy wywołaniu z automatycznego workflow lub kontekstu `disable-model-invocation` pomiń pytania interaktywne, podejmij potrzebne wybory sam i zapisz dokument.
+```text
+Następny krok: /clear, potem /dev-plan <origin>
+```
+
+`/dev-plan` idzie w świeżej sesji, bo planowanie to ok. 50 tur, a każda tura ciągnie cały kontekst sesji: po `/dev-prep` i makietach to ponad 200k tokenów (etap 3 vibersi: 215k, ok. 1,0 M dodatkowego kosztu planu). Checklista na dysku przenosi wszystko, czego `/dev-plan` potrzebuje.
+
+**Commit:** dokument jest artefaktem planowania — `/dev-plan` dociąga takie ścieżki do commitu inicjalnego na branchu feature'a (klasa (a) w jego kroku 6.3). Nie commituj go sam, chyba że użytkownik poprosi.

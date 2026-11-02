@@ -19,6 +19,11 @@ const KATALOG = dirname(fileURLToPath(import.meta.url))
 const PLIK_WORKFLOWU = resolve(KATALOG, '../dev-docs-review-wf.js')
 const zrodlo = readFileSync(PLIK_WORKFLOWU, 'utf8')
 
+/**
+ * @param {string} odMarkera
+ * @param {string} doMarkera
+ * @returns {string}
+ */
 function wytnij(odMarkera, doMarkera) {
   const start = zrodlo.indexOf(odMarkera)
   assert.notEqual(start, -1, `nie znaleziono "${odMarkera}" — kotwica testu wymaga aktualizacji`)
@@ -27,54 +32,73 @@ function wytnij(odMarkera, doMarkera) {
   return zrodlo.slice(start, koniec + doMarkera.length)
 }
 
-// kluczPliku jest zalezoscia grupujPoPliku; domknijWerdykty inkrementuje dwa liczniki z zewnatrz.
+// kluczPliku i liniaFindingu sa zaleznosciami porcjujPoPliku; domknijWerdykty liczy etykiety w obiekcie z zewnatrz.
 const fragment = [
-  'let severityKorektyPrzyjete = 0',
-  'let severityKorektyOdrzucone = 0',
+  wytnij('const sceptykLiczniki', '}'),
+  wytnij('const NIZSZA_WAGA', '}'),
   wytnij('function kluczPliku(', '\n}'),
+  wytnij('function etykietaGlosu(', '\n}'),
   wytnij('function domknijWerdykty(', '\n}'),
-  wytnij('function grupujPoPliku(', '\n}'),
+  wytnij('function liniaFindingu(', '\n}'),
+  wytnij('function porcjujPoPliku(', '\n}'),
 ].join('\n')
 
-// eslint-disable-next-line no-new-func — jedyna droga do niewyeksportowanych jednostek w skrypcie workflowu;
+/** @typedef {import('./typy.mjs').Finding} Finding */
+/** @typedef {import('./typy.mjs').Glos} Glos */
+
+// Wyjatek od no-new-func: jedyna droga do niewyeksportowanych jednostek w skrypcie workflowu;
 // wejsciem jest plik z tego repo, nie dane uzytkownika.
-const { domknijWerdykty, grupujPoPliku, liczniki } = new Function(
-  `${fragment}\nreturn { domknijWerdykty, grupujPoPliku, liczniki: () => ({ przyjete: severityKorektyPrzyjete, odrzucone: severityKorektyOdrzucone }) }`
+/** @type {{ domknijWerdykty: (f: Finding, glosy: Glos[]) => Finding & { potwierdzony: boolean, _uzasadnienie?: string }, porcjujPoPliku: (lista: Finding[], maks: number) => Finding[][], liczniki: () => { agree: number, disagree_evidence: number, disagree_concern: number, degradacje: number } }} */
+// eslint-disable-next-line no-new-func -- ekstrakcja funkcji z pliku workflowu tego repo, nie z inputu
+const { domknijWerdykty, porcjujPoPliku, liczniki } = new Function(
+  `${fragment}\nreturn { domknijWerdykty, porcjujPoPliku, liczniki: () => ({ ...sceptykLiczniki }) }`
 )()
 
+/** @type {(severity: string, plik: string, typ?: string) => Finding} */
 const finding = (severity, plik, typ = 'KOD') => ({ severity, typ, plik, opis: `problem w ${plik}`, _zrodlo: 'security' })
-const glos = (realny, severityKorekta = null) => ({ realny, uzasadnienie: '—', severityKorekta })
+/** @type {(etykieta: string, dowod?: string) => Glos} */
+const glos = (etykieta, dowod = '') => ({ etykieta, dowod, uzasadnienie: '—' })
+const AGREE = 'AGREE'
+const EVIDENCE = 'DISAGREE_EVIDENCE'
+const CONCERN = 'DISAGREE_CONCERN'
 
-// ── Grupowanie P2 po pliku ─────────────────────────────────────────────────
+// ── Porcje P2 posortowane po pliku (P20 A5) ───────────────────────────────
+// Zmiana kontraktu (P20 A5): grupy jednego pliku (P19) daly w etapie 3 vibersi 61 sceptykow na 71 P2 (+1,2 M) przy obaleniach
+// 1,4% — tyle co porcje po 4 (karta P9: 1,7%). Porcje po `maks` z listy posortowanej po pliku: ceil(P2/maks) agentow,
+// zarzuty jednego pliku obok siebie.
 
-test('findingi z tego samego pliku trafiaja do jednej grupy, niezaleznie od numeru linii', () => {
-  const grupy = grupujPoPliku([
-    finding('P2', 'src/deliver.ts:214'),
-    finding('P2', 'src/deliver.ts:31'),
+test('13 findingow P2 z roznych plikow = ceil(13/4) = 4 porcje, nie 13 grup', () => {
+  const porcje = porcjujPoPliku(Array.from({ length: 13 }, (_, i) => finding('P2', `src/plik${String(i).padStart(2, '0')}.ts:1`)), 4)
+  assert.deepEqual(porcje.map((p) => p.length), [4, 4, 4, 1])
+})
+
+test('porcje z listy posortowanej po pliku (bez wielkosci liter), w pliku po numerze linii; porcja moze laczyc pliki', () => {
+  const porcje = porcjujPoPliku([
     finding('P2', 'src/worker.ts:132'),
-  ], 4)
-  assert.equal(grupy.length, 2)
-  assert.equal(grupy.find((g) => g[0].plik.startsWith('src/deliver.ts')).length, 2)
-  assert.equal(grupy.find((g) => g[0].plik.startsWith('src/worker.ts')).length, 1)
+    finding('P2', 'src/deliver.ts:214'),
+    finding('P2', 'src/Deliver.ts:31'),
+    finding('P2', 'src/zeta.ts:1'),
+    finding('P2', 'src/deliver.ts:40'),
+  ], 2)
+  assert.deepEqual(porcje.map((g) => g.map((f) => f.plik)), [
+    ['src/Deliver.ts:31', 'src/deliver.ts:40'], ['src/deliver.ts:214', 'src/worker.ts:132'], ['src/zeta.ts:1'],
+  ])
 })
 
-test('grupa jest tniona do maksymalnego rozmiaru — dluga lista rozmywa skepse', () => {
-  const grupy = grupujPoPliku(Array.from({ length: 9 }, (_, i) => finding('P2', `src/a.ts:${i}`)), 4)
-  assert.deepEqual(grupy.map((g) => g.length), [4, 4, 1])
-})
-
-test('kazdy finding trafia do dokladnie jednej grupy — nic nie ginie i nic sie nie dubluje', () => {
+test('kazdy finding trafia do dokladnie jednej porcji — nic nie ginie i nic sie nie dubluje; wejscie nietkniete', () => {
   const lista = [
     finding('P2', 'src/a.ts:1'), finding('P2', 'src/b.ts:2'), finding('P2', 'src/a.ts:3'),
     finding('P2', '?'), finding('P2', 'src/c.ts:5'),
   ]
-  const wSumie = grupujPoPliku(lista, 2).flat()
+  const kopia = [...lista]
+  const wSumie = porcjujPoPliku(lista, 2).flat()
   assert.equal(wSumie.length, lista.length)
   assert.deepEqual(new Set(wSumie), new Set(lista))
+  assert.deepEqual(lista, kopia, 'sortowanie na kopii — p2DoVerify zostaje w kolejnosci z review')
 })
 
-test('pusta lista P2 nie tworzy pustej grupy (inaczej odpalilby sie sceptyk bez findingow)', () => {
-  assert.deepEqual(grupujPoPliku([], 4), [])
+test('pusta lista P2 nie tworzy pustej porcji (inaczej odpalilby sie sceptyk bez findingow)', () => {
+  assert.deepEqual(porcjujPoPliku([], 4), [])
 })
 
 // ── domknijWerdykty: brak glosu ────────────────────────────────────────────
@@ -86,62 +110,88 @@ test('zero glosow = NIEZWERYFIKOWANY i przepuszczony, nigdy obalony', () => {
 })
 
 // ── domknijWerdykty: jeden glos (sciezka P2) ───────────────────────────────
+// Zmiana kontraktu (P9, sceptyk asymetryczny): etykieta zastepuje `realny` i `severityKorekta`. Regula A7
+// (pojedynczy glos nie rusza wagi) nie dotyczy juz P2: DISAGREE_CONCERN z definicji obniza P2 do P3, ale nie kasuje.
 
-test('jeden glos "nierealny" obala finding P2', () => {
-  const wynik = domknijWerdykty(finding('P2', 'src/a.ts:1'), [glos(false)])
-  assert.equal(wynik.potwierdzony, false)
-})
-
-test('jeden glos NIE zmienia severity — sugestia idzie do opisu (regresja z A7)', () => {
-  const przed = liczniki().odrzucone
-  const wynik = domknijWerdykty(finding('P2', 'src/a.ts:1'), [glos(true, 'P3')])
-  assert.equal(wynik.severity, 'P2', 'pojedynczy sceptyk nie moze przeklasyfikowac findingu')
-  assert.match(wynik.opis, /\[sceptyk sugeruje P3\]$/)
-  assert.equal(liczniki().odrzucone, przed + 1, 'odrzucona korekta ma byc policzona, inaczej zmiana jest niemierzalna')
-})
-
-test('jeden glos bez korekty nie dopisuje niczego do opisu', () => {
+test('AGREE utrzymuje finding P2 bez zmian', () => {
   const f = finding('P2', 'src/a.ts:1')
-  const wynik = domknijWerdykty(f, [glos(true)])
-  assert.equal(wynik.opis, f.opis)
-})
-
-test('korekta rowna dotychczasowemu severity nie jest sugestia', () => {
-  const f = finding('P2', 'src/a.ts:1')
-  const wynik = domknijWerdykty(f, [glos(true, 'P2')])
-  assert.equal(wynik.opis, f.opis)
+  const wynik = domknijWerdykty(f, [glos(AGREE)])
+  assert.equal(wynik.potwierdzony, true)
   assert.equal(wynik.severity, 'P2')
+  assert.equal(wynik.opis, f.opis)
+})
+
+test('DISAGREE_EVIDENCE z linia albo testem obala finding P2, dowod zostaje w uzasadnieniu', () => {
+  const wynik = domknijWerdykty(finding('P2', 'src/a.ts:1'), [glos(EVIDENCE, 'src/a.ts:40 guard')])
+  assert.equal(wynik.potwierdzony, false)
+  assert.match(wynik._uzasadnienie ?? '', /src\/a\.ts:40 guard/)
+})
+
+test('DISAGREE_CONCERN obniza P2 do P3 i nie kasuje — adnotacja w opisie, degradacja policzona', () => {
+  const przed = liczniki()
+  const wynik = domknijWerdykty(finding('P2', 'src/a.ts:1'), [glos(CONCERN)])
+  assert.equal(wynik.potwierdzony, true, 'watpliwosc bez dowodu nie usuwa findingu')
+  assert.equal(wynik.severity, 'P3')
+  assert.match(wynik.opis, /\[sceptyk: P2 → P3/)
+  assert.equal(liczniki().degradacje, przed.degradacje + 1)
+  assert.equal(liczniki().disagree_concern, przed.disagree_concern + 1)
+})
+
+test('DISAGREE_EVIDENCE bez linii ani testu liczy sie jak CONCERN — obala tylko dowod', () => {
+  const przed = liczniki()
+  const wynik = domknijWerdykty(finding('P2', 'src/a.ts:1'), [glos(EVIDENCE, '  ')])
+  assert.equal(wynik.potwierdzony, true)
+  assert.equal(wynik.severity, 'P3')
+  assert.equal(liczniki().disagree_evidence, przed.disagree_evidence, 'EVIDENCE bez dowodu nie trafia do licznika obalen')
+  assert.equal(liczniki().disagree_concern, przed.disagree_concern + 1)
 })
 
 // ── domknijWerdykty: trzy glosy (sciezka P1) ───────────────────────────────
 
-test('P1 przezywa, gdy tylko jeden z trzech sceptykow go obalil', () => {
-  const wynik = domknijWerdykty(finding('P1', 'src/a.ts:1'), [glos(true), glos(false), glos(true)])
+test('P1 przezywa, gdy tylko jeden z trzech sceptykow go obalil dowodem', () => {
+  const wynik = domknijWerdykty(finding('P1', 'src/a.ts:1'), [glos(AGREE), glos(EVIDENCE, 'src/a.ts:9'), glos(AGREE)])
   assert.equal(wynik.potwierdzony, true)
+  assert.equal(wynik.severity, 'P1')
 })
 
-test('P1 pada przy konsensusie 2 z 3', () => {
-  const wynik = domknijWerdykty(finding('P1', 'src/a.ts:1'), [glos(false), glos(false), glos(true)])
+test('P1 pada przy dwoch z trzech obaleniach z dowodem', () => {
+  const wynik = domknijWerdykty(finding('P1', 'src/a.ts:1'), [glos(EVIDENCE, 'src/a.ts:9'), glos(EVIDENCE, 'src/a.test.ts:3'), glos(AGREE)])
   assert.equal(wynik.potwierdzony, false)
 })
 
-test('zgodna wiekszosc MOZE skorygowac severity P1', () => {
-  const przed = liczniki().przyjete
-  const wynik = domknijWerdykty(finding('P1', 'src/a.ts:1'), [glos(true, 'P2'), glos(true, 'P2'), glos(true)])
+test('P1 spada do P2, gdy dwa z trzech glosow sie nie zgadzaja, ale dowod ma tylko jeden', () => {
+  const wynik = domknijWerdykty(finding('P1', 'src/a.ts:1'), [glos(EVIDENCE, 'src/a.ts:9'), glos(CONCERN), glos(AGREE)])
+  assert.equal(wynik.potwierdzony, true)
   assert.equal(wynik.severity, 'P2')
-  assert.equal(liczniki().przyjete, przed + 1)
+  assert.match(wynik.opis, /\[sceptyk: P1 → P2/)
 })
 
-test('rozproszone korekty nie zmieniaja severity — dwa rozne glosy to nie wiekszosc', () => {
-  const wynik = domknijWerdykty(finding('P1', 'src/a.ts:1'), [glos(true, 'P2'), glos(true, 'P3'), glos(true)])
+test('pojedynczy CONCERN nie rusza P1 (ominalby twardy STOP)', () => {
+  const f = finding('P1', 'src/a.ts:1')
+  const wynik = domknijWerdykty(f, [glos(CONCERN), glos(AGREE), glos(AGREE)])
   assert.equal(wynik.severity, 'P1')
+  assert.equal(wynik.opis, f.opis)
+})
+
+test('P1 z dwoma glosami (trzeci sceptyk padl): jedno obalenie to nie wiekszosc', () => {
+  const wynik = domknijWerdykty(finding('P1', 'src/a.ts:1'), [glos(EVIDENCE, 'src/a.ts:9'), glos(AGREE)])
+  assert.equal(wynik.potwierdzony, true)
+  assert.equal(wynik.severity, 'P1')
+})
+
+test('liczniki etykiet licza glosy, nie findingi', () => {
+  const przed = liczniki()
+  domknijWerdykty(finding('P1', 'src/a.ts:1'), [glos(AGREE), glos(AGREE), glos(CONCERN)])
+  assert.equal(liczniki().agree, przed.agree + 2)
+  assert.equal(liczniki().disagree_concern, przed.disagree_concern + 1)
 })
 
 // ── Kotwice wywolania w workflowie ─────────────────────────────────────────
 
-test('wiring — P1 nadal dostaje trzech niezaleznych sceptykow, P2 ida grupami', () => {
+test('wiring — P1 nadal dostaje trzech niezaleznych sceptykow, P2 ida porcjami', () => {
   assert.match(zrodlo, /Array\.from\(\{ length: 3 \}, \(_, i\) =>/, 'P1 musi zostac przy trzech osobnych glosach')
-  assert.match(zrodlo, /const grupyP2 = grupujPoPliku\(p2DoVerify, MAKS_W_GRUPIE_P2\)/)
+  assert.match(zrodlo, /const grupyP2 = porcjujPoPliku\(p2DoVerify, MAKS_W_GRUPIE_P2\)/)
+  assert.doesNotMatch(zrodlo, /porcjujP2|grupujPoPliku/)
   assert.match(zrodlo, /const MAKS_W_GRUPIE_P2 = 4/)
 })
 
@@ -153,7 +203,40 @@ test('wiring — grupa, ktorej thunk padl, schodzi do niezweryfikowanej zamiast 
   )
 })
 
-test('wiring — tiery sa wystawione przez args, z tanszym packagerem i sceptykiem P2', () => {
-  assert.match(zrodlo, /const TIERY_DOMYSLNE = \{ packager: 'low', sceptykP2: 'medium', sceptykP1: null, reviewer: null \}/)
+// ── Strazniki sceptyka asymetrycznego (P9, §2 pkt 7) ─────────────────────────
+
+/** @type {(f: Finding) => string} */
+// eslint-disable-next-line no-new-func -- ekstrakcja funkcji z pliku workflowu tego repo, nie z inputu
+const zarzutSceptyka = new Function(`${wytnij('function zarzutSceptyka(', '\n}')}\nreturn zarzutSceptyka`)()
+
+test('zarzut dla sceptyka = waga, plik:linia i teza — bez autora, osi i typu', () => {
+  const tekst = zarzutSceptyka({ severity: 'P2', typ: 'KOD', plik: 'src/a.ts:12', opis: 'brak obslugi bledu', _zrodlo: 'security' })
+  assert.equal(tekst, '[P2] src/a.ts:12 — brak obslugi bledu')
+})
+
+test('polecenia sceptykow buduja zarzut wylacznie przez zarzutSceptyka (straznik: bez uzasadnienia autora)', () => {
+  const verify = wytnij('const skepsaBlok', '\nconst p2Zweryfikowane')
+  assert.doesNotMatch(verify, /f\._zrodlo|f\.typ|_uzasadnienie|\$\{f\.opis\}/, 'sceptyk nie dostaje autora, osi ani surowego opisu obok zarzutu')
+  assert.equal((verify.match(/zarzutSceptyka\(f\)/g) || []).length, 2, 'P1 i porcja P2 skladaja zarzut ta sama funkcja')
+  assert.match(verify, /AGREE[\s\S]*DISAGREE_EVIDENCE[\s\S]*DISAGREE_CONCERN/, 'polecenie wymienia trzy etykiety')
+})
+
+test('schematy werdyktow: trzy etykiety i dowod, bez realny i severityKorekta', () => {
+  const schematy = wytnij('const ETYKIETA_SCEPTYKA', "required: ['werdykty'],")
+  assert.match(schematy, /enum: \['AGREE', 'DISAGREE_EVIDENCE', 'DISAGREE_CONCERN'\]/)
+  assert.doesNotMatch(schematy, /realny|severityKorekta/)
+  assert.match(schematy, /required: \['etykieta', 'dowod', 'uzasadnienie'\]/)
+  assert.match(schematy, /required: \['indeks', 'etykieta', 'dowod', 'uzasadnienie'\]/)
+})
+
+test('wiring — E2E testera i OPERATOR dalej poza verify', () => {
+  assert.match(zrodlo, /const doWeryfikacji = dedup\.filter\(\(f\) => \(f\.severity === 'P1' \|\| f\.severity === 'P2'\) && f\.typ !== 'OPERATOR' && !zE2eTestera\(f\)\)/)
+})
+
+// Zmiana kontraktu (P3, tabela D6): reviewer i sceptyk P1 przypiete na `high` zamiast efortu sesji (null), scribe `low`.
+// Zmiana kontraktu (P7): tier `packager` znika razem z agentem kontekst:diff — dossier liczy skrypt, zapasowy agent to haiku bez efortu.
+// Zmiana kontraktu (P11): spec i test-coverage dostaja wlasne tiery `medium` (polecenia-listy z dossier, PANEL K1, K2).
+test('wiring — tiery sa wystawione przez args, z tanszym scribe i sceptykiem P2, bez packagera', () => {
+  assert.match(zrodlo, /const TIERY_DOMYSLNE = \{ sceptykP2: 'medium', sceptykP1: 'high', reviewer: 'high', spec: 'medium', testCoverage: 'medium', scribe: 'low' \}/)
   assert.match(zrodlo, /const tiery = \{ \.\.\.TIERY_DOMYSLNE, \.\.\.\(\(args && args\.tiery\) \|\| \{\}\) \}/)
 })

@@ -11,17 +11,17 @@ Wzorce PostgreSQL, RLS policies, generowane typy i operacje CRUD dla Supabase.
 Nie pisz typów tabel ręcznie. Używaj Supabase CLI:
 ```bash
 # Generuj typy z bazy danych
-supabase gen types --lang typescript --project-id YOUR_PROJECT_ID > src/types/database.ts
+supabase gen types --lang typescript --project-id YOUR_PROJECT_ID > src/types/database.types.ts
 
 # Lub z lokalnej bazy (pozycyjne `typescript` to stara, nieudokumentowana forma)
-supabase gen types --lang typescript --local > src/types/database.ts
+supabase gen types --lang typescript --local > src/types/database.types.ts
 ```
 
 ### Konfiguracja Klienta
 ```typescript
 // lib/supabase.ts
 import { createClient } from '@supabase/supabase-js';
-import type { Database } from '@/types/database';
+import type { Database } from '@/types/database.types';
 
 export const supabase = createClient<Database>(
     import.meta.env.VITE_SUPABASE_URL,
@@ -64,7 +64,7 @@ async function getProfile(userId: string): Promise<Profile | null> {
 ```bash
 # Po każdej migracji - regeneruj typy
 supabase db push
-supabase gen types typescript --local > src/types/database.ts
+supabase gen types typescript --local > src/types/database.types.ts
 ```
 
 ---
@@ -524,6 +524,10 @@ BEGIN
     DELETE FROM auth.users WHERE id = current_user_id;
 END;
 $$;
+
+-- Funkcja w schemacie API jest wołalna przez .rpc(): EXECUTE tylko dla roli, która ją woła
+REVOKE EXECUTE ON FUNCTION public.delete_user_account() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.delete_user_account() TO authenticated;
 ```
 
 ### Wywołanie z Frontendu
@@ -573,6 +577,10 @@ BEGIN
     );
 END;
 $$;
+
+-- Woła ją tylko Edge Function z kluczem sekretnym
+REVOKE EXECUTE ON FUNCTION public.activate_subscription(UUID, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.activate_subscription(UUID, TEXT) TO service_role;
 ```
 
 ---
@@ -739,6 +747,9 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+-- Funkcję woła tylko trigger: żadna rola API nie potrzebuje EXECUTE
+REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authenticated;
 
 CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users

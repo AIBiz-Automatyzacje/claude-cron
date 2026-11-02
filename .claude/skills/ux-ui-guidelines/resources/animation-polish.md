@@ -2,6 +2,8 @@
 
 Micro-detale animacji uzupełniające [animations.md](animations.md) (macro patterns, Motion, View Transitions): interruptibility, subtelne wyjścia, ikony cross-fade, scale on press, skip-on-load.
 
+Przykłady Motion zakładają `<MotionConfig reducedMotion="user">` w korzeniu aplikacji ([animations.md](animations.md), sekcja „Reduced motion w korzeniu aplikacji”): przy włączonym „ogranicz ruch” Motion pomija `x`, `y`, `scale` i `rotate`, a zostawia `opacity`. Przykłady CSS mają własny blok `prefers-reduced-motion` albo korzystają z globalnego resetu z animations.md.
+
 ---
 
 ## Interruptible Animations
@@ -47,50 +49,41 @@ Użytkownicy zmieniają intencję w trakcie interakcji. Jeśli animacje nie są 
 
 Nie animuj jednego dużego kontenera. Podziel zawartość na semantyczne kawałki i animuj każdy osobno.
 
-### Krok po kroku
+### Jak podzielić
 
 1. **Podziel** na logiczne grupy (tytuł, opis, przyciski)
 2. **Stagger** z ~100ms opóźnieniem między grupami
 3. **Dla tytułów** rozważ podział na pojedyncze słowa z ~80ms staggerem
-4. **Połącz** `opacity`, `blur` i `translateY` dla efektu wejścia
+4. **Połącz** `opacity` i `translateY` dla efektu wejścia
+
+Wejście sekcji animuje `transform` i `opacity`, bez rozmycia: `filter` na kilku elementach naraz obciąża renderowanie każdej klatki, a zasada animacji skilla dopuszcza go przy zmianie stanu (przełączenie ikony niżej), nie przy wejściu treści.
 
 ### Code Example
 
 ```tsx
 // Motion (Framer Motion) — staggered enter
+import { motion, type Variants } from "motion/react";
+
+import { Button } from "@/components/ui/button";
+
+const CONTAINER_VARIANTS = {
+  visible: { transition: { staggerChildren: 0.1 } },
+} satisfies Variants;
+
+// Pod <MotionConfig reducedMotion="user"> y jest pomijane, zostaje sam fade
+const ITEM_VARIANTS = {
+  hidden: { opacity: 0, y: 12 },
+  visible: { opacity: 1, y: 0 },
+} satisfies Variants;
+
 function PageHeader() {
   return (
-    <motion.div
-      initial="hidden"
-      animate="visible"
-      variants={{
-        visible: { transition: { staggerChildren: 0.1 } },
-      }}
-    >
-      <motion.h1
-        variants={{
-          hidden: { opacity: 0, y: 12, filter: "blur(4px)" },
-          visible: { opacity: 1, y: 0, filter: "blur(0px)" },
-        }}
-      >
-        Welcome
-      </motion.h1>
+    <motion.div initial="hidden" animate="visible" variants={CONTAINER_VARIANTS}>
+      <motion.h1 variants={ITEM_VARIANTS}>Welcome</motion.h1>
 
-      <motion.p
-        variants={{
-          hidden: { opacity: 0, y: 12, filter: "blur(4px)" },
-          visible: { opacity: 1, y: 0, filter: "blur(0px)" },
-        }}
-      >
-        A description of the page.
-      </motion.p>
+      <motion.p variants={ITEM_VARIANTS}>A description of the page.</motion.p>
 
-      <motion.div
-        variants={{
-          hidden: { opacity: 0, y: 12, filter: "blur(4px)" },
-          visible: { opacity: 1, y: 0, filter: "blur(0px)" },
-        }}
-      >
+      <motion.div variants={ITEM_VARIANTS}>
         <Button>Get started</Button>
       </motion.div>
     </motion.div>
@@ -104,8 +97,7 @@ function PageHeader() {
 .stagger-item {
   opacity: 0;
   transform: translateY(12px);
-  filter: blur(4px);
-  animation: fadeInUp 400ms ease-out forwards;
+  animation: fadeInUp 300ms ease-out forwards;
 }
 
 .stagger-item:nth-child(1) { animation-delay: 0ms; }
@@ -116,7 +108,15 @@ function PageHeader() {
   to {
     opacity: 1;
     transform: translateY(0);
-    filter: blur(0);
+  }
+}
+
+/* Reduced motion: treść od razu w stanie końcowym, bez przesunięcia */
+@media (prefers-reduced-motion: reduce) {
+  .stagger-item {
+    animation: none;
+    opacity: 1;
+    transform: none;
   }
 }
 ```
@@ -130,12 +130,11 @@ Wyjścia powinny być subtelniejsze i mniej przyciągające uwagę niż wejścia
 ### Subtle Exit (Rekomendowane)
 
 ```tsx
-// Small fixed translateY — indicates direction without drama
+// Small fixed translateY — indicates direction without drama (transform i opacity, bez filtra)
 <motion.div
   exit={{
     opacity: 0,
     y: -12,
-    filter: "blur(4px)",
     transition: { duration: 0.15, ease: "easeIn" },
   }}
 >
@@ -192,16 +191,24 @@ Wyjścia powinny być subtelniejsze i mniej przyciągające uwagę niż wejścia
 
 ## Contextual Icon Animations
 
-Gdy ikony pojawiają się lub znikają kontekstowo (na hover, na zmianę stanu), animuj je z `opacity`, `scale` i `blur` zamiast tylko przełączać visibility.
+Gdy ikony pojawiają się lub znikają kontekstowo (na hover, na zmianę stanu), animuj je z `opacity`, `scale` i `blur` zamiast tylko przełączać visibility. To zmiana stanu pojedynczego elementu, więc rozmycie (`filter`) jest tu dopuszczone; przy wejściu i wyjściu sekcji zostajesz przy `transform` i `opacity`.
 
 ### Motion
 
 ```tsx
+import type { LucideIcon } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 
-function IconButton({ isActive, icon: Icon }) {
+interface IconButtonProps {
+  isActive: boolean;
+  icon: LucideIcon;
+  label: string; // przycisk z samą ikoną potrzebuje nazwy dostępnej
+}
+
+// Pod <MotionConfig reducedMotion="user"> skala jest pomijana, zostaje cross-fade opacity i blur
+function IconButton({ isActive, icon: Icon, label }: IconButtonProps) {
   return (
-    <button>
+    <button aria-label={label} aria-pressed={isActive}>
       <AnimatePresence mode="popLayout">
         <motion.span
           key={isActive ? "active" : "inactive"}
@@ -210,7 +217,7 @@ function IconButton({ isActive, icon: Icon }) {
           exit={{ opacity: 0, scale: 0.25, filter: "blur(4px)" }}
           transition={{ type: "spring", duration: 0.3, bounce: 0 }}
         >
-          <Icon />
+          <Icon aria-hidden="true" />
         </motion.span>
       </AnimatePresence>
     </button>
@@ -224,35 +231,57 @@ Jeśli projekt nie używa Motion (Framer Motion), trzymaj obie ikony w DOM i cro
 
 Trick: jedna ikona jest absolutnie pozycjonowana na drugiej. Toggle stanu cross-fade'uje je — wchodząca ikona skaluje się od `0.25`, wychodząca skaluje do `0.25`, obie z opacity i blur.
 
+Krzywą podajesz klasą `ease-[cubic-bezier(0.2,0,0,1)]` (bez spacji w nawiasie) — sam napis `cubic-bezier(...)` w `className` nie jest klasą Tailwinda i nic nie robi. Brak rozmycia to `blur-[0px]`: w v4 nie ma klasy `blur-0`, a `blur-[0px]` interpoluje się płynnie z `blur-[4px]`.
+
 ```tsx
-function IconButton({ isActive, ActiveIcon, InactiveIcon }) {
+import type { LucideIcon } from "lucide-react";
+
+import { cn } from "@/lib/utils";
+
+interface CrossfadeIconButtonProps {
+  isActive: boolean;
+  activeIcon: LucideIcon;
+  inactiveIcon: LucideIcon;
+  label: string; // przycisk z samą ikoną potrzebuje nazwy dostępnej
+}
+
+// <button> przyjmuje tylko treść frazową, więc kontenery ikon to <span>, nie <div>
+function CrossfadeIconButton({
+  isActive,
+  activeIcon: ActiveIcon,
+  inactiveIcon: InactiveIcon,
+  label,
+}: CrossfadeIconButtonProps) {
   return (
-    <button>
-      <div className="relative">
-        <div
+    <button aria-label={label} aria-pressed={isActive}>
+      <span className="relative grid">
+        <span
           className={cn(
             "absolute inset-0 flex items-center justify-center",
             "transition-[opacity,filter,scale] duration-300",
-            "cubic-bezier(0.2, 0, 0, 1)",
+            "ease-[cubic-bezier(0.2,0,0,1)]",
+            // reduced motion: bez skali, zostaje cross-fade
+            "motion-reduce:scale-100",
             isActive
-              ? "scale-100 opacity-100 blur-0"
+              ? "scale-100 opacity-100 blur-[0px]"
               : "scale-[0.25] opacity-0 blur-[4px]"
           )}
         >
-          <ActiveIcon />
-        </div>
-        <div
+          <ActiveIcon aria-hidden="true" />
+        </span>
+        <span
           className={cn(
             "transition-[opacity,filter,scale] duration-300",
-            "cubic-bezier(0.2, 0, 0, 1)",
+            "ease-[cubic-bezier(0.2,0,0,1)]",
+            "motion-reduce:scale-100",
             isActive
               ? "scale-[0.25] opacity-0 blur-[4px]"
-              : "scale-100 opacity-100 blur-0"
+              : "scale-100 opacity-100 blur-[0px]"
           )}
         >
-          <InactiveIcon />
-        </div>
-      </div>
+          <InactiveIcon aria-hidden="true" />
+        </span>
+      </span>
     </button>
   );
 }
@@ -266,7 +295,7 @@ Non-absolutna ikona (InactiveIcon) definiuje rozmiar layoutu. Absolutna ikona (A
 | --- | --- | --- |
 | **Enter animation** | Tak | Tak |
 | **Exit animation** | Tak (przez `AnimatePresence`) | Tak (cross-fade — ikona nigdy nie unmount-uje) |
-| **Spring physics** | Tak | Nie — użyj `cubic-bezier(0.2, 0, 0, 1)` jako przybliżenia |
+| **Spring physics** | Tak | Nie — użyj `cubic-bezier(0.2, 0, 0, 1)` jako przybliżenia (Tailwind: `ease-[cubic-bezier(0.2,0,0,1)]`) |
 | **Kiedy używać** | Projekt już używa `motion/react` | Brak motion dependency lub trzymanie małego bundle |
 
 **Reguła:** Sprawdź `package.json` projektu pod `motion` lub `framer-motion`. Jeśli jest, użyj Motion. Jeśli nie, użyj CSS cross-fade pattern — nie dodawaj dependency tylko dla przejść ikon.
@@ -292,7 +321,7 @@ Non-absolutna ikona (InactiveIcon) definiuje rozmiar layoutu. Absolutna ikona (A
 
 Subtelne scale-down na klik daje przyciskom dotykowy feedback. Zawsze używaj `scale(0.96)`. Nigdy nie używaj wartości mniejszej niż `0.95` — cokolwiek poniżej wygląda przesadnie. Używaj CSS transitions dla przerywalności — jeśli użytkownik puści w trakcie, powinno płynnie wrócić.
 
-Nie każdy przycisk tego potrzebuje. Dodaj prop `static` do komponentu Button, który wyłącza scale gdy ruch byłby rozpraszający.
+Nie każdy przycisk tego potrzebuje. Dodaj prop `isStatic` do komponentu Button, który wyłącza scale gdy ruch byłby rozpraszający (nazwa z prefiksem `is`, bo coding-rules wymaga go dla booleanów).
 
 ### CSS
 
@@ -324,19 +353,26 @@ Nie każdy przycisk tego potrzebuje. Dodaj prop `static` do komponentu Button, k
 </motion.button>
 ```
 
-### Pattern z `static` prop
+### Pattern z propem `isStatic`
 
-Wyciągnij klasę scale do zmiennej i warunkowo aplikuj na podstawie propa `static`:
+Wyciągnij klasę scale do stałej i warunkowo aplikuj na podstawie propa `isStatic`:
 
 ```tsx
-const tapScale = "active:not-disabled:scale-[0.96]";
+import { cn } from "@/lib/utils";
 
-function Button({ static: isStatic, className, children, ...props }) {
+// motion-safe: skala tylko bez preferencji „ogranicz ruch”
+const TAP_SCALE_CLASS = "motion-safe:active:not-disabled:scale-[0.96]";
+
+interface ButtonProps extends React.ComponentProps<"button"> {
+  isStatic?: boolean;
+}
+
+export function Button({ isStatic = false, className, children, ...props }: ButtonProps) {
   return (
     <button
       className={cn(
         "transition-transform duration-150 ease-out",
-        !isStatic && tapScale,
+        !isStatic && TAP_SCALE_CLASS,
         className,
       )}
       {...props}
@@ -348,8 +384,10 @@ function Button({ static: isStatic, className, children, ...props }) {
 
 // Usage
 <Button>Click me</Button>           {/* scales on press */}
-<Button static>Submit</Button>       {/* no scale */}
+<Button isStatic>Submit</Button>     {/* no scale */}
 ```
+
+Wariant `motion-safe:` sprawia, że przy reduced motion przycisk się nie skaluje. W prostszych przykładach wyżej (`active:scale-[0.96]`) przejście skraca globalny reset z [animations.md](animations.md), ale sama skala nadal się pojawia — tam też możesz dopisać `motion-safe:`.
 
 ---
 

@@ -32,7 +32,7 @@ Najczęstszy problem bezpieczeństwa (#1 od lat). W naszym stacku manifestuje si
 - [ ] `service_role` key NIE jest w zmiennych `VITE_*`
 - [ ] Edge Functions owinięte w `withSupabase({ auth: 'user' })` (`npm:@supabase/server@^1`) — JWT weryfikowany przed handlerem; ręcznie tylko `getClaims()` / `getUser()` w trybie `auth: 'none'`
 - [ ] Funkcje z `auth` innym niż `'user'` mają `verify_jwt = false` w `supabase/config.toml` — i świadomie (webhook z weryfikacją sygnatury, cron z secret key), nie „bo nie działało"
-- [ ] Każda funkcja SECURITY DEFINER ma `SET search_path = ''` i nazwy schematyczne (`public.tabela`)
+- [ ] Każda funkcja SECURITY DEFINER ma `SET search_path = ''`, nazwy schematyczne (`public.tabela`), EXECUTE odebrane od `PUBLIC` i `anon` i nadane roli, która ją woła
 - [ ] SSRF: walidacja URL + blokada redirectów + blokada adresów wewnętrznych (patrz niżej)
 - [ ] Macierz dostępu (kto może co) jest udokumentowana i zweryfikowana
 
@@ -69,6 +69,9 @@ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = ''            -- kluczowe
 AS $$
 BEGIN RETURN (SELECT secret FROM public.vault); END; $$;
+-- Supabase nadaje EXECUTE na nowe funkcje rolom anon i authenticated: zostaw je tylko roli, która woła
+REVOKE EXECUTE ON FUNCTION public.get_secret() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_secret() TO authenticated;
 ```
 
 **SSRF — hardened (2025: część A01):**
@@ -390,7 +393,7 @@ Nowa kategoria: błędna obsługa błędów prowadząca do luk — **fail-open**
 
 **Checklist:**
 - [ ] Autoryzacja **fail-closed** — błąd sprawdzenia = odmowa dostępu, nigdy przyznanie
-- [ ] Zero pustych `catch {}` — loguj albo re-throw (patrz `coding-rules` §4)
+- [ ] Zero pustych `catch {}` — loguj albo re-throw (reguły kodu, sekcja „Obsługa błędów”)
 - [ ] Klient dostaje generyczny komunikat + kod; szczegóły błędu tylko do logu/Sentry
 - [ ] Edge Function zwraca poprawny status (4xx/5xx) przy błędzie, nie `200`
 - [ ] `Promise.allSettled` dla operacji, które mogą niezależnie failować
@@ -420,7 +423,7 @@ try {
 
 | Priorytet | Kategoria 2025 | Główne ryzyko w naszym stacku |
 |-----------|----------------|-------------------------------|
-| 1 | A01 Broken Access Control | RLS wyłączone/błędne, authz na `user_metadata`, SECURITY DEFINER bez `search_path`, SSRF |
+| 1 | A01 Broken Access Control | RLS wyłączone/błędne, authz na `user_metadata`, SECURITY DEFINER bez `search_path` albo z EXECUTE dla `anon`, SSRF |
 | 2 | A07 Authentication Failures | `getSession()` zamiast `getUser()`/`getClaims()` server-side |
 | 3 | A02 Security Misconfiguration | CORS `*`, brak CSP z `connect-src` Supabase |
 | 4 | A05 Injection | Raw SQL w `.rpc()`, XSS przez user content |

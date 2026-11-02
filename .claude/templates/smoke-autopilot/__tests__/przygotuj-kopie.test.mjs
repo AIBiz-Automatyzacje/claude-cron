@@ -1,0 +1,178 @@
+// Test skryptu kopii do smoke'a (PLAN-POPRAWY P0): skladnia (`bash -n`) i bieg `--dry-run`, ktory pokazuje kroki i niczego nie tworzy.
+// Pelny bieg (clone, pnpm install, sync) sprawdza smoke paczki — tu bez sieci i bez instalacji.
+
+import { execFileSync, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import test from 'node:test'
+import assert from 'node:assert/strict'
+
+const SKRYPT = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'przygotuj-kopie.sh')
+
+/**
+ * @param {{ workspace: boolean, migracje?: string[], vite?: string }} opcje vite: katalog z vite.config.ts aplikacji
+ * @returns {string}
+ */
+function projektZrodlowy({ workspace, migracje = [], vite }) {
+  const katalog = mkdtempSync(join(tmpdir(), 'smoke-zrodlo-'))
+  const git = (/** @type {string[]} */ argumenty) => execFileSync('git', ['-C', katalog, ...argumenty])
+  git(['init', '-q'])
+  git(['config', 'user.email', 't@t'])
+  git(['config', 'user.name', 't'])
+  writeFileSync(join(katalog, 'package.json'), '{}\n')
+  if (workspace) writeFileSync(join(katalog, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/*'\n")
+  if (migracje.length) mkdirSync(join(katalog, 'supabase', 'migrations'), { recursive: true })
+  for (const m of migracje) writeFileSync(join(katalog, 'supabase', 'migrations', m), 'select 1;\n')
+  if (vite) {
+    mkdirSync(join(katalog, vite), { recursive: true })
+    writeFileSync(join(katalog, vite, 'vite.config.ts'), 'export default {}\n')
+  }
+  git(['add', '.'])
+  git(['commit', '-q', '-m', 'start'])
+  return katalog
+}
+
+/**
+ * @param {string[]} argumenty
+ * @returns {import('node:child_process').SpawnSyncReturns<string>}
+ */
+const uruchom = (argumenty) => spawnSync('bash', [SKRYPT, ...argumenty], { encoding: 'utf8' })
+
+test('przygotuj-kopie.sh: skladnia bash poprawna', () => {
+  const wynik = spawnSync('bash', ['-n', SKRYPT], { encoding: 'utf8' })
+  assert.equal(wynik.status, 0, wynik.stderr)
+})
+
+test('--dry-run na projekcie pnpm workspace: pokazuje kroki z pakietem fixture i niczego nie tworzy', () => {
+  const zrodlo = projektZrodlowy({ workspace: true })
+  const kopia = join(tmpdir(), `smoke-kopia-${process.pid}-a`)
+  try {
+    const wynik = uruchom([zrodlo, kopia, '--dry-run'])
+    assert.equal(wynik.status, 0, wynik.stdout + wynik.stderr)
+    for (const krok of ['clone', 'remote remove origin', 'feature/smoke-autopilot', '.claude/.backups/', 'sync-template.sh',
+      'packages/smoke-autopilot', 'pnpm install', 'commit --quiet -m']) {
+      assert.ok(wynik.stdout.includes(krok), `brak kroku "${krok}" w:\n${wynik.stdout}`)
+    }
+    assert.equal(existsSync(kopia), false, 'dry-run utworzyl katalog kopii')
+  } finally {
+    rmSync(zrodlo, { recursive: true, force: true })
+  }
+})
+
+test('--dry-run bez pnpm-workspace.yaml: kod zadania w src/lib, bez pakietu fixture', () => {
+  const zrodlo = projektZrodlowy({ workspace: false })
+  try {
+    const wynik = uruchom([zrodlo, join(tmpdir(), `smoke-kopia-${process.pid}-b`), '--dry-run'])
+    assert.equal(wynik.status, 0, wynik.stdout + wynik.stderr)
+    assert.match(wynik.stdout, /Kod zadania: src\/lib$/m)
+    assert.doesNotMatch(wynik.stdout, /packages\/smoke-autopilot/)
+  } finally {
+    rmSync(zrodlo, { recursive: true, force: true })
+  }
+})
+
+test('--dry-run: strona scenariuszy [E2E] w katalogu public aplikacji Vite, bez Vite — public w korzeniu', () => {
+  const zVite = projektZrodlowy({ workspace: true, vite: 'apps/dashboard' })
+  const bezVite = projektZrodlowy({ workspace: false })
+  try {
+    const w1 = uruchom([zVite, join(tmpdir(), `smoke-kopia-${process.pid}-c`), '--dry-run'])
+    assert.equal(w1.status, 0, w1.stdout + w1.stderr)
+    assert.match(w1.stdout, /^Strona E2E: apps\/dashboard\/public$/m)
+    const w2 = uruchom([bezVite, join(tmpdir(), `smoke-kopia-${process.pid}-d`), '--dry-run'])
+    assert.equal(w2.status, 0, w2.stdout + w2.stderr)
+    assert.match(w2.stdout, /^Strona E2E: public$/m)
+  } finally {
+    rmSync(zVite, { recursive: true, force: true })
+    rmSync(bezVite, { recursive: true, force: true })
+  }
+})
+
+test('istniejacy katalog kopii: blad bez zadnego kroku', () => {
+  const zrodlo = projektZrodlowy({ workspace: true })
+  try {
+    const wynik = uruchom([zrodlo, zrodlo, '--dry-run'])
+    assert.equal(wynik.status, 4)
+    assert.match(wynik.stderr, /już istnieje/)
+    assert.doesNotMatch(wynik.stdout, /^\+ /m)
+  } finally {
+    rmSync(zrodlo, { recursive: true, force: true })
+  }
+})
+
+test('--dry-run: po przygotowaniu bazowe bramki kopii (typecheck, test) przed startem runu', () => {
+  const zrodlo = projektZrodlowy({ workspace: true })
+  try {
+    const wynik = uruchom([zrodlo, join(tmpdir(), `smoke-kopia-${process.pid}-c`), '--dry-run'])
+    assert.equal(wynik.status, 0, wynik.stdout + wynik.stderr)
+    const kroki = wynik.stdout.split('\n')
+    const commitFixture = kroki.findIndex((l) => l.includes('test(smoke): fixture'))
+    const bramki = kroki.findIndex((l) => l.includes('bazowe bramki'))
+    assert.ok(commitFixture >= 0 && bramki > commitFixture, `bramki po commicie fixture:\n${wynik.stdout}`)
+    assert.match(wynik.stdout, /pnpm typecheck[\s\S]*pnpm test/)
+  } finally {
+    rmSync(zrodlo, { recursive: true, force: true })
+  }
+})
+
+test('--env <plik>: atrapy zmiennych kopiowane jako .env kopii; brak pliku = blad przed klonem', () => {
+  const zrodlo = projektZrodlowy({ workspace: true })
+  const atrapy = join(zrodlo, 'atrapy.env')
+  writeFileSync(atrapy, 'VITE_SUPABASE_URL=http://127.0.0.1:54321\n')
+  try {
+    const kopia = join(tmpdir(), `smoke-kopia-${process.pid}-d`)
+    const wynik = uruchom([zrodlo, kopia, '--env', atrapy, '--dry-run'])
+    assert.equal(wynik.status, 0, wynik.stdout + wynik.stderr)
+    assert.ok(wynik.stdout.includes(`cp ${atrapy} ${kopia}/.env`), wynik.stdout)
+
+    const brak = uruchom([zrodlo, kopia, '--env', join(zrodlo, 'nie-ma.env'), '--dry-run'])
+    assert.equal(brak.status, 2)
+    assert.match(brak.stderr, /nie-ma\.env/)
+    assert.doesNotMatch(brak.stdout, /^\+ /m)
+  } finally {
+    rmSync(zrodlo, { recursive: true, force: true })
+  }
+})
+
+// P2 (PLAN-POPRAWY): doctor kopii przed bazowymi bramkami — brak narzedzia (np. supabase CLI przy supabase/) ma wyjsc
+// przy przygotowaniu kopii, nie w runie; czerwony doctor = kod 8 i brak komendy runu.
+test('--dry-run: doctor kopii po commicie fixture i przed bazowymi bramkami', () => {
+  const zrodlo = projektZrodlowy({ workspace: true })
+  try {
+    const kopia = join(tmpdir(), `smoke-kopia-${process.pid}-e`)
+    const wynik = uruchom([zrodlo, kopia, '--dry-run'])
+    assert.equal(wynik.status, 0, wynik.stdout + wynik.stderr)
+    const kroki = wynik.stdout.split('\n')
+    const commitFixture = kroki.findIndex((l) => l.includes('test(smoke): fixture'))
+    const doctor = kroki.findIndex((l) => l.includes(`bash ${kopia}/.claude/scripts/doctor/doctor.sh ${kopia}`))
+    const bramki = kroki.findIndex((l) => l.includes('bazowe bramki'))
+    assert.ok(commitFixture >= 0 && doctor > commitFixture && bramki > doctor, `kolejnosc fixture → doctor → bramki:\n${wynik.stdout}`)
+  } finally {
+    rmSync(zrodlo, { recursive: true, force: true })
+  }
+})
+
+// P6: defekt mechaniczny fixture'u — edycja pierwszej migracji projektu (sledzonej w gicie), konfiguracje bramek w pakiecie.
+test('--dry-run: migracja defektu = pierwsza migracja projektu; pakiet z konfiguracjami bramek', () => {
+  const zrodlo = projektZrodlowy({ workspace: true, migracje: ['20260102_b.sql', '20260101_a.sql'] })
+  try {
+    const wynik = uruchom([zrodlo, join(tmpdir(), `smoke-kopia-${process.pid}-f`), '--dry-run'])
+    assert.equal(wynik.status, 0, wynik.stdout + wynik.stderr)
+    assert.match(wynik.stdout, /^Migracja defektu: supabase\/migrations\/20260101_a\.sql$/m)
+    assert.match(wynik.stdout, /wstaw-pakiet\.mjs .*packages\/smoke-autopilot/)
+  } finally {
+    rmSync(zrodlo, { recursive: true, force: true })
+  }
+})
+
+test('--dry-run bez migracji: defekt migracji pominiety (linie z {{MIGRACJA}} usuniete z fixture)', () => {
+  const zrodlo = projektZrodlowy({ workspace: true })
+  try {
+    const wynik = uruchom([zrodlo, join(tmpdir(), `smoke-kopia-${process.pid}-g`), '--dry-run'])
+    assert.equal(wynik.status, 0, wynik.stdout + wynik.stderr)
+    assert.match(wynik.stdout, /^Migracja defektu: brak/m)
+  } finally {
+    rmSync(zrodlo, { recursive: true, force: true })
+  }
+})

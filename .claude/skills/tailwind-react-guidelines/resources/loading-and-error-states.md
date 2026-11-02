@@ -19,14 +19,48 @@ Wzorce dla Vite + React 19 SPA z React Query.
 
 ## Data Fetching z React Query
 
-### Early Returns (Client Components)
+### Hook danych i fabryka kluczy
+
+Komponent nie woła serwisu ani `useQuery` z `queryFn` wprost (sekcja Architektura reguł kodu): dane dostaje z hooka w `src/hooks/`, który woła serwis z `src/services/`. Serwis `templateService` (`src/services/template-service.ts`) jest zbudowany jak `item-service.ts` w [file-organization.md](./file-organization.md) — na kliencie `request()` z limitem czasu, kopertą i `ApiError`.
+
+Hooki szablonów mają jeden plik, `src/hooks/use-templates.ts`. Fabrykę kluczy `templateKeys`, `TEMPLATES_STALE_TIME_MS`, `templateListOptions(filters)`, `useTemplates(filters = {})`, `useSuspenseTemplates(filters = {})` i `useTemplate(id)` definiuje [performance.md](./performance.md#react-query-rekomendowane-dla-spa), a `useCreateTemplate` i `useUpdateTemplate` — [forms.md](./forms.md#integracja-z-react-query). Ten plik dokłada do tego samego modułu mutację usuwania:
+
+```typescript
+// src/hooks/use-templates.ts (cd.) — templateKeys stoi wyżej w tym samym pliku
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+
+import { logger } from '@/lib/logger';
+import { templateService } from '@/services/template-service';
+
+export function useDeleteTemplate() {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (templateId: string) => templateService.remove(templateId),
+        onSuccess: () => {
+            toast.success('Szablon usunięty');
+            // Zwracany promise: mutacja kończy się po odświeżeniu listy
+            return queryClient.invalidateQueries({ queryKey: templateKeys.all });
+        },
+        onError: (error) => {
+            logger.error('TEMPLATE_DELETE_FAILED', error);
+            toast.error('Nie udało się usunąć szablonu');
+        },
+    });
+}
+```
+
+Pozostałe hooki mutacji w tym module (`useCreateTemplate` i `useUpdateTemplate` z forms.md oraz `useSaveTemplate`, `useRestoreTemplate`, `useProcessTemplates` z przykładów niżej) mają ten sam kształt: `mutationFn` woła `templateService`, `onError` loguje stały kod błędu, unieważnienie wraca jako promise.
+
+### Early Returns (domyślny wzorzec)
 ```typescript
 function TemplateList() {
-    const { data, isLoading, error } = useTemplates();
+    const { data, isPending, isError, error } = useTemplates();
 
-    if (isLoading) return <TemplateListSkeleton />;
-    if (error) return <ErrorMessage error={error} />;
-    if (!data?.length) return <EmptyState />;
+    if (isPending) return <TemplateListSkeleton />;
+    if (isError) return <ErrorMessage error={error} />;
+    if (!data.length) return <EmptyState title="Brak szablonów" />;
 
     return (
         <div className="grid gap-4">
@@ -41,22 +75,28 @@ function TemplateList() {
 **Dlaczego early returns:**
 - Jasna kolejność: loading → error → empty → data
 - Każdy stan ma dedykowany UI
-- TypeScript narrowing - po checkach `data` jest zdefiniowane
+- TypeScript narrowing - po `isPending` i `isError` typ `data` jest zdefiniowany (przy `isLoading` nie: wyłączone zapytanie ma `isLoading: false` i brak danych)
 
-### useSuspenseQuery (Preferowane dla nowych komponentów)
+### useSuspenseQuery (widok z Suspense i Error Boundary nad sobą)
 
-Eliminuje potrzebę early returns — data zawsze zdefiniowane:
+Domyślnie widok używa `useQuery` z gałęziami ładowanie → błąd → pusto → dane (sekcja wyżej). `useSuspenseQuery` wybierasz, gdy nad widokiem stoją już `Suspense` i Error Boundary — wtedy znika gałąź ładowania i błędu, a `data` jest zawsze zdefiniowane. Bez tych granic zawieszenie albo błąd wychodzą do najbliższej granicy wyżej i zasłaniają większą część ekranu.
 ```typescript
-import { useSuspenseQuery } from '@tanstack/react-query';
+import { QueryErrorResetBoundary } from '@tanstack/react-query';
+import { Suspense } from 'react';
+import { ErrorBoundary } from 'react-error-boundary';
+
+import { EmptyState } from '@/components/empty-state';
+import { ErrorFallback } from '@/components/error-fallback';
+import { TemplateCard } from '@/components/template-card';
+import { TemplateListSkeleton } from '@/components/template-list-skeleton';
+import { useSuspenseTemplates } from '@/hooks/use-templates';
+import { logger } from '@/lib/logger';
 
 function TemplateList() {
-    const { data } = useSuspenseQuery({
-        queryKey: ['templates'],
-        queryFn: api.getTemplates,
-    });
+    const { data } = useSuspenseTemplates();
 
-    // Brak potrzeby: if (isLoading)... if (error)...
-    if (!data.length) return <EmptyState />;
+    // Brak potrzeby: if (isPending)... if (isError)...
+    if (!data.length) return <EmptyState title="Brak szablonów" />;
 
     return (
         <div className="grid gap-4">
@@ -67,12 +107,21 @@ function TemplateList() {
     );
 }
 
-// Parent obsługuje loading i error:
-<ErrorBoundary FallbackComponent={ErrorFallback}>
-    <Suspense fallback={<TemplateListSkeleton />}>
-        <TemplateList />
-    </Suspense>
-</ErrorBoundary>
+// Parent obsługuje loading i error; reset z QueryErrorResetBoundary ponawia zapytanie
+// (ErrorFallback i ten układ granic: component-patterns.md, sekcja Error Boundaries)
+<QueryErrorResetBoundary>
+    {({ reset }) => (
+        <ErrorBoundary
+            FallbackComponent={ErrorFallback}
+            onError={(error) => logger.error('UI_BOUNDARY', error)}
+            onReset={reset}
+        >
+            <Suspense fallback={<TemplateListSkeleton />}>
+                <TemplateList />
+            </Suspense>
+        </ErrorBoundary>
+    )}
+</QueryErrorResetBoundary>
 ```
 
 **Różnica od early returns:**
@@ -81,7 +130,7 @@ function TemplateList() {
 - `data` jest zawsze zdefiniowane na poziomie typów
 - Granice Suspense mogą być współdzielone między komponentami
 
-### ⚠️ Nie używaj useEffect do fetchingu
+### Nie używaj useEffect do fetchingu
 ```typescript
 // ❌ Anty-wzorzec
 useEffect(() => {
@@ -89,11 +138,8 @@ useEffect(() => {
     fetchData().then(setData).finally(() => setIsLoading(false));
 }, []);
 
-// ✅ React Query
-const { data, isLoading } = useQuery({
-    queryKey: ['templates'],
-    queryFn: api.getTemplates,
-});
+// ✅ React Query przez hook (src/hooks/use-templates.ts, sekcja wyżej)
+const { data, isPending } = useTemplates();
 ```
 
 ---
@@ -102,17 +148,68 @@ const { data, isLoading } = useQuery({
 
 React 19 wprowadził `use` do "odpakowywania" Promise w komponencie:
 ```typescript
-import { use, Suspense } from 'react';
+// src/components/user-profile.tsx
+import { use } from 'react';
 
-function UserProfile({ userPromise }: { userPromise: Promise<User> }) {
+import type { User } from '@/schemas/user-schema';
+
+export function UserProfile({ userPromise }: { userPromise: Promise<User> }) {
     const user = use(userPromise); // Suspenduje do resolve
     return <div>{user.name}</div>;
 }
 
-// Użycie
-<Suspense fallback={<Skeleton />}>
-    <UserProfile userPromise={fetchUser(id)} />
-</Suspense>
+// ❌ Promise tworzony w renderze (fetchUser — dowolna funkcja zwracająca promise): każdy render
+// daje nowy obiekt, więc komponent zawiesza się w kółko
+<UserProfile userPromise={fetchUser(id)} />
+```
+
+Promise dla `use` powstaje raz, poza renderem komponentu, który go odpakowuje, i jest stabilny między renderami. W tym stacku daje go cache React Query przez hook:
+
+```typescript
+// src/hooks/use-user-promise.ts
+import { useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+
+import type { User } from '@/schemas/user-schema';
+import { userService } from '@/services/user-service';
+
+export const userKeys = {
+    all: ['users'] as const,
+    detail: (id: string) => [...userKeys.all, 'detail', id] as const,
+};
+
+export function useUserPromise(userId: string): Promise<User> {
+    const queryClient = useQueryClient();
+    // Inicjalizator useState działa raz na montowanie; nowy userId daje nowe montowanie przez `key`
+    const [userPromise] = useState(() =>
+        queryClient.fetchQuery({
+            queryKey: userKeys.detail(userId),
+            queryFn: ({ signal }) => userService.get(userId, signal),
+        }),
+    );
+    return userPromise;
+}
+```
+```typescript
+// src/components/user-section.tsx
+import { Suspense } from 'react';
+
+import { Skeleton } from '@/components/ui/skeleton';
+import { UserProfile } from '@/components/user-profile';
+import { useUserPromise } from '@/hooks/use-user-promise';
+
+// Odrzucony promise trafia z `use` do najbliższego Error Boundary
+export function UserSection({ userId }: { userId: string }) {
+    const userPromise = useUserPromise(userId);
+
+    return (
+        <Suspense fallback={<Skeleton className="h-6 w-40" />}>
+            <UserProfile userPromise={userPromise} />
+        </Suspense>
+    );
+}
+
+// Rodzic: <UserSection key={userId} userId={userId} />
 ```
 
 ### Kiedy `use` vs React Query
@@ -130,34 +227,66 @@ function UserProfile({ userPromise }: { userPromise: Promise<User> }) {
 ## Optimistic Updates (React 19)
 
 ### useOptimistic - natywny hook
-```typescript
-import { useOptimistic, useTransition } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-function FavoriteButton({ templateId, isFavorite }: Props) {
+`useToggleFavorite` i `FavoriteButton` mają w projekcie jedną definicję — tę. performance.md i component-ux.md (skill ux-ui-guidelines) importują je z `@/hooks/use-toggle-favorite` i `@/components/favorite-button`, zamiast definiować własne.
+```typescript
+// src/hooks/use-toggle-favorite.ts
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+
+import { templateKeys } from '@/hooks/use-templates';
+import { logger } from '@/lib/logger';
+import { templateService } from '@/services/template-service';
+
+export function useToggleFavorite(templateId: string) {
     const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: () => templateService.toggleFavorite(templateId),
+        onError: (error) => {
+            logger.error('FAVORITE_TOGGLE_FAILED', error);
+            toast.error('Nie udało się zapisać ulubionych');
+        },
+        // Zwracany promise: mutateAsync kończy się dopiero po odświeżeniu źródła prawdy
+        onSettled: () => queryClient.invalidateQueries({ queryKey: templateKeys.all }),
+    });
+}
+```
+```typescript
+// src/components/favorite-button.tsx
+import { Heart } from 'lucide-react';
+import { useOptimistic, useTransition } from 'react';
+
+import { Button } from '@/components/ui/button';
+import { useToggleFavorite } from '@/hooks/use-toggle-favorite';
+import { logger } from '@/lib/logger';
+import { cn } from '@/lib/utils';
+
+interface FavoriteButtonProps {
+    templateId: string;
+    isFavorite: boolean;
+}
+
+export function FavoriteButton({ templateId, isFavorite }: FavoriteButtonProps) {
     const [isPending, startTransition] = useTransition();
+    const toggleFavorite = useToggleFavorite(templateId);
 
     // Optimistic state
     const [optimisticFavorite, setOptimisticFavorite] = useOptimistic(isFavorite);
 
-    const mutation = useMutation({
-        mutationFn: () => api.toggleFavorite(templateId),
-        onSettled: () => {
-            queryClient.invalidateQueries({ queryKey: ['templates'] });
-        },
-    });
-
-    // useOptimistic MUSI być wołane wewnątrz transition/action, nie w onMutate.
-    // Await mutateAsync utrzymuje optimistic value do czasu odświeżenia cache.
+    // setOptimisticFavorite wołasz wewnątrz transition (nie w onMutate): wartość optymistyczna
+    // trwa, dopóki trwa transition. mutateAsync czeka na promise z onSettled, więc transition
+    // kończy się po odświeżeniu cache, a nowy `isFavorite` z rodzica zastępuje wartość optymistyczną.
     const handleToggle = () => {
         startTransition(async () => {
             setOptimisticFavorite(!optimisticFavorite); // Instant UI update
             try {
-                await mutation.mutateAsync();
-            } catch {
-                // Auto-rollback przez React - optimisticFavorite wraca do isFavorite
-                toast.error('Nie udało się zapisać');
+                await toggleFavorite.mutateAsync();
+            } catch (error) {
+                // Zdarzenie błędu wysłał już onError hooka (log + toast); React cofa wartość
+                // optymistyczną do isFavorite. Złapanie odrzucenia zatrzymuje je przed Error Boundary,
+                // a ślad wycofania z przyczyną zostaje w logu bez drugiego zdarzenia Sentry.
+                logger.info('FAVORITE_OPTIMISTIC_ROLLBACK', { templateId, error });
             }
         });
     };
@@ -165,47 +294,71 @@ function FavoriteButton({ templateId, isFavorite }: Props) {
     return (
         <Button
             variant="ghost"
+            size="icon"
+            // size="icon" ma 36 px; na ekranie dotykowym cel rośnie do 44 px (accessibility.md, Rozmiar celu)
+            className="pointer-coarse:size-11"
+            aria-label={optimisticFavorite ? 'Usuń z ulubionych' : 'Dodaj do ulubionych'}
+            aria-pressed={optimisticFavorite}
             onClick={handleToggle}
             disabled={isPending}
         >
-            <Heart 
+            <Heart
+                aria-hidden="true"
                 className={cn(
-                    optimisticFavorite && 'fill-red-500 text-red-500'
-                )} 
+                    "h-5 w-5 transition-colors",
+                    optimisticFavorite ? "fill-red-500 text-red-500" : "text-muted-foreground"
+                )}
             />
         </Button>
     );
 }
 ```
 
+`aria-pressed` mówi czytnikowi ekranu, czy przełącznik jest włączony, a `aria-label` — co zrobi kliknięcie; ikona jest ukryta przed czytnikiem, bo nazwę daje etykieta.
+
 ### Alternatywa: React Query onMutate
 
-Dla prostszych przypadków React Query sam obsługuje optimistic updates:
+Dla prostszych przypadków React Query sam obsługuje optimistic updates w cache:
 ```typescript
-const mutation = useMutation({
-    mutationFn: api.toggleFavorite,
-    onMutate: async (templateId) => {
-        await queryClient.cancelQueries({ queryKey: ['templates'] });
-        
-        const previous = queryClient.getQueryData(['templates']);
-        
-        queryClient.setQueryData(['templates'], (old: Template[]) =>
-            old.map(t => 
-                t.id === templateId 
-                    ? { ...t, isFavorite: !t.isFavorite } 
-                    : t
-            )
-        );
-        
-        return { previous };
-    },
-    onError: (err, variables, context) => {
-        queryClient.setQueryData(['templates'], context?.previous);
-    },
-    onSettled: () => {
-        queryClient.invalidateQueries({ queryKey: ['templates'] });
-    },
-});
+// src/hooks/use-toggle-favorite-in-cache.ts
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+
+import { templateKeys } from '@/hooks/use-templates';
+import { logger } from '@/lib/logger';
+import type { Template } from '@/schemas/template-schema';
+import { templateService } from '@/services/template-service';
+
+export function useToggleFavoriteInCache() {
+    const queryClient = useQueryClient();
+    const listKey = templateKeys.list({});
+
+    return useMutation({
+        mutationFn: (templateId: string) => templateService.toggleFavorite(templateId),
+        onMutate: async (templateId) => {
+            await queryClient.cancelQueries({ queryKey: templateKeys.all });
+
+            const previous = queryClient.getQueryData<Template[]>(listKey);
+
+            // old jest undefined, gdy lista nie trafiła jeszcze do cache
+            queryClient.setQueryData<Template[]>(listKey, (old) =>
+                old?.map(t =>
+                    t.id === templateId
+                        ? { ...t, isFavorite: !t.isFavorite }
+                        : t
+                )
+            );
+
+            return { previous };
+        },
+        onError: (error, _templateId, context) => {
+            logger.error('FAVORITE_TOGGLE_FAILED', error);
+            queryClient.setQueryData(listKey, context?.previous);
+            toast.error('Nie udało się zapisać ulubionych');
+        },
+        onSettled: () => queryClient.invalidateQueries({ queryKey: templateKeys.all }),
+    });
+}
 ```
 
 **Kiedy który:**
@@ -217,61 +370,107 @@ const mutation = useMutation({
 ## useTransition dla Ciężkich Operacji
 
 ### CPU-bound (filtrowanie, sortowanie)
+
+W stanie trzymasz frazę, nie przefiltrowaną listę: kopia `templates` w `useState` zostaje przy starych danych, gdy rodzic dostanie nowe po refetchu albo unieważnieniu cache. Transition odracza tylko zastosowanie frazy, a lista liczy się w renderze z aktualnych propsów — ten sam wzorzec co `FilterableList` w [performance.md](./performance.md#usetransition---non-blocking-updates).
 ```typescript
-function TemplateSearch() {
+import { useState, useTransition } from 'react';
+
+import { TemplateGrid } from '@/components/template-grid';
+import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
+import type { Template } from '@/schemas/template-schema';
+
+function filterTemplates(templates: Template[], query: string): Template[] {
+    const normalizedQuery = query.toLowerCase();
+    return templates.filter((template) =>
+        template.name.toLowerCase().includes(normalizedQuery) ||
+        template.tags.some((tag) => tag.includes(normalizedQuery))
+    );
+}
+
+function TemplateSearch({ templates }: { templates: Template[] }) {
     const [query, setQuery] = useState('');
-    const [filteredResults, setFilteredResults] = useState<Template[]>([]);
+    const [appliedQuery, setAppliedQuery] = useState('');
     const [isPending, startTransition] = useTransition();
 
     const handleSearch = (value: string) => {
         setQuery(value); // Natychmiastowy update inputa
-        
+
+        // Ciężki render listy z nową frazą — odroczony, nie blokuje wpisywania
         startTransition(() => {
-            // Ciężka operacja - nie blokuje UI
-            const filtered = templates.filter(t => 
-                t.name.toLowerCase().includes(value.toLowerCase()) ||
-                t.tags.some(tag => tag.includes(value))
-            );
-            setFilteredResults(filtered);
+            setAppliedQuery(value);
         });
     };
 
+    // Lista z aktualnych propsów i zastosowanej frazy; bez kopii templates w stanie
+    const filteredTemplates = filterTemplates(templates, appliedQuery);
+
     return (
         <>
-            <Input 
-                value={query} 
-                onChange={e => handleSearch(e.target.value)}
-            />
-            {isPending && <Spinner className="absolute right-2" />}
-            <TemplateGrid templates={filteredResults} />
+            <div className="relative">
+                <Input
+                    aria-label="Szukaj szablonów"
+                    value={query}
+                    onChange={(event) => handleSearch(event.target.value)}
+                />
+                {isPending && <Spinner className="absolute right-2 top-1/2 -translate-y-1/2" />}
+            </div>
+            <TemplateGrid templates={filteredTemplates} />
         </>
     );
 }
 ```
 
-### IO-bound (async actions)
-```typescript
-function DeleteButton({ templateId }: { templateId: string }) {
-    const [isPending, startTransition] = useTransition();
-    const queryClient = useQueryClient();
+Ten sam efekt bez transition daje `useDeferredValue(query)` — przykład w performance.md, sekcja useDeferredValue.
 
-    const handleDelete = () => {
-        startTransition(async () => {
-            await api.deleteTemplate(templateId);
-            queryClient.invalidateQueries({ queryKey: ['templates'] });
-            toast.success('Szablon usunięty');
-        });
-    };
+### IO-bound (async actions)
+
+Operacja sieciowa idzie przez mutację z hooka (`useDeleteTemplate` z sekcji Hook danych), a stan oczekiwania daje `isPending` mutacji. `useTransition` z funkcją async zostaw dla akcji spoza React Query (np. `useActionState`), bo dwa źródła stanu oczekiwania dla jednej operacji rozjeżdżają się. Usunięcia nie da się cofnąć, więc przycisk pyta o potwierdzenie. Potwierdzenie stoi na `AlertDialog` z shadcn/ui (rola `alertdialog`, nie zamyka się kliknięciem w tło), tak jak kanoniczny `ConfirmDialog` z hookiem `useConfirm` (`@/contexts/confirm-context`) w [component-ux.md](../../ux-ui-guidelines/resources/component-ux.md#useconfirm-hook). Gdy projekt ma `ConfirmProvider`, przycisk woła `const confirm = useConfirm()` i `if (await confirm({...})) deleteTemplate.mutate(templateId)`; przykład niżej pokazuje ten sam dialog bez providera, złożony wprost z części `AlertDialog`:
+
+```typescript
+// src/components/delete-template-button.tsx
+import { Trash } from 'lucide-react';
+
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+    AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
+import { useDeleteTemplate } from '@/hooks/use-templates';
+
+export function DeleteTemplateButton({ templateId }: { templateId: string }) {
+    const deleteTemplate = useDeleteTemplate();
 
     return (
-        <Button 
-            variant="destructive" 
-            onClick={handleDelete}
-            disabled={isPending}
-        >
-            {isPending ? <Spinner /> : <Trash />}
-            Usuń
-        </Button>
+        <AlertDialog>
+            {/* asChild — API Radix; components.json ma styl Radix (styling-guide.md, components.json) */}
+            <AlertDialogTrigger asChild>
+                <Button variant="destructive" disabled={deleteTemplate.isPending}>
+                    {deleteTemplate.isPending ? <Spinner /> : <Trash aria-hidden="true" />}
+                    Usuń
+                </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Usunąć szablon?</AlertDialogTitle>
+                    <AlertDialogDescription>Tej operacji nie można cofnąć.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Anuluj</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => deleteTemplate.mutate(templateId)}>
+                        Usuń
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
     );
 }
 ```
@@ -282,17 +481,23 @@ function DeleteButton({ templateId }: { templateId: string }) {
 
 ### Z React Query mutation
 ```typescript
-function SaveButton() {
+import { Loader2 } from 'lucide-react';
+
+import { Button } from '@/components/ui/button';
+import { useCreateTemplate } from '@/hooks/use-templates';
+import type { TemplateValues } from '@/schemas/template-schema';
+
+function SaveButton({ values }: { values: TemplateValues }) {
     const mutation = useCreateTemplate();
 
     return (
         <Button 
-            onClick={() => mutation.mutate(data)}
+            onClick={() => mutation.mutate(values)}
             disabled={mutation.isPending}
         >
             {mutation.isPending ? (
                 <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
                     Zapisywanie...
                 </>
             ) : (
@@ -303,54 +508,105 @@ function SaveButton() {
 }
 ```
 
-### Z useTransition
-```typescript
-function SubmitButton({ onSubmit }: { onSubmit: () => Promise<void> }) {
-    const [isPending, startTransition] = useTransition();
+### Z useTransition — `AsyncButton`
 
-    return (
-        <Button 
-            onClick={() => startTransition(onSubmit)}
-            disabled={isPending}
-        >
-            {isPending ? <Spinner /> : 'Wyślij'}
-        </Button>
-    );
-}
+Dla akcji spoza React Query (kopiowanie do schowka, eksport pliku) projekt ma jeden przycisk: `AsyncButton` z [component-ux.md](../../ux-ui-guidelines/resources/component-ux.md#button-z-usetransition) (`src/components/async-button.tsx`). Łapie błąd wewnątrz transition i loguje go ze stałym kodem z propsa `errorCode`, bo odrzucony promise w `startTransition` trafiłby do najbliższego Error Boundary i zamienił ekran w stan błędu; ma też `aria-busy`, widoczny fokus i cel 44 px na ekranie dotykowym (`pointer-coarse:min-h-11`). Mutacji z hooka React Query mu nie przekazujesz — hook już loguje błąd w `onError`, więc wystarcza `mutate` + `isPending` z sekcji wyżej.
+```typescript
+import { AsyncButton } from '@/components/async-button';
+
+<AsyncButton onClick={exportReport} errorCode="REPORT_EXPORT_FAILED">
+    Eksportuj
+</AsyncButton>
 ```
 
 ### useFormStatus + useActionState (React 19)
 
-`useFormStatus` wymaga `<form action={...}>`. W React 19 używaj razem z `useActionState`:
+`useFormStatus` wymaga `<form action={...}>`. W React 19 używaj razem z `useActionState`. Akcja stoi w hooku (komponent nie woła serwisu), dane z `FormData` parsuje schemat Zod, a stan formularza to unia dyskryminowana zamiast pary flag. Formularz wysyła te same dane co `ContactForm` z [forms.md](./forms.md#podstawowy-formularz) — imię, e-mail i wiadomość — więc akcja parsuje je tym samym `contactSchema` i woła `contactService.send` z pełnym `ContactValues`. Wzorzec jest ten sam co `NewsletterForm` z [component-ux.md](../../ux-ui-guidelines/resources/component-ux.md#formularz-bez-react-query--akcja-w-hooku): stan błędu niesie wpisane wartości, bo React 19 po akcji resetuje niekontrolowane pola, a region `role="status"` jest w DOM od początku.
 
 ```typescript
+// src/hooks/use-contact-action.ts
 import { useActionState } from 'react';
+import { z } from 'zod';
+
+import { logger } from '@/lib/logger';
+import { contactSchema } from '@/schemas/contact-schema';
+import { contactService } from '@/services/contact-service';
+
+// Wpisane wartości do odtworzenia pól; .catch('') daje pusty tekst dla brakującego pola
+const contactDraftSchema = z.object({
+    name: z.string().catch(''),
+    email: z.string().catch(''),
+    message: z.string().catch(''),
+});
+export type ContactDraft = z.infer<typeof contactDraftSchema>;
+
+export type ContactActionState =
+    | { status: 'idle' }
+    | { status: 'success' }
+    | { status: 'error'; message: string; draft: ContactDraft };
+
+const INITIAL_CONTACT_ACTION_STATE: ContactActionState = { status: 'idle' };
+
+async function submitContact(
+    _previous: ContactActionState,
+    formData: FormData,
+): Promise<ContactActionState> {
+    const fields = Object.fromEntries(formData);
+    const draft = contactDraftSchema.parse(fields);
+    const parsed = contactSchema.safeParse(fields);
+    if (!parsed.success) {
+        return { status: 'error', message: 'Popraw imię, adres e-mail i wiadomość.', draft };
+    }
+
+    try {
+        await contactService.send(parsed.data);
+        return { status: 'success' };
+    } catch (error) {
+        logger.error('CONTACT_SEND_FAILED', error);
+        return { status: 'error', message: 'Nie udało się wysłać wiadomości.', draft };
+    }
+}
+
+export function useContactAction() {
+    return useActionState(submitContact, INITIAL_CONTACT_ACTION_STATE);
+}
+```
+```typescript
+// src/components/contact-action-form.tsx
 import { useFormStatus } from 'react-dom';
 
-function SubmitButton() {
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { useContactAction } from '@/hooks/use-contact-action';
+
+// Przycisk z useFormStatus czyta stan formularza, w którym stoi; nazwa odróżnia go od AsyncButton
+function FormSubmitButton() {
     const { pending } = useFormStatus();
     return (
-        <Button type="submit" disabled={pending}>
+        <Button type="submit" disabled={pending} className="pointer-coarse:min-h-11">
             {pending ? 'Wysyłanie...' : 'Wyślij'}
         </Button>
     );
 }
 
-function SimpleContactForm() {
-    const [state, submitAction, isPending] = useActionState(
-        async (_prev: State, formData: FormData) => {
-            const result = await api.sendContact(Object.fromEntries(formData));
-            return result;
-        },
-        { error: null }
-    );
+export function ContactActionForm() {
+    const [state, submitAction] = useContactAction();
+    const draft = state.status === 'error' ? state.draft : undefined;
 
     return (
-        <form action={submitAction}>
-            <Input name="name" required />
-            <Input name="email" type="email" required />
-            {state.error && <p className="text-destructive">{state.error}</p>}
-            <SubmitButton />
+        <form action={submitAction} className="space-y-2">
+            <Input name="name" aria-label="Imię" required defaultValue={draft?.name ?? ''} />
+            <Input name="email" type="email" aria-label="E-mail" required defaultValue={draft?.email ?? ''} />
+            <Textarea name="message" aria-label="Wiadomość" required defaultValue={draft?.message ?? ''} />
+            {state.status === 'error' && (
+                <p role="alert" className="text-sm text-destructive">{state.message}</p>
+            )}
+            {/* Region status w DOM od początku; zmienia się tylko treść */}
+            <p role="status" className="text-sm">
+                {state.status === 'success' && 'Wiadomość wysłana.'}
+            </p>
+            <FormSubmitButton />
         </form>
     );
 }
@@ -362,10 +618,10 @@ function SimpleContactForm() {
 
 ## Suspense dla Lazy Components
 
-### ⚠️ Nie używaj early returns dla lazy-loaded
+### Nie używaj early returns dla lazy-loaded
 ```typescript
 // ❌ Błąd - zaburza Suspense
-const LazyDashboard = lazy(() => import('./Dashboard'));
+const LazyDashboard = lazy(() => import('@/pages/dashboard-page')); // strona z default exportem
 
 function App() {
     const [isReady, setIsReady] = useState(false);
@@ -411,52 +667,53 @@ function App() {
 ## Error Boundaries
 
 ### react-error-boundary (Rekomendowane)
+
+`ErrorFallback` (`src/components/error-fallback.tsx`) ma jedną definicję w [component-patterns.md](./component-patterns.md#error-boundaries): ogólny komunikat dla użytkownika, treść błędu tylko w trybie deweloperskim i przycisk „Spróbuj ponownie”. Każde `<ErrorBoundary>` ma `onError` z kodem `UI_BOUNDARY`, a ponowienie idzie przez `reset` z `QueryErrorResetBoundary` — zapytanie, które rzuciło do granicy, pobiera dane od nowa, a reszta cache zostaje (`queryClient.clear()` w `onReset` wyczyściłby dane całej aplikacji).
 ```typescript
+import { QueryErrorResetBoundary } from '@tanstack/react-query';
 import { ErrorBoundary } from 'react-error-boundary';
 
-function ErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
-    return (
-        <div className="p-6 text-center">
-            <AlertCircle className="mx-auto h-12 w-12 text-destructive" />
-            <h2 className="mt-4 text-lg font-semibold">Coś poszło nie tak</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-                {error.message}
-            </p>
-            <Button onClick={resetErrorBoundary} className="mt-4">
-                Spróbuj ponownie
-            </Button>
-        </div>
-    );
-}
+import { ErrorFallback } from '@/components/error-fallback';
+import { logger } from '@/lib/logger';
 
-// Użycie
-<ErrorBoundary 
-    FallbackComponent={ErrorFallback}
-    onError={(error) => logger.error('Boundary caught:', error)}
-    onReset={() => queryClient.clear()}
->
-    <App />
-</ErrorBoundary>
+// Użycie: stały kod błędu jako komunikat logu, błąd jako drugi argument
+<QueryErrorResetBoundary>
+    {({ reset }) => (
+        <ErrorBoundary
+            FallbackComponent={ErrorFallback}
+            onError={(error) => logger.error('UI_BOUNDARY', error)}
+            onReset={reset}
+        >
+            <App />
+        </ErrorBoundary>
+    )}
+</QueryErrorResetBoundary>
 ```
 
 ### useErrorBoundary w komponentach
 ```typescript
 import { useErrorBoundary } from 'react-error-boundary';
 
+import { Button } from '@/components/ui/button';
+import { useProcessTemplates } from '@/hooks/use-templates';
+
 function DataProcessor() {
     const { showBoundary } = useErrorBoundary();
+    const processTemplates = useProcessTemplates();
 
     const handleProcess = async () => {
         try {
-            await processData();
+            await processTemplates.mutateAsync();
         } catch (error) {
-            showBoundary(error); // Propaguje do Error Boundary
+            showBoundary(error); // Propaguje do Error Boundary, które loguje błąd w onError
         }
     };
 
-    return <Button onClick={handleProcess}>Przetwórz</Button>;
+    return <Button onClick={() => void handleProcess()}>Przetwórz</Button>;
 }
 ```
+
+Ten sam efekt bez `try/catch` daje opcja mutacji `throwOnError: true` w hooku — React Query przekazuje wtedy błąd do Error Boundary sam.
 
 ---
 
@@ -480,8 +737,12 @@ toast.error('Błąd połączenia', {
 
 ### toast.promise dla async
 ```typescript
-const handleSave = async () => {
-    await toast.promise(api.saveTemplate(data), {
+// useSaveTemplate: hook z useMutation → templateService.save, onError loguje
+// TEMPLATE_SAVE_FAILED; komunikat dla użytkownika daje tu toast.promise, więc hook nie dokłada toastu
+const saveTemplate = useSaveTemplate();
+
+const handleSave = (values: TemplateValues) => {
+    toast.promise(saveTemplate.mutateAsync(values), {
         loading: 'Zapisywanie...',
         success: 'Szablon zapisany!',
         error: 'Nie udało się zapisać',
@@ -489,29 +750,38 @@ const handleSave = async () => {
 };
 ```
 
+`toast.promise` w Sonner v2 zwraca obiekt z `unwrap()`, nie promise, więc `await toast.promise(...)` nie czeka na operację (wersję sonner sprawdzasz w package.json). Kod, który ma czekać na wynik, czeka na `toast.promise(...).unwrap()` albo na sam `mutateAsync` i obsługuje jego odrzucenie.
+
 ### Z akcją
 ```typescript
-toast.error('Szablon usunięty', {
+// useRestoreTemplate: hook z useMutation → templateService.restore, onError z logiem TEMPLATE_RESTORE_FAILED
+const restoreTemplate = useRestoreTemplate();
+
+toast('Szablon usunięty', {
     action: {
         label: 'Cofnij',
-        onClick: () => api.restoreTemplate(id),
+        onClick: () => restoreTemplate.mutate(id),
     },
 });
 ```
 
-### Setup (main.tsx)
+### Setup
+
+`<Toaster>` stoi w drzewie raz, obok providerów w `app.tsx` (pełny plik w [file-organization.md](./file-organization.md), sekcja Routing):
+
 ```typescript
+// src/app.tsx — fragment
 import { Toaster } from 'sonner';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-        <QueryClientProvider client={queryClient}>
-            <App />
-            <Toaster position="bottom-right" richColors />
-        </QueryClientProvider>
-    </React.StrictMode>
-);
+<QueryClientProvider client={queryClient}>
+    <BrowserRouter>
+        {/* ...trasy */}
+        <Toaster position="bottom-right" richColors />
+    </BrowserRouter>
+</QueryClientProvider>
 ```
+
+`main.tsx` renderuje samo `<App />` po zawężeniu elementu `#root` (`if (!rootElement) throw new BootstrapError('ROOT_MISSING')` zamiast `!`) — plik w file-organization.md, sekcja Setup React Query.
 
 ---
 
@@ -534,10 +804,12 @@ function TemplateCardSkeleton() {
     );
 }
 
+const TEMPLATE_SKELETON_COUNT = 6;
+
 function TemplateListSkeleton() {
     return (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, i) => (
+            {Array.from({ length: TEMPLATE_SKELETON_COUNT }).map((_, i) => (
                 <TemplateCardSkeleton key={i} />
             ))}
         </div>
@@ -548,7 +820,7 @@ function TemplateListSkeleton() {
 ### Animacja pulse
 ```typescript
 // components/ui/skeleton.tsx (shadcn)
-function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+export function Skeleton({ className, ...props }: React.ComponentProps<'div'>) {
     return (
         <div
             className={cn('animate-pulse rounded-md bg-muted', className)}
@@ -561,87 +833,47 @@ function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>)
 ---
 
 ## Logger dla Produkcji
+
+Logger aplikacji (`src/lib/logger.ts`) definiuje skill sentry-integration: [react-sentry-patterns.md, sekcja Logger Integration](../../sentry-integration/resources/react-sentry-patterns.md#logger-integration). Ten plik go nie powtarza, bo dwie definicje loggera rozjeżdżają się po cichu — tamta w produkcji wysyła zdarzenie do Sentry, a wersja tylko z `console.*` nie zostawia operatorowi żadnego śladu.
+
+API, którego używają przykłady w tym skillu:
+
 ```typescript
-// lib/logger.ts
-const isDev = import.meta.env.DEV;
+import { logger } from '@/lib/logger';
 
-interface LogContext {
-    component?: string;
-    action?: string;
-    [key: string]: unknown;
-}
+// Błąd nieoczekiwany: stały kod w UPPER_SNAKE_CASE jako komunikat, błąd jako drugi argument
+logger.error('TEMPLATE_CREATE_FAILED', error);
 
-export const logger = {
-    error: (message: string, error?: unknown, context?: LogContext) => {
-        if (isDev) {
-            console.error(message, error, context);
-        }
-        
-        // Production: Sentry, LogRocket, etc.
-        // Sentry.captureException(error, { extra: context });
-    },
-    
-    warn: (message: string, context?: LogContext) => {
-        if (isDev) {
-            console.warn(message, context);
-        }
-    },
-    
-    info: (message: string, context?: LogContext) => {
-        if (isDev) {
-            console.info(message, context);
-        }
-    },
-};
+// Oczekiwana odmowa (walidacja, 4xx z kodem biznesowym): bez zdarzenia błędu w Sentry
+logger.info('TEMPLATE_NAME_TAKEN', { status: 409 });
 ```
+
+Komunikat to kod błędu, nie tekst z danymi użytkownika — sekretów i danych osobowych nie logujesz (sekcja Bezpieczeństwo reguł kodu).
 
 ### Użycie z Error Boundary
 ```typescript
+// Pełny układ z QueryErrorResetBoundary — sekcja Error Boundaries wyżej
 <ErrorBoundary
     FallbackComponent={ErrorFallback}
-    onError={(error, info) => {
-        logger.error('React Error Boundary', error, {
-            componentStack: info.componentStack,
-        });
-    }}
+    onError={(error) => logger.error('UI_BOUNDARY', error)}
 >
     <App />
 </ErrorBoundary>
 ```
 
+Stos komponentów przy błędzie renderu dołącza do zdarzenia integracja Sentry z Reactem (`Sentry.ErrorBoundary` albo `reactErrorHandler()`, ten sam plik skilla sentry-integration).
+
 ---
 
 ## Empty States
-```typescript
-interface EmptyStateProps {
-    icon?: React.ReactNode;
-    title: string;
-    description?: string;
-    action?: React.ReactNode;
-}
 
-function EmptyState({ icon, title, description, action }: EmptyStateProps) {
-    return (
-        <div className="flex flex-col items-center justify-center py-12 text-center">
-            {icon && (
-                <div className="text-muted-foreground mb-4">
-                    {icon}
-                </div>
-            )}
-            <h3 className="text-lg font-medium">{title}</h3>
-            {description && (
-                <p className="mt-1 text-sm text-muted-foreground max-w-sm">
-                    {description}
-                </p>
-            )}
-            {action && <div className="mt-4">{action}</div>}
-        </div>
-    );
-}
+`EmptyState` ma jedno API we wszystkich plikach skilli UI: `{ title, description?, action? }`. Komponent (`src/components/empty-state.tsx`) definiuje [component-ux.md](../../ux-ui-guidelines/resources/component-ux.md#empty-states) — ten plik go importuje, bo dwie definicje z tym samym API rozjeżdżają się wyglądem. Tytuł mówi, co się stało, opis — co użytkownik może zrobić, akcja — następny krok.
+```typescript
+import { EmptyState } from '@/components/empty-state';
+import { Button } from '@/components/ui/button';
 
 // Użycie
 <EmptyState
-    icon={<FileX className="h-12 w-12" />}
     title="Brak szablonów"
     description="Utwórz swój pierwszy szablon, aby rozpocząć."
     action={<Button>Utwórz szablon</Button>}
@@ -652,58 +884,55 @@ function EmptyState({ icon, title, description, action }: EmptyStateProps) {
 
 ## Pełny Przykład: Lista z CRUD
 ```typescript
+import { DeleteTemplateButton } from '@/components/delete-template-button';
+import { EmptyState } from '@/components/empty-state';
+import { TemplateCard } from '@/components/template-card';
+import { TemplateListSkeleton } from '@/components/template-list-skeleton';
+import { Button } from '@/components/ui/button';
+import { useTemplates } from '@/hooks/use-templates';
+
 function TemplateList() {
-    const { data, isLoading, error } = useTemplates();
-    const deleteMutation = useDeleteTemplate();
-    const [isPending, startTransition] = useTransition();
+    const { data, isPending, isError, refetch } = useTemplates();
 
     // Loading
-    if (isLoading) return <TemplateListSkeleton />;
+    if (isPending) return <TemplateListSkeleton />;
 
     // Error
-    if (error) {
+    if (isError) {
         return (
-            <EmptyState
-                icon={<AlertCircle className="h-12 w-12 text-destructive" />}
-                title="Błąd ładowania"
-                description={error.message}
-                action={
-                    <Button onClick={() => window.location.reload()}>
-                        Odśwież stronę
-                    </Button>
-                }
-            />
+            <div role="alert">
+                <EmptyState
+                    title="Błąd ładowania"
+                    description="Nie udało się pobrać szablonów."
+                    action={
+                        <Button onClick={() => void refetch()}>
+                            Spróbuj ponownie
+                        </Button>
+                    }
+                />
+            </div>
         );
     }
 
     // Empty
-    if (!data?.length) {
+    if (!data.length) {
         return (
             <EmptyState
-                icon={<FileX className="h-12 w-12" />}
                 title="Brak szablonów"
                 action={<Button>Utwórz szablon</Button>}
             />
         );
     }
 
-    // Data
+    // Data — usuwanie przez przycisk z potwierdzeniem; hook useDeleteTemplate loguje błąd,
+    // pokazuje toast i unieważnia listę (sekcje Hook danych i IO-bound)
     return (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {data.map(template => (
                 <TemplateCard
                     key={template.id}
                     template={template}
-                    onDelete={() => {
-                        toast.promise(
-                            deleteMutation.mutateAsync(template.id),
-                            {
-                                loading: 'Usuwanie...',
-                                success: 'Szablon usunięty',
-                                error: 'Nie udało się usunąć',
-                            }
-                        );
-                    }}
+                    actions={<DeleteTemplateButton templateId={template.id} />}
                 />
             ))}
         </div>
@@ -717,4 +946,5 @@ function TemplateList() {
 
 - [component-patterns.md](./component-patterns.md) - Error Boundary szczegóły
 - [performance.md](./performance.md) - React Query, caching
-- [file-organization.md](./file-organization.md) - Struktura hooks/
+- [file-organization.md](./file-organization.md) - Struktura hooks/ i services/, klient `request()`, `ApiError`
+- [react-sentry-patterns.md](../../sentry-integration/resources/react-sentry-patterns.md#logger-integration) - Definicja `lib/logger.ts`

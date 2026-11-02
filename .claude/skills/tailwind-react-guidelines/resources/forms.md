@@ -16,24 +16,17 @@ React Hook Form + Zod - walidacja, dostępność, integracja z React Query.
 
 ### Alternatywa: useActionState (React 19)
 
-Dla prostych formularzy bez zaawansowanej walidacji:
+Dla prostych formularzy bez zaawansowanej walidacji. Akcja leży w hooku: parsuje `FormData` schematem Zod (dane z formularza to wejście z zewnątrz), woła serwis i zwraca stan jako unię dyskryminowaną zamiast pary flag `error`/`success`.
+
+Kanoniczny przykład to `NewsletterForm` (`src/components/newsletter-form.tsx`) z hookiem `useSubscribeNewsletter` (`src/hooks/use-subscribe-newsletter.ts`) w [component-ux.md](../../ux-ui-guidelines/resources/component-ux.md#formularz-bez-react-query--akcja-w-hooku); ten plik go nie powtarza, bo dwie wersje jednego komponentu w tym samym pliku rozjeżdżają się po cichu. Trzy cechy tego wzorca, których nie gubisz w żadnym formularzu z `useActionState`:
+- stan błędu niesie wpisaną wartość (`{ status: 'error'; message; email }`), a pole dostaje ją jako `defaultValue`, bo React 19 po zakończeniu akcji resetuje niekontrolowane pola i użytkownik straciłby wpisany adres;
+- przycisk wysyłki czyta stan z `useFormStatus` (komponent wewnątrz `<form>`), więc formularz nie trzyma własnej flagi oczekiwania;
+- region `role="status"` jest w DOM od pierwszego renderu i zmienia się tylko jego treść, bo czytnik ekranu nie ogłasza regionu dodanego razem z komunikatem.
 ```typescript
-import { useActionState } from 'react';
+// Użycie na stronie
+import { NewsletterForm } from '@/components/newsletter-form';
 
-const [state, submitAction, isPending] = useActionState(
-    async (_prev, formData: FormData) => {
-        const email = formData.get('email') as string;
-        if (!email) return { error: 'Email wymagany' };
-        await api.subscribe(email);
-        return { error: null, success: true };
-    },
-    { error: null, success: false }
-);
-
-<form action={submitAction}>
-    <Input name="email" type="email" />
-    <Button type="submit" disabled={isPending}>Zapisz</Button>
-</form>
+<NewsletterForm />
 ```
 
 **Kiedy `useActionState`:** 1-3 pola, brak złożonej walidacji, progressive enhancement.
@@ -42,69 +35,101 @@ const [state, submitAction, isPending] = useActionState(
 ---
 
 ## Setup
+
+Pakiety: `react-hook-form`, `zod`, `@hookform/resolvers`. Sprawdź package.json; nową zależność zgłoś (w workflowie: w odchyleniach). Instalujesz menedżerem z lockfile projektu z dokładną wersją, np.:
 ```bash
-npm install react-hook-form zod @hookform/resolvers
+pnpm add -E react-hook-form zod @hookform/resolvers
 ```
 
 ---
 
 ## Podstawowy Formularz
+
+Kanoniczny `ContactForm` (ten sam komponent opisują component-ux.md i testing.md). Schemat i typ leżą w osobnym module, bo korzystają z nich formularz, hook i serwis. Wysyłka idzie przez hook z `useMutation`, który woła serwis — komponent nie woła API wprost. `mode: 'onTouched'` sprawdza pole po pierwszym opuszczeniu, a potem przy każdej zmianie, więc błąd pojawia się przy polu, zanim użytkownik wyśle formularz (sekcja Tryby Walidacji).
 ```typescript
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
+// src/schemas/contact-schema.ts
 import { z } from 'zod';
+
+export const contactSchema = z.strictObject({
+    name: z.string().min(2, 'Minimum 2 znaki').max(100, 'Maksymalnie 100 znaków'),
+    email: z.email('Nieprawidłowy adres email'),
+    message: z.string().min(10, 'Minimum 10 znaków').max(2000, 'Maksymalnie 2000 znaków'),
+});
+
+// Typ ze schematu; nazwa `ContactValues`, bo `FormData` przesłania globalny typ DOM, a `ContactForm` to nazwa komponentu
+export type ContactValues = z.infer<typeof contactSchema>;
+```
+```typescript
+// src/hooks/use-send-contact.ts
+import { useMutation } from '@tanstack/react-query';
+import { toast } from 'sonner';
+
+import { logger } from '@/lib/logger';
+import type { ContactValues } from '@/schemas/contact-schema';
+import { contactService } from '@/services/contact-service';
+
+export function useSendContact() {
+    return useMutation({
+        mutationFn: (values: ContactValues) => contactService.send(values),
+        onError: (error) => {
+            logger.error('CONTACT_SEND_FAILED', error);
+            toast.error('Nie udało się wysłać wiadomości');
+        },
+    });
+}
+```
+```typescript
+// src/components/contact-form.tsx
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useForm } from 'react-hook-form';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { useSendContact } from '@/hooks/use-send-contact';
+import { contactSchema, type ContactValues } from '@/schemas/contact-schema';
 
-// 1. SCHEMA
-const contactSchema = z.object({
-    name: z.string().min(2, 'Minimum 2 znaki'),
-    email: z.email('Nieprawidłowy adres email'),
-    message: z.string().min(10, 'Minimum 10 znaków').max(500, 'Maximum 500 znaków'),
-});
+function FieldErrorMessage({ id, message }: { id: string; message?: string }) {
+    if (!message) return null;
+    return (
+        <p id={id} role="alert" className="text-sm text-destructive">
+            {message}
+        </p>
+    );
+}
 
-// 2. TYP ZE SCHEMA
-type ContactForm = z.infer<typeof contactSchema>;
-
-// 3. KOMPONENT
-export function ContactForm() {
-    const {
-        register,
-        handleSubmit,
-        formState: { errors, isSubmitting },
-        reset,
-    } = useForm<ContactForm>({
+export function ContactForm({ onSuccess }: { onSuccess?: () => void }) {
+    const sendContact = useSendContact();
+    const { register, handleSubmit, formState: { errors }, reset } = useForm<ContactValues>({
         resolver: zodResolver(contactSchema),
-        defaultValues: {
-            name: '',
-            email: '',
-            message: '',
-        },
+        mode: 'onTouched',
+        defaultValues: { name: '', email: '', message: '' },
     });
 
-    const onSubmit = async (data: ContactForm) => {
-        await api.sendContact(data);
-        reset();
-        toast.success('Wiadomość wysłana!');
+    const handleValidSubmit = (values: ContactValues) => {
+        sendContact.mutate(values, {
+            onSuccess: () => {
+                reset();
+                toast.success('Wiadomość wysłana!');
+                onSuccess?.();
+            },
+        });
     };
 
     return (
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        // handleSubmit zwraca promise — `void` mówi lintowi, że wynik świadomie pomijamy
+        <form onSubmit={(event) => void handleSubmit(handleValidSubmit)(event)} className="space-y-4">
             <div className="space-y-2">
                 <Label htmlFor="name">Imię</Label>
                 <Input
                     id="name"
                     {...register('name')}
-                    aria-invalid={!!errors.name}
+                    aria-invalid={errors.name ? true : undefined}
                     aria-describedby={errors.name ? 'name-error' : undefined}
                 />
-                {errors.name && (
-                    <p id="name-error" role="alert" className="text-sm text-destructive">
-                        {errors.name.message}
-                    </p>
-                )}
+                <FieldErrorMessage id="name-error" message={errors.name?.message} />
             </div>
 
             <div className="space-y-2">
@@ -113,14 +138,10 @@ export function ContactForm() {
                     id="email"
                     type="email"
                     {...register('email')}
-                    aria-invalid={!!errors.email}
+                    aria-invalid={errors.email ? true : undefined}
                     aria-describedby={errors.email ? 'email-error' : undefined}
                 />
-                {errors.email && (
-                    <p id="email-error" role="alert" className="text-sm text-destructive">
-                        {errors.email.message}
-                    </p>
-                )}
+                <FieldErrorMessage id="email-error" message={errors.email?.message} />
             </div>
 
             <div className="space-y-2">
@@ -128,23 +149,21 @@ export function ContactForm() {
                 <Textarea
                     id="message"
                     {...register('message')}
-                    aria-invalid={!!errors.message}
+                    aria-invalid={errors.message ? true : undefined}
                     aria-describedby={errors.message ? 'message-error' : undefined}
                 />
-                {errors.message && (
-                    <p id="message-error" role="alert" className="text-sm text-destructive">
-                        {errors.message.message}
-                    </p>
-                )}
+                <FieldErrorMessage id="message-error" message={errors.message?.message} />
             </div>
 
-            <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? 'Wysyłanie...' : 'Wyślij'}
+            <Button type="submit" disabled={sendContact.isPending}>
+                {sendContact.isPending ? 'Wysyłanie...' : 'Wyślij'}
             </Button>
         </form>
     );
 }
 ```
+
+**Kontrakt dla testów:** pole bez błędu nie ma atrybutu `aria-invalid` (wartość `undefined` usuwa go z DOM, więc test sprawdza `not.toHaveAttribute('aria-invalid')`); pole z błędem ma `aria-invalid="true"` i `aria-describedby` wskazujące na `<p role="alert">`. Przy kilku błędach naraz na stronie jest kilka alertów — test używa `getAllByRole('alert')`. Serwis `contactService.send` korzysta z klienta API z [file-organization.md](./file-organization.md) (sekcja `lib/`).
 
 ---
 
@@ -162,7 +181,9 @@ z.string().regex(/^\d{9}$/, 'Nieprawidłowy numer telefonu')
 
 // Liczby
 z.number().min(0, 'Minimum 0').max(100, 'Maximum 100')
-z.coerce.number() // Konwertuje string z inputa na number
+// Pole liczbowe formularza: register('age', { valueAsNumber: true }) + z.number().
+// z.coerce.number() ma typ wejścia `unknown`, więc formularz wymaga typów z.input/z.output (niżej)
+z.coerce.number() // Konwertuje string na number — dla FormData i query stringu
 
 // Boolean
 z.boolean()
@@ -182,9 +203,24 @@ z.string().toLowerCase()
 z.string().transform(val => val.toUpperCase())
 ```
 
+### Typ formularza: wejście i wyjście schematu
+
+Schemat z `.default()`, `.transform()`, `.pipe()` albo `z.coerce` ma inny typ na wejściu niż na wyjściu: `isPublic: z.boolean().default(false)` przyjmuje `boolean | undefined`, a zwraca `boolean`. `useForm<z.infer<typeof schema>>` podaje formularzowi typ wyjścia, więc `zodResolver(schema)` się z nim nie zgadza i kompilacja pada (TS2322: `boolean | undefined` nie pasuje do `boolean`). Formularz z takim schematem typujesz trzema parametrami — wartości pól to wejście schematu, a `handleSubmit` dostaje wyjście po walidacji:
+```typescript
+useForm<z.input<typeof schema>, unknown, z.output<typeof schema>>({
+    resolver: zodResolver(schema),
+    defaultValues: SCHEMA_DEFAULT_VALUES, // pełne wartości startowe, typu z.input
+});
+```
+
+Bez parametrów typu (`useForm({ resolver: zodResolver(schema), defaultValues })`) TypeScript wywnioskuje oba typy z resolvera — to też działa. Schemat bez `.default()`, transformacji i `coerce` (np. `contactSchema`) ma ten sam typ wejścia i wyjścia, więc `useForm<ContactValues>` wystarcza. Wartości startowe podajesz zawsze jawnie, żeby pola były kontrolowane od pierwszego renderu, a `reset()` wracał do znanego stanu.
+
 ### Złożone Schema
 ```typescript
-const templateSchema = z.object({
+// src/schemas/template-schema.ts
+import { z } from 'zod';
+
+export const templateSchema = z.object({
     name: z.string().min(1, 'Nazwa jest wymagana').max(100),
     description: z.string().max(500).optional(),
     category: z.enum(['marketing', 'sales', 'hr', 'other']),
@@ -196,35 +232,64 @@ const templateSchema = z.object({
     }),
 });
 
-type TemplateForm = z.infer<typeof templateSchema>;
+// Wartości pól formularza (wejście schematu: isPublic może być undefined)
+export type TemplateFormInput = z.input<typeof templateSchema>;
+// Dane po walidacji — przyjmują je hooki useCreateTemplate/useUpdateTemplate i templateService
+export type TemplateValues = z.output<typeof templateSchema>;
+
+export const TEMPLATE_DEFAULT_VALUES: TemplateFormInput = {
+    name: '',
+    description: '',
+    category: 'marketing',
+    isPublic: false,
+    tags: [],
+    settings: { notifications: true, theme: 'system' },
+};
+```
+
+Ten sam moduł trzyma kontrakt szablonu zwracanego przez API — jedno źródło typu `Template` dla serwisu, hooków i komponentów:
+
+```typescript
+// src/schemas/template-schema.ts — ciąg dalszy
+export const templateEntitySchema = templateSchema.extend({
+    id: z.uuid(),
+    isFavorite: z.boolean(),
+});
+
+export type Template = z.output<typeof templateEntitySchema>;
 ```
 
 ### Walidacja Warunkowa
-```typescript
-const paymentSchema = z.object({
-    method: z.enum(['card', 'transfer', 'blik']),
-    cardNumber: z.string().optional(),
-    bankAccount: z.string().optional(),
-}).refine(
-    (data) => {
-        if (data.method === 'card') return !!data.cardNumber;
-        if (data.method === 'transfer') return !!data.bankAccount;
-        return true;
-    },
-    {
-        message: 'Uzupełnij dane płatności',
-        path: ['cardNumber'], // Gdzie pokazać błąd
-    }
-);
 
-// Lub superRefine dla wielu błędów
+Pola zależne od wyboru opisujesz unią dyskryminowaną, nie zestawem pól opcjonalnych z `refine`: typ wymaga numeru karty tylko przy `method: 'card'`, kod po zawężeniu `method` widzi właściwe pole, a błąd trafia do niego bez ręcznego `path`.
+```typescript
+const paymentSchema = z.discriminatedUnion('method', [
+    z.object({
+        method: z.literal('card'),
+        cardNumber: z.string().min(1, 'Uzupełnij numer karty'),
+    }),
+    z.object({
+        method: z.literal('transfer'),
+        bankAccount: z.string().min(1, 'Uzupełnij numer konta'),
+    }),
+    z.object({
+        method: z.literal('blik'),
+    }),
+]);
+
+// z.infer<typeof paymentSchema>:
+// { method: 'card'; cardNumber: string } | { method: 'transfer'; bankAccount: string } | { method: 'blik' }
+```
+
+Relację między polami (np. powtórzone hasło) sprawdzasz w `superRefine`, który dodaje błąd do wskazanego pola:
+```typescript
 const schema = z.object({
     password: z.string(),
     confirmPassword: z.string(),
 }).superRefine((data, ctx) => {
     if (data.password !== data.confirmPassword) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: 'custom',
             message: 'Hasła nie są identyczne',
             path: ['confirmPassword'],
         });
@@ -236,46 +301,87 @@ const schema = z.object({
 
 ## Integracja z React Query
 
-### useMutation dla Submit
+### Hooki szablonów (zapytanie, mutacje, klucze)
+
+Definicje `useQuery`/`useMutation` leżą w hooku, który woła serwis; formularz wywołuje tylko hook. Wszystkie hooki szablonów stoją w jednym pliku `src/hooks/use-templates.ts`: fabrykę kluczy `templateKeys`, `TEMPLATES_STALE_TIME_MS`, `templateListOptions`, `useTemplates(filters = {})`, `useSuspenseTemplates` i `useTemplate(id)` definiuje [performance.md](./performance.md#react-query-rekomendowane-dla-spa), a mutacje formularza — ten plik. `onSuccess` zwraca promise invalidacji, więc mutacja kończy się dopiero po odświeżeniu danych. `invalidateQueries({ queryKey: templateKeys.all })` odświeża listę i szczegóły naraz, bo oba klucze zaczynają się od `templateKeys.all`.
 ```typescript
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
+// src/hooks/use-templates.ts (cd.) — mutacje formularza; templateKeys stoi wyżej w tym samym pliku
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
-export function CreateTemplateForm({ onSuccess }: { onSuccess?: () => void }) {
+import { logger } from '@/lib/logger';
+import type { TemplateValues } from '@/schemas/template-schema';
+import { templateService } from '@/services/template-service';
+
+export function useCreateTemplate() {
     const queryClient = useQueryClient();
-
-    const {
-        register,
-        handleSubmit,
-        formState: { errors },
-        reset,
-    } = useForm<TemplateForm>({
-        resolver: zodResolver(templateSchema),
-    });
-
-    const mutation = useMutation({
-        mutationFn: api.createTemplate,
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['templates'] });
-            reset();
-            toast.success('Szablon utworzony!');
-            onSuccess?.();
-        },
+    return useMutation({
+        mutationFn: (values: TemplateValues) => templateService.create(values),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: templateKeys.all }),
         onError: (error) => {
+            logger.error('TEMPLATE_CREATE_FAILED', error);
             toast.error('Nie udało się utworzyć szablonu');
         },
     });
+}
+
+export function useUpdateTemplate(templateId: string) {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationFn: (values: TemplateValues) => templateService.update(templateId, values),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: templateKeys.all }),
+        onError: (error) => {
+            logger.error('TEMPLATE_UPDATE_FAILED', error);
+            toast.error('Nie udało się zapisać zmian');
+        },
+    });
+}
+```
+
+### useMutation dla Submit
+```typescript
+// src/components/create-template-form.tsx
+import { zodResolver } from '@hookform/resolvers/zod';
+import { Loader2 } from 'lucide-react';
+import { useForm } from 'react-hook-form';
+import { toast } from 'sonner';
+
+import { Button } from '@/components/ui/button';
+import { useCreateTemplate } from '@/hooks/use-templates';
+import {
+    TEMPLATE_DEFAULT_VALUES,
+    templateSchema,
+    type TemplateFormInput,
+    type TemplateValues,
+} from '@/schemas/template-schema';
+
+export function CreateTemplateForm({ onSuccess }: { onSuccess?: () => void }) {
+    const createTemplate = useCreateTemplate();
+    // Wejście schematu dla pól, wyjście dla handleSubmit (sekcja „Typ formularza: wejście i wyjście schematu”)
+    const { register, handleSubmit, formState: { errors }, reset } = useForm<TemplateFormInput, unknown, TemplateValues>({
+        resolver: zodResolver(templateSchema),
+        mode: 'onTouched',
+        defaultValues: TEMPLATE_DEFAULT_VALUES,
+    });
+
+    const handleValidSubmit = (values: TemplateValues) => {
+        createTemplate.mutate(values, {
+            onSuccess: () => {
+                reset();
+                toast.success('Szablon utworzony!');
+                onSuccess?.();
+            },
+        });
+    };
 
     return (
-        <form onSubmit={handleSubmit((data) => mutation.mutate(data))}>
-            {/* Pola formularza */}
+        <form onSubmit={(event) => void handleSubmit(handleValidSubmit)(event)}>
+            {/* Pola formularza: register(...) i errors jak w ContactForm */}
 
-            <Button type="submit" disabled={mutation.isPending}>
-                {mutation.isPending ? (
+            <Button type="submit" disabled={createTemplate.isPending}>
+                {createTemplate.isPending ? (
                     <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
                         Tworzenie...
                     </>
                 ) : (
@@ -289,33 +395,47 @@ export function CreateTemplateForm({ onSuccess }: { onSuccess?: () => void }) {
 
 ### Edycja z Prefill
 ```typescript
+// src/components/edit-template-form.tsx
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useForm } from 'react-hook-form';
+import { toast } from 'sonner';
+
+import { FormSkeleton } from '@/components/form-skeleton';
+import { Button } from '@/components/ui/button';
+import { useTemplate, useUpdateTemplate } from '@/hooks/use-templates';
+import { templateSchema, type TemplateFormInput, type TemplateValues } from '@/schemas/template-schema';
+
 export function EditTemplateForm({ templateId }: { templateId: string }) {
-    const queryClient = useQueryClient();
+    const template = useTemplate(templateId);
+    const updateTemplate = useUpdateTemplate(templateId);
 
-    // Pobierz dane do edycji
-    const { data: template, isLoading } = useQuery({
-        queryKey: ['template', templateId],
-        queryFn: () => api.getTemplate(templateId),
-    });
-
-    const form = useForm<TemplateForm>({
+    const form = useForm<TemplateFormInput, unknown, TemplateValues>({
         resolver: zodResolver(templateSchema),
-        values: template, // Automatycznie wypełnia gdy dane się załadują
+        mode: 'onTouched',
+        values: template.data, // Wypełnia formularz, gdy dane się załadują
     });
 
-    const mutation = useMutation({
-        mutationFn: (data: TemplateForm) => api.updateTemplate(templateId, data),
-        onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['templates'] });
-            queryClient.invalidateQueries({ queryKey: ['template', templateId] });
-            toast.success('Zapisano zmiany');
-        },
-    });
+    const handleValidSubmit = (values: TemplateValues) => {
+        updateTemplate.mutate(values, {
+            onSuccess: () => toast.success('Zapisano zmiany'),
+        });
+    };
 
-    if (isLoading) return <FormSkeleton />;
+    if (template.isPending) return <FormSkeleton />;
+
+    if (template.isError) {
+        return (
+            <div role="alert" className="space-y-2">
+                <p className="text-sm text-destructive">Nie udało się wczytać szablonu</p>
+                <Button variant="outline" onClick={() => void template.refetch()}>
+                    Spróbuj ponownie
+                </Button>
+            </div>
+        );
+    }
 
     return (
-        <form onSubmit={form.handleSubmit((data) => mutation.mutate(data))}>
+        <form onSubmit={(event) => void form.handleSubmit(handleValidSubmit)(event)}>
             {/* ... */}
         </form>
     );
@@ -326,8 +446,9 @@ export function EditTemplateForm({ templateId }: { templateId: string }) {
 
 ## Komponent FormField (Reużywalny)
 ```typescript
-// components/FormField.tsx
+// src/components/form-field.tsx
 import { type FieldError } from 'react-hook-form';
+
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 
@@ -335,7 +456,7 @@ interface FormFieldProps {
     name: string;
     label: string;
     error?: FieldError;
-    required?: boolean;
+    isRequired?: boolean;
     children: React.ReactNode;
     description?: string;
 }
@@ -344,7 +465,7 @@ export function FormField({
     name,
     label,
     error,
-    required,
+    isRequired,
     children,
     description,
 }: FormFieldProps) {
@@ -353,7 +474,7 @@ export function FormField({
 
     return (
         <div className="space-y-2">
-            <Label htmlFor={name} className={cn(required && "after:content-['*'] after:ml-0.5 after:text-destructive")}>
+            <Label htmlFor={name} className={cn(isRequired && "after:content-['*'] after:ml-0.5 after:text-destructive")}>
                 {label}
             </Label>
             
@@ -375,12 +496,12 @@ export function FormField({
 }
 
 // Użycie
-<FormField name="email" label="Email" error={errors.email} required>
+<FormField name="email" label="Email" error={errors.email} isRequired>
     <Input
         id="email"
         type="email"
         {...register('email')}
-        aria-invalid={!!errors.email}
+        aria-invalid={errors.email ? true : undefined}
         aria-describedby={errors.email ? 'email-error' : undefined}
     />
 </FormField>
@@ -391,27 +512,44 @@ export function FormField({
 ## Kontrolowane Komponenty (Select, Checkbox, Radio)
 
 ### useController dla Custom Components
-```typescript
-import { useForm, useController, type Control } from 'react-hook-form';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-interface ControlledSelectProps {
-    name: string;
-    control: Control<any>;
+Komponent jest generyczny po typie wartości formularza: `Control<T>` i `FieldPath<T>` zamiast `Control<any>`, więc literówka w `name` to błąd kompilacji. `field.value` ma typ zależny od `T`, dlatego zawężasz go type guardem do typu, którego oczekuje kontrolka.
+```typescript
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useController, useForm, type Control, type FieldPath, type FieldValues } from 'react-hook-form';
+
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+    TEMPLATE_DEFAULT_VALUES,
+    templateSchema,
+    type TemplateFormInput,
+    type TemplateValues,
+} from '@/schemas/template-schema';
+
+interface ControlledSelectProps<T extends FieldValues> {
+    name: FieldPath<T>;
+    control: Control<T>;
     options: { value: string; label: string }[];
     placeholder?: string;
 }
 
-function ControlledSelect({ name, control, options, placeholder }: ControlledSelectProps) {
+function ControlledSelect<T extends FieldValues>({ name, control, options, placeholder }: ControlledSelectProps<T>) {
     const {
         field,
         fieldState: { error },
     } = useController({ name, control });
+    const value = typeof field.value === 'string' ? field.value : undefined;
+    const errorId = `${name}-error`;
 
     return (
         <div className="space-y-2">
-            <Select value={field.value} onValueChange={field.onChange}>
-                <SelectTrigger aria-invalid={!!error}>
+            <Select value={value} onValueChange={field.onChange}>
+                {/* ref z useController pozwala RHF ustawić fokus na polu z błędem */}
+                <SelectTrigger
+                    ref={field.ref}
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? errorId : undefined}
+                >
                     <SelectValue placeholder={placeholder} />
                 </SelectTrigger>
                 <SelectContent>
@@ -423,7 +561,7 @@ function ControlledSelect({ name, control, options, placeholder }: ControlledSel
                 </SelectContent>
             </Select>
             {error && (
-                <p role="alert" className="text-sm text-destructive">
+                <p id={errorId} role="alert" className="text-sm text-destructive">
                     {error.message}
                 </p>
             )}
@@ -431,9 +569,10 @@ function ControlledSelect({ name, control, options, placeholder }: ControlledSel
     );
 }
 
-// Użycie
-const { control, handleSubmit } = useForm<FormData>({
-    resolver: zodResolver(schema),
+// Użycie — T wynika z `control`, więc `name` podpowiada tylko pola formularza szablonu
+const { control, handleSubmit } = useForm<TemplateFormInput, unknown, TemplateValues>({
+    resolver: zodResolver(templateSchema),
+    defaultValues: TEMPLATE_DEFAULT_VALUES,
 });
 
 <ControlledSelect
@@ -449,18 +588,23 @@ const { control, handleSubmit } = useForm<FormData>({
 
 ### Checkbox Group
 ```typescript
-import { useController, type Control } from 'react-hook-form';
+import { useController, type Control, type FieldPath, type FieldValues } from 'react-hook-form';
+
 import { Checkbox } from '@/components/ui/checkbox';
 
-interface CheckboxGroupProps {
-    name: string;
-    control: Control<any>;
+interface CheckboxGroupProps<T extends FieldValues> {
+    name: FieldPath<T>;
+    control: Control<T>;
     options: { value: string; label: string }[];
 }
 
-function CheckboxGroup({ name, control, options }: CheckboxGroupProps) {
+function isStringArray(value: unknown): value is string[] {
+    return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function CheckboxGroup<T extends FieldValues>({ name, control, options }: CheckboxGroupProps<T>) {
     const { field, fieldState: { error } } = useController({ name, control });
-    const values: string[] = field.value || [];
+    const values = isStringArray(field.value) ? field.value : [];
 
     const handleChange = (value: string, checked: boolean) => {
         if (checked) {
@@ -476,7 +620,7 @@ function CheckboxGroup({ name, control, options }: CheckboxGroupProps) {
                 <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
                     <Checkbox
                         checked={values.includes(opt.value)}
-                        onCheckedChange={(checked) => handleChange(opt.value, !!checked)}
+                        onCheckedChange={(checked) => handleChange(opt.value, checked === true)}
                     />
                     <span className="text-sm">{opt.label}</span>
                 </label>
@@ -494,11 +638,20 @@ function CheckboxGroup({ name, control, options }: CheckboxGroupProps) {
 ---
 
 ## Multi-Step Forms (Wizard)
+
+Pola każdego kroku trzymasz w stałej `STEP_FIELDS` (`as const satisfies`): `trigger` dostaje nazwy pól sprawdzone przez kompilator, bez rzutowania `Object.keys(...) as ...`. Utworzenie konta idzie przez hook `useCreateAccount()` (mutacja z logiem błędu, wzorzec jak `useSendContact`). `FormField` to komponent z sekcji „Komponent FormField”, a `StepIndicator` — z sekcji „Step Indicator” niżej; `Step2` i `Step3` są zbudowane jak `Step1`.
 ```typescript
-import { useState } from 'react';
-import { useForm, FormProvider, useFormContext } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { useState } from 'react';
+import { FormProvider, useForm, useFormContext, type FieldPath } from 'react-hook-form';
+import { toast } from 'sonner';
 import { z } from 'zod';
+
+import { FormField } from '@/components/form-field';
+import { StepIndicator } from '@/components/step-indicator';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { useCreateAccount } from '@/hooks/use-create-account';
 
 // Schema dla każdego kroku
 const step1Schema = z.object({
@@ -513,101 +666,136 @@ const step2Schema = z.object({
 
 const step3Schema = z.object({
     plan: z.enum(['free', 'pro', 'enterprise']),
-    terms: z.literal(true, { error: 'Musisz zaakceptować regulamin' }),
+    // boolean z refine zamiast z.literal(true): wartość domyślna false zgadza się z typem formularza
+    terms: z.boolean().refine((value) => value, { error: 'Musisz zaakceptować regulamin' }),
 });
 
 // Pełna schema (Zod v4: .extend(shape) zamiast .merge(schema))
 const fullSchema = step1Schema.extend(step2Schema.shape).extend(step3Schema.shape);
-type WizardForm = z.infer<typeof fullSchema>;
+type WizardValues = z.infer<typeof fullSchema>;
 
-// Schema dla każdego kroku (do walidacji częściowej)
-const stepSchemas = [step1Schema, step2Schema, step3Schema];
+// Pola każdego kroku (do walidacji częściowej przez trigger)
+const STEP_FIELDS = [
+    ['name', 'email'],
+    ['company', 'role'],
+    ['plan', 'terms'],
+] as const satisfies readonly (readonly FieldPath<WizardValues>[])[];
+
+const LAST_STEP = STEP_FIELDS.length - 1;
+
+const WIZARD_DEFAULT_VALUES: WizardValues = {
+    name: '',
+    email: '',
+    company: '',
+    role: '',
+    plan: 'free',
+    terms: false,
+};
 
 export function WizardForm() {
     const [step, setStep] = useState(0);
+    const createAccount = useCreateAccount();
 
-    const methods = useForm<WizardForm>({
+    const methods = useForm<WizardValues>({
         resolver: zodResolver(fullSchema),
         mode: 'onChange',
-        defaultValues: {
-            name: '',
-            email: '',
-            company: '',
-            role: '',
-            plan: 'free',
-            terms: false,
-        },
+        defaultValues: WIZARD_DEFAULT_VALUES,
     });
 
     const { handleSubmit, trigger } = methods;
 
-    const nextStep = async () => {
+    const handleNextStep = async () => {
         // Waliduj tylko pola z bieżącego kroku
-        const fields = Object.keys(stepSchemas[step].shape) as (keyof WizardForm)[];
-        const isValid = await trigger(fields);
-        
+        const isValid = await trigger(STEP_FIELDS[step]);
         if (isValid) {
-            setStep((s) => Math.min(s + 1, stepSchemas.length - 1));
+            setStep((current) => Math.min(current + 1, LAST_STEP));
         }
     };
 
-    const prevStep = () => {
-        setStep((s) => Math.max(s - 1, 0));
+    const handlePreviousStep = () => {
+        setStep((current) => Math.max(current - 1, 0));
     };
 
-    const onSubmit = async (data: WizardForm) => {
-        await api.createAccount(data);
-        toast.success('Konto utworzone!');
+    const handleValidSubmit = (values: WizardValues) => {
+        createAccount.mutate(values, {
+            onSuccess: () => toast.success('Konto utworzone!'),
+        });
     };
 
     return (
         <FormProvider {...methods}>
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+            <form onSubmit={(event) => void handleSubmit(handleValidSubmit)(event)} className="space-y-6">
                 {/* Progress */}
-                <StepIndicator currentStep={step} totalSteps={3} />
+                <StepIndicator currentStep={step} totalSteps={STEP_FIELDS.length} />
 
                 {/* Kroki */}
                 {step === 0 && <Step1 />}
                 {step === 1 && <Step2 />}
                 {step === 2 && <Step3 />}
 
-                {/* Nawigacja */}
-                <div className="flex justify-between">
-                    <Button
-                        type="button"
-                        variant="outline"
-                        onClick={prevStep}
-                        disabled={step === 0}
-                    >
-                        Wstecz
-                    </Button>
-
-                    {step < stepSchemas.length - 1 ? (
-                        <Button type="button" onClick={nextStep}>
-                            Dalej
-                        </Button>
-                    ) : (
-                        <Button type="submit">
-                            Zakończ
-                        </Button>
-                    )}
-                </div>
+                <WizardNavigation
+                    isFirstStep={step === 0}
+                    isLastStep={step === LAST_STEP}
+                    isSubmitting={createAccount.isPending}
+                    onPrevious={handlePreviousStep}
+                    onNext={() => void handleNextStep()}
+                />
             </form>
         </FormProvider>
     );
 }
 
+interface WizardNavigationProps {
+    isFirstStep: boolean;
+    isLastStep: boolean;
+    isSubmitting: boolean;
+    onPrevious: () => void;
+    onNext: () => void;
+}
+
+// Nawigacja jako osobny komponent: krok formularza i przyciski mają osobne odpowiedzialności
+function WizardNavigation({ isFirstStep, isLastStep, isSubmitting, onPrevious, onNext }: WizardNavigationProps) {
+    return (
+        <div className="flex justify-between">
+            <Button type="button" variant="outline" onClick={onPrevious} disabled={isFirstStep}>
+                Wstecz
+            </Button>
+
+            {isLastStep ? (
+                <Button type="submit" disabled={isSubmitting}>
+                    Zakończ
+                </Button>
+            ) : (
+                <Button type="button" onClick={onNext}>
+                    Dalej
+                </Button>
+            )}
+        </div>
+    );
+}
+
 // Komponenty kroków używają useFormContext
 function Step1() {
-    const { register, formState: { errors } } = useFormContext<WizardForm>();
+    const { register, formState: { errors } } = useFormContext<WizardValues>();
 
     return (
         <div className="space-y-4">
-            <FormField name="name" label="Imię" error={errors.name} required>
-                <Input id="name" {...register('name')} />
+            <FormField name="name" label="Imię" error={errors.name} isRequired>
+                <Input
+                    id="name"
+                    {...register('name')}
+                    aria-invalid={errors.name ? true : undefined}
+                    aria-describedby={errors.name ? 'name-error' : undefined}
+                />
             </FormField>
-            <FormField name="email" label="Email" error={errors.email} required>
-                <Input id="email" type="email" {...register('email')} />
+            <FormField name="email" label="Email" error={errors.email} isRequired>
+                <Input
+                    id="email"
+                    type="email"
+                    {...register('email')}
+                    aria-invalid={errors.email ? true : undefined}
+                    aria-describedby={errors.email ? 'email-error' : undefined}
+                />
             </FormField>
         </div>
     );
@@ -616,7 +804,9 @@ function Step1() {
 
 ### Step Indicator
 ```typescript
+// src/components/step-indicator.tsx
 import { Check } from 'lucide-react';
+
 import { cn } from '@/lib/utils';
 
 interface StepIndicatorProps {
@@ -667,106 +857,86 @@ export function StepIndicator({ currentStep, totalSteps, labels }: StepIndicator
 ## Upload Plików
 
 ### Schema z File
-```typescript
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
-const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
-const uploadSchema = z.object({
+Zod v4 ma `z.file()` z wbudowanymi sprawdzeniami rozmiaru (`.max`) i typu MIME (`.mime`), więc nie potrzebujesz `z.instanceof(File)` z ręcznymi `refine`.
+```typescript
+// src/schemas/upload-schema.ts
+import { z } from 'zod';
+
+export const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+export const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+
+export const uploadSchema = z.object({
     title: z.string().min(1, 'Wymagane'),
     file: z
-        .instanceof(File, { message: 'Wybierz plik' })
-        .refine((file) => file.size <= MAX_FILE_SIZE, 'Maksymalny rozmiar to 5MB')
-        .refine(
-            (file) => ACCEPTED_IMAGE_TYPES.includes(file.type),
-            'Dozwolone formaty: JPG, PNG, WebP'
-        ),
+        .file({ error: 'Wybierz plik' })
+        .max(MAX_FILE_SIZE_BYTES, 'Maksymalny rozmiar to 5 MB')
+        .mime([...ACCEPTED_IMAGE_TYPES], 'Dozwolone formaty: JPG, PNG, WebP'),
 });
 
+export type UploadValues = z.infer<typeof uploadSchema>;
+
 // Dla opcjonalnego pliku
-const optionalFileSchema = z
-    .instanceof(File)
-    .refine((file) => file.size <= MAX_FILE_SIZE, 'Max 5MB')
+export const optionalFileSchema = z
+    .file()
+    .max(MAX_FILE_SIZE_BYTES, 'Maksymalny rozmiar to 5 MB')
     .optional();
 ```
 
 ### Kontrolowany File Input
-```typescript
-import { useForm, useController } from 'react-hook-form';
-import { Upload, X } from 'lucide-react';
 
-function FileUploadForm() {
-    const { control, handleSubmit, formState: { errors } } = useForm<UploadForm>({
+Podgląd obrazka to adres `blob:` z `URL.createObjectURL`; efekt zwalnia go przy zmianie pliku i przy odmontowaniu, więc podgląd nie zostaje w pamięci. Input pliku ma klasę `sr-only` (nie `hidden`), żeby był osiągalny klawiaturą, a przycisk usuwania ma widoczne 24×24 px, a pole trafienia rozszerzone pseudo-elementem według wzorca z [accessibility.md](../../ux-ui-guidelines/resources/accessibility.md) (sekcja Rozmiar celu): `after:-inset-0.5` daje próg WCAG 2.2 AA (24 px) z zapasem, a `pointer-coarse:after:-inset-3` — ponad 44 px na ekranie dotykowym.
+```typescript
+import { zodResolver } from '@hookform/resolvers/zod';
+import { Upload, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useController, useForm } from 'react-hook-form';
+
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { useUploadFile } from '@/hooks/use-upload-file';
+import { cn } from '@/lib/utils';
+import { ACCEPTED_IMAGE_TYPES, uploadSchema, type UploadValues } from '@/schemas/upload-schema';
+
+export function FileUploadForm() {
+    const uploadFile = useUploadFile();
+    const { control, handleSubmit } = useForm<UploadValues>({
         resolver: zodResolver(uploadSchema),
     });
-
     const { field, fieldState } = useController({ name: 'file', control });
     const [preview, setPreview] = useState<string | null>(null);
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            field.onChange(file);
-            
-            // Preview dla obrazów
-            if (file.type.startsWith('image/')) {
-                const url = URL.createObjectURL(file);
-                setPreview(url);
-            }
-        }
+    useEffect(() => {
+        if (!preview) return;
+        return () => URL.revokeObjectURL(preview);
+    }, [preview]);
+
+    const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        field.onChange(file);
+        // Preview dla obrazów
+        setPreview(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
     };
 
     const handleRemove = () => {
         field.onChange(undefined);
-        if (preview) {
-            URL.revokeObjectURL(preview);
-            setPreview(null);
-        }
+        setPreview(null);
+    };
+
+    const handleValidSubmit = (values: UploadValues) => {
+        uploadFile.mutate(values.file);
     };
 
     return (
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <form onSubmit={(event) => void handleSubmit(handleValidSubmit)(event)} className="space-y-4">
             <div className="space-y-2">
                 <Label>Plik</Label>
-                
-                {!field.value ? (
-                    <label
-                        className={cn(
-                            "flex flex-col items-center justify-center w-full h-32",
-                            "border-2 border-dashed rounded-lg cursor-pointer",
-                            "hover:bg-muted/50 transition-colors",
-                            fieldState.error && "border-destructive"
-                        )}
-                    >
-                        <Upload className="h-8 w-8 text-muted-foreground mb-2" />
-                        <span className="text-sm text-muted-foreground">
-                            Kliknij lub przeciągnij plik
-                        </span>
-                        <input
-                            type="file"
-                            className="hidden"
-                            accept={ACCEPTED_IMAGE_TYPES.join(',')}
-                            onChange={handleFileChange}
-                        />
-                    </label>
+                {field.value ? (
+                    <FilePreview preview={preview} onRemove={handleRemove} />
                 ) : (
-                    <div className="relative inline-block">
-                        {preview && (
-                            <img
-                                src={preview}
-                                alt="Preview"
-                                className="h-32 w-32 object-cover rounded-lg"
-                            />
-                        )}
-                        <button
-                            type="button"
-                            onClick={handleRemove}
-                            className="absolute -top-2 -right-2 p-1 bg-destructive text-destructive-foreground rounded-full"
-                        >
-                            <X className="h-4 w-4" />
-                        </button>
-                    </div>
+                    <FileDropzone hasError={fieldState.error !== undefined} onChange={handleFileChange} />
                 )}
-
                 {fieldState.error && (
                     <p role="alert" className="text-sm text-destructive">
                         {fieldState.error.message}
@@ -774,57 +944,185 @@ function FileUploadForm() {
                 )}
             </div>
 
-            <Button type="submit">Wyślij</Button>
+            <Button type="submit" disabled={uploadFile.isPending}>Wyślij</Button>
         </form>
+    );
+}
+
+interface FileDropzoneProps {
+    hasError: boolean;
+    onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+}
+
+function FileDropzone({ hasError, onChange }: FileDropzoneProps) {
+    return (
+        <label
+            className={cn(
+                "flex flex-col items-center justify-center w-full h-32",
+                "border-2 border-dashed rounded-lg cursor-pointer",
+                "hover:bg-muted/50 transition-colors focus-within:ring-2 focus-within:ring-ring",
+                hasError && "border-destructive"
+            )}
+        >
+            <Upload className="h-8 w-8 text-muted-foreground mb-2" aria-hidden="true" />
+            <span className="text-sm text-muted-foreground">
+                Kliknij lub przeciągnij plik
+            </span>
+            <input
+                type="file"
+                className="sr-only"
+                accept={ACCEPTED_IMAGE_TYPES.join(',')}
+                onChange={onChange}
+            />
+        </label>
+    );
+}
+
+function FilePreview({ preview, onRemove }: { preview: string | null; onRemove: () => void }) {
+    return (
+        <div className="relative inline-block">
+            {preview && (
+                <img
+                    src={preview}
+                    alt="Podgląd wybranego pliku"
+                    className="h-32 w-32 object-cover rounded-lg"
+                />
+            )}
+            <button
+                type="button"
+                onClick={onRemove}
+                aria-label="Usuń plik"
+                className={cn(
+                    "absolute -top-2 -right-2 flex size-6 items-center justify-center rounded-full",
+                    "bg-destructive text-destructive-foreground",
+                    // Pole trafienia: bazowo 24 px+, na dotyku 44 px+ przy widocznych 24×24 px
+                    "after:absolute after:-inset-0.5 after:content-[''] pointer-coarse:after:-inset-3"
+                )}
+            >
+                <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+        </div>
     );
 }
 ```
 
 ### Upload z Progress
+
+Odpowiedź serwera ma kopertę `{ data, error: { code, message } }`, którą parsujesz `z.strictObject`; przy `error` rzucasz `ApiError` z kodem. Klient JSON z [file-organization.md](./file-organization.md) ustawia nagłówek JSON, dlatego upload `FormData` ma własne wywołanie — z tymi samymi zasadami: limit czasu, parsowanie Zod, typowany błąd.
 ```typescript
-const uploadMutation = useMutation({
-    mutationFn: async (file: File) => {
-        const formData = new FormData();
-        formData.append('file', file);
+// src/services/upload-service.ts
+import { z } from 'zod';
 
-        const response = await fetch('/api/upload', {
-            method: 'POST',
-            body: formData,
-        });
+import { ApiError } from '@/lib/errors';
 
-        if (!response.ok) throw new Error('Upload failed');
-        return response.json();
-    },
+const UPLOAD_URL = '/api/upload';
+const UPLOAD_TIMEOUT_MS = 60_000;
+
+const uploadResultSchema = z.strictObject({
+    url: z.url(),
+    size: z.number().int().nonnegative(),
 });
 
-// Dla progress potrzebujesz XMLHttpRequest lub axios
-const uploadWithProgress = (file: File, onProgress: (percent: number) => void) => {
+export type UploadResult = z.infer<typeof uploadResultSchema>;
+
+const uploadEnvelopeSchema = z.strictObject({
+    data: uploadResultSchema.nullable(),
+    error: z.strictObject({ code: z.string(), message: z.string() }).nullable(),
+});
+
+function parseUploadResponse(status: number, body: unknown): UploadResult {
+    const envelope = uploadEnvelopeSchema.safeParse(body);
+    if (!envelope.success) {
+        throw new ApiError('UPLOAD_INVALID_RESPONSE', 'Nieprawidłowa odpowiedź serwera', status);
+    }
+    const { data, error } = envelope.data;
+    if (error) throw new ApiError(error.code, error.message, status);
+    if (!data) throw new ApiError('UPLOAD_EMPTY_RESPONSE', 'Odpowiedź bez danych', status);
+    return data;
+}
+
+function toFormData(file: File): FormData {
+    const formData = new FormData();
+    formData.append('file', file);
+    return formData;
+}
+
+async function postFormData(file: File): Promise<Response> {
+    try {
+        return await fetch(UPLOAD_URL, {
+            method: 'POST',
+            body: toFormData(file),
+            signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+        });
+    } catch (error) {
+        // Ten sam kod co w wariancie XHR niżej i to samo mapowanie co w request() (file-organization.md)
+        if (error instanceof DOMException && error.name === 'TimeoutError') {
+            throw new ApiError('UPLOAD_TIMEOUT', 'Przekroczono limit czasu wysyłki');
+        }
+        throw error; // Błąd sieci idzie dalej bez zmian, do onError mutacji
+    }
+}
+
+export async function uploadFile(file: File): Promise<UploadResult> {
+    const response = await postFormData(file);
+    if (!response.headers.get('content-type')?.includes('application/json')) {
+        throw new ApiError('UPLOAD_INVALID_RESPONSE', 'Odpowiedź serwera nie jest JSON', response.status);
+    }
+    const body: unknown = await response.json();
+    return parseUploadResponse(response.status, body);
+}
+
+// Dla progress potrzebujesz XMLHttpRequest (fetch nie raportuje postępu wysyłki)
+export function uploadFileWithProgress(file: File, onProgress: (percent: number) => void): Promise<UploadResult> {
     return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        
-        xhr.upload.addEventListener('progress', (e) => {
-            if (e.lengthComputable) {
-                onProgress(Math.round((e.loaded / e.total) * 100));
+        xhr.timeout = UPLOAD_TIMEOUT_MS;
+        xhr.responseType = 'json';
+
+        xhr.upload.addEventListener('progress', (event) => {
+            if (event.lengthComputable) {
+                onProgress(Math.round((event.loaded / event.total) * 100));
             }
         });
 
         xhr.addEventListener('load', () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-                resolve(JSON.parse(xhr.responseText));
-            } else {
-                reject(new Error('Upload failed'));
+            try {
+                const body: unknown = xhr.response;
+                resolve(parseUploadResponse(xhr.status, body));
+            } catch (error) {
+                reject(error); // Błąd idzie dalej, do onError mutacji
             }
         });
 
-        xhr.addEventListener('error', () => reject(new Error('Upload failed')));
+        xhr.addEventListener('error', () => {
+            reject(new ApiError('UPLOAD_NETWORK_ERROR', 'Błąd sieci podczas wysyłki'));
+        });
+        xhr.addEventListener('timeout', () => {
+            reject(new ApiError('UPLOAD_TIMEOUT', 'Przekroczono limit czasu wysyłki'));
+        });
 
-        const formData = new FormData();
-        formData.append('file', file);
-
-        xhr.open('POST', '/api/upload');
-        xhr.send(formData);
+        xhr.open('POST', UPLOAD_URL);
+        xhr.send(toFormData(file));
     });
-};
+}
+```
+```typescript
+// src/hooks/use-upload-file.ts
+import { useMutation } from '@tanstack/react-query';
+import { toast } from 'sonner';
+
+import { logger } from '@/lib/logger';
+import { uploadFile } from '@/services/upload-service';
+
+export function useUploadFile() {
+    return useMutation({
+        mutationFn: (file: File) => uploadFile(file),
+        onError: (error) => {
+            logger.error('UPLOAD_FAILED', error);
+            toast.error('Nie udało się wysłać pliku');
+        },
+    });
+}
 ```
 
 ---
@@ -832,11 +1130,13 @@ const uploadWithProgress = (file: File, onProgress: (percent: number) => void) =
 ## Dostępność (A11y)
 
 ### Wymagane Atrybuty
+
+Komunikat błędu wiążesz z polem przez `aria-describedby` — ma najszersze wsparcie czytników ekranu; `aria-errormessage` możesz dodać jako uzupełnienie, nie zamiast. `aria-invalid` ustawiasz tylko przy błędzie (`undefined` usuwa atrybut z DOM).
 ```typescript
 <Input
     id="email"                                    // Powiązanie z Label
     {...register('email')}
-    aria-invalid={!!errors.email}                 // Stan błędu
+    aria-invalid={errors.email ? true : undefined} // Stan błędu (bez błędu atrybutu nie ma)
     aria-describedby={errors.email ? 'email-error' : undefined}  // Powiązanie z komunikatem
     aria-required="true"                          // Wymagane pole
 />
@@ -853,23 +1153,23 @@ const uploadWithProgress = (file: File, onProgress: (percent: number) => void) =
 ```
 
 ### Focus na Pierwszym Błędzie
+
+React Hook Form sam ustawia fokus na pierwszym polu z błędem po nieudanym submit (`shouldFocusError: true` jest domyślne), więc nie szukasz pierwszego błędu ręcznie przez `Object.keys(errors)` i rzutowanie. Warunek: pole przekazuje `ref` — `register` robi to sam, a komponent kontrolowany przekazuje `field.ref` z `useController` (jak `SelectTrigger` w `ControlledSelect`).
 ```typescript
-const { handleSubmit, setFocus } = useForm<FormData>({
-    resolver: zodResolver(schema),
+const form = useForm<ContactValues>({
+    resolver: zodResolver(contactSchema),
+    shouldFocusError: true, // wartość domyślna, zapisana tu dla czytelności
 });
 
-const onSubmit = handleSubmit(
-    (data) => {
-        // Success
-    },
-    (errors) => {
-        // Focus na pierwszym błędzie
-        const firstError = Object.keys(errors)[0] as keyof FormData;
-        if (firstError) {
-            setFocus(firstError);
-        }
-    }
+// Ręczny fokus — gdy błąd przychodzi spoza walidacji schematu (np. z serwera)
+form.setError(
+    'email',
+    { type: 'server', message: 'Ten adres jest już zapisany' },
+    { shouldFocus: true }
 );
+
+// Albo fokus na konkretnym polu po akcji użytkownika
+form.setFocus('message');
 ```
 
 ### Live Validation Feedback
@@ -890,11 +1190,13 @@ const { register, formState: { errors, dirtyFields } } = useForm({
 
 | Mode | Kiedy waliduje | Użycie |
 |------|---------------|--------|
-| `onSubmit` | Tylko przy submit | Domyślne, większość formularzy |
-| `onChange` | Każda zmiana | Real-time feedback |
+| `onSubmit` | Tylko przy submit | Domyślne w RHF; błąd widać dopiero po wysłaniu |
+| `onChange` | Każda zmiana | Real-time feedback (wizard, siła hasła) |
 | `onBlur` | Opuszczenie pola | Balans UX/performance |
-| `onTouched` | Po pierwszym blur, potem onChange | Najlepszy UX |
+| `onTouched` | Po pierwszym blur, potem onChange | Domyślny wybór w tym projekcie (`ContactForm`, formularze szablonu) |
 | `all` | Wszystko | Rzadko potrzebne |
+
+Skill ux-ui-guidelines wymaga walidacji przy polu, nie tylko po wysłaniu, a domyślny tryb RHF (`onSubmit`) tego nie daje — dlatego formularze w tym pliku podają `mode: 'onTouched'` jawnie. Sam resolver Zod nie zmienia trybu: bez `mode` schemat sprawdza pola dopiero przy wysłaniu.
 ```typescript
 const form = useForm({
     resolver: zodResolver(schema),
@@ -905,29 +1207,39 @@ const form = useForm({
 ---
 
 ## Obsługa Błędów Serwera
+
+Serwer zwraca błąd w kopercie `{ data, error: { code, message } }`, a serwis rzuca `ApiError` z tym kodem. Formularz łapie konkretny typ (`instanceof ApiError`), mapuje kod na pole przez stałą mapę (bez rzutowania `as keyof`) i rozróżnia oczekiwaną odmowę (4xx z kodem biznesowym: ślad `logger.info` bez zdarzenia Sentry) od awarii (`logger.error`). Mutacja leży w hooku `useLogin()` (`mutationFn: (values: LoginValues) => authService.login(values)`); `onError` przy wywołaniu `mutate`, bo potrzebuje `form`.
 ```typescript
-const form = useForm<LoginForm>({
+const FIRST_SERVER_ERROR_STATUS = 500;
+
+// Kod błędu z API → pole formularza; kod spoza mapy trafia do błędu ogólnego (root)
+const LOGIN_FIELD_BY_ERROR_CODE: Partial<Record<string, FieldPath<LoginValues>>> = {
+    EMAIL_NOT_FOUND: 'email',
+    INVALID_PASSWORD: 'password',
+};
+
+const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
 });
+const login = useLogin();
 
-const mutation = useMutation({
-    mutationFn: api.login,
-    onError: (error: ApiError) => {
-        // Błąd konkretnego pola
-        if (error.field) {
-            form.setError(error.field as keyof LoginForm, {
-                type: 'server',
-                message: error.message,
-            });
-        } else {
-            // Błąd ogólny
-            form.setError('root', {
-                type: 'server',
-                message: error.message,
-            });
-        }
-    },
-});
+const handleLoginError = (error: Error) => {
+    const isRejection =
+        error instanceof ApiError && error.status !== undefined && error.status < FIRST_SERVER_ERROR_STATUS;
+    if (!isRejection) {
+        logger.error('LOGIN_FAILED', error);
+        form.setError('root', { type: 'server', message: 'Nie udało się zalogować. Spróbuj ponownie.' });
+        return;
+    }
+    logger.info('LOGIN_REJECTED', { status: error.status, code: error.code });
+    // Błąd konkretnego pola albo, gdy kod nie wskazuje pola, błąd ogólny
+    const field = LOGIN_FIELD_BY_ERROR_CODE[error.code] ?? 'root';
+    form.setError(field, { type: 'server', message: error.message }, { shouldFocus: true });
+};
+
+const handleValidSubmit = (values: LoginValues) => {
+    login.mutate(values, { onError: handleLoginError });
+};
 
 // Wyświetlanie błędu root
 {form.formState.errors.root && (
@@ -941,10 +1253,12 @@ const mutation = useMutation({
 
 ## Reset i Wartości Domyślne
 ```typescript
-const form = useForm<FormData>({
+// Typ wartości z nazwą domenową (ContactValues), nie `FormData` — ta nazwa przesłania globalny typ DOM
+const form = useForm<ContactValues>({
     defaultValues: {
         name: '',
         email: '',
+        message: '',
     },
 });
 
@@ -964,6 +1278,8 @@ form.reset(undefined, { keepDirtyValues: true });
 ---
 
 ## DevTools
+
+`@hookform/devtools` to osobny pakiet: sprawdź package.json, a nową zależność zgłoś (w workflowie: w odchyleniach) i instaluj jako zależność deweloperską z dokładną wersją (`pnpm add -D -E @hookform/devtools`).
 ```typescript
 // Tylko w development
 import { DevTool } from '@hookform/devtools';
