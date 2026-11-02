@@ -179,7 +179,7 @@ Format jednostki i całego planu jest w `references/szablon-planu.md` — przecz
 - **Teksty widoczne dla użytkownika** (etykiety, nagłówki, komunikaty błędów) wklejasz dosłownie w `**Teksty (verbatim):**`, nie przez odwołanie do punktu checklisty — inaczej builder wpisze własną wersję, a review zgłosi rozjazd z zamówieniem.
 - **Scenariusze testowe** — każda pozycja zaczyna się typem: `[Unit]` (test kodu), `[E2E]` (flow w przeglądarce, 3.4b), `[Manual]` (krok człowieka, np. fizyczne urządzenie). Feature-bearing IU ma plik testu w tabeli plików.
 - **Weryfikacja** — tylko kryteria, które scribe review domknie sam: każda pozycja ma komendę w backtickach (`pnpm typecheck`, `pnpm vitest run <ścieżka>`, `grep …`), opisaną oczekiwanym wynikiem. Runner z `e2e/` idzie wyłącznie jako `[E2E]` (3.4b) — bez znacznika scribe uruchomiłby go bez środowiska e2e. Krok człowieka idzie do `Operator checklist` albo `[Manual]`.
-- **Operator checklist** — kroki człowieka po implementacji (akceptacja designera, test na urządzeniu, `supabase db push` na dev/prod po merge'u). Trafiają do sekcji operatora fazy i do smoke'u operatora przy archiwizacji.
+- **Operator checklist** — kroki człowieka po implementacji (akceptacja designera, test na urządzeniu, `supabase db push --linked` na dev/prod po merge'u — w CLI 3 bez flagi celu idzie na lokalny stack). Trafiają do sekcji operatora fazy i do smoke'u operatora przy archiwizacji.
 - **Atrybuty, od których zależy widoczność, wypisujesz osobno dla każdego elementu.** Cookie (`Path`, `Domain`, `HttpOnly`, `Secure`, `SameSite`, ważność), nagłówki CORS i CSP, granty: w Podejściu każdy element ma swoją listę atrybutów, bez „jak wyżej” i „ta sama ważność”. Element czytany w innej warstwie, niż powstaje (cookie-znacznik czytany przez `document.cookie`, nagłówek czytany przez klienta), dostaje scenariusz `[Unit]` na odczyt w tej warstwie, a czyszczenie — te same `Path` i `Domain` co nadanie (inaczej przeglądarka go nie usunie). vibersi etap 5: `vibersi_gosc` z `Path=/api`, a znacznik dla klienta „ta sama ważność” — skopiowany `Path=/api` ukryłby go przed stroną.
 - **Migracja, która usuwa albo zmienia istniejące dane** (przed CHECK, `not null`, unikalnością, backfillem): w Podejściu liczba wierszy trafia do logu migracji (`get diagnostics` + `raise notice`) albo ograniczenie powstaje `not valid` i dopiero potem `validate constraint`; scenariusz `[Unit]` sprawdza seedy e2e po migracji. Baza dev bywa wspólna dla stagingu i środowiska lokalnego — ciche usunięcie znika bez śladu.
 - **Znaczniki tylko na początku pozycji.** `[E2E]`, `[Manual]`, `[Unit]`, `Operator:`, `[P1]`–`[P3]` w środku treści dokładają linię do grepów prechecku, testera i completion-gate — w treści pisz to słowami („test w przeglądarce”).
@@ -316,13 +316,14 @@ Skrypt zapisuje `docs/active/<zadanie>/<zadanie>-plan.md`, `-kontekst.md` i `-za
 node .claude/scripts/plan/plan.mjs gotowosc docs/active/<zadanie>
 ```
 
-Wynik ma pięć pozycji, każdą wypisujesz w handoffie:
+Wynik ma sześć pozycji, każdą wypisujesz w handoffie:
 
 - `plan` — błędy strukturalne planu technicznego (po 6.2 zwykle puste);
 - `e2e` — scenariusze `[E2E]` i makiety `figma_screens` vs środowisko: to samo sprawdzenie co bootstrap autopilota (`.env.e2e` w `.gitignore`, klucze bazy e2e, baza inna niż dev, `migrations.sum`, `agent-browser doctor`), bez startu serwera. Brak `.env.e2e` przy scenariuszach albo pozycja w `bledy` zatrzyma autopilota przed fazą 1 → setup albo poprawka wg `.claude/templates/e2e-env/README.md` (jednorazowo, ~30 min); przy scenariuszach druga droga to opt-out `[E2E]` → `[Manual]` w planie i ponowne `generuj --nadpisz`. Zadanie z samymi makietami bez `.env.e2e` przechodzi (porównanie z makietą idzie bez przeglądarki do operatora), a przy błędnym `.env.e2e` naprawiasz plik. `uwagi` (brak skilla weryfikacji projektu) nie blokują startu — wypisz je z komendą `/weryfikacja-setup`;
 - `przygotowanie` — `blokujace` (`[blokuje: planowanie]`, `[blokuje: faza 1]`, marker bez numeru) zatrzymują start: wypisz je z liniami i podaj drogi (odhaczyć albo świadomie usunąć marker); `odroczone` (fazy ≥ 2) generator wpisał do `## Blokery operatora per faza` w planie zadania, a autopilot zatrzyma się przed fazą N, dopóki pozycja jest nieodhaczona w checkliście — operator robi ją po fazie, która ją umożliwia, odhacza, commituje checklistę i odpala świeży run;
 - `git` — branch `feature/<zadanie>` i czyste drzewo; autopilot nie przełącza brancha i zatrzymuje się na brudnym drzewie;
-- `testy` — runner testów projektu (vitest, jest) nie zbiera testów maszynerii z `.claude/**`; `ok: false` = autopilot zatrzyma się na `npm test` na starcie → wpisz do configu `poprawka` i zacommituj.
+- `testy` — runner testów projektu (vitest, jest) nie zbiera testów maszynerii z `.claude/**`; `ok: false` = autopilot zatrzyma się na `npm test` na starcie → wpisz do configu `poprawka` i zacommituj;
+- `higiena` — nie blokuje, ale każdą `uwagi` wypisz z komendą przed startem: stara baza wiedzy (`learned-patterns.md` w `.claude/rules/`, przed konwersją: `/dev-compound-refresh --konwersja`) albo kontekst startowy agenta ponad próg (CLAUDE.md + reguły bez `paths:`) kosztują każdego agenta każdej fazy. Operator decyduje, czy porządkuje przed autopilotem; pełna lista kontroli jest w doctorze (`bash .claude/scripts/doctor/doctor.sh`).
 
 Czerwona pozycja usuwana w tej sesji (odhaczenie checklisty, opt-out, `.gitignore` po setupie e2e) zmienia śledzone pliki: zacommituj je jawnymi ścieżkami (`git add <ścieżki> && git commit -m "docs(<zadanie>): przygotowanie operatora"`) i uruchom `gotowosc` ponownie. Autopilota nie uruchamiasz przy czerwonej bramce.
 
@@ -349,6 +350,7 @@ Wypisz wynik w formacie poniżej. Gdy bramka jest zielona i użytkownik wybiera 
    - Przygotowanie: <brak / ścieżka: blokujące start B → STOP albo OK; odroczone do faz ≥ 2: K (w planie zadania)>
    - Git: <OK / brudne pozycje>
    - Testy: <OK / nie dotyczy / szczegół + poprawka configu>
+   - Higiena: <OK / uwagi z komendą — nie blokują>
 
 ➡️ Następny krok: autopilot w tej sesji:
    Workflow({ scriptPath: ".claude/workflows/dev-autopilot-wf.js", args: "docs/active/<zadanie>" })

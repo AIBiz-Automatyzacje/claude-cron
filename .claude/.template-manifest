@@ -72,10 +72,12 @@
 .claude/scripts/bramki/uruchom.mjs
 .claude/scripts/bramki/vitest-typecheck.mjs
 .claude/scripts/doctor/__tests__/doctor.test.mjs
+.claude/scripts/doctor/__tests__/higiena.test.mjs
 .claude/scripts/doctor/__tests__/runner-testow.test.mjs
 .claude/scripts/doctor/__tests__/zapis-hookow.test.mjs
 .claude/scripts/doctor/advisors.mjs
 .claude/scripts/doctor/doctor.sh
+.claude/scripts/doctor/higiena.mjs
 .claude/scripts/doctor/port-e2e.mjs
 .claude/scripts/doctor/runner-testow.mjs
 .claude/scripts/doctor/ustawienia.mjs
@@ -388,6 +390,7 @@
 .claude/workflows/__tests__/skladnia-workflowow.test.mjs
 .claude/workflows/__tests__/stan-fazy.test.mjs
 .claude/workflows/__tests__/start-koniec.test.mjs
+.claude/workflows/__tests__/supabase-cli-v3.test.mjs
 .claude/workflows/__tests__/swieza-sesja-dev-plan.test.mjs
 .claude/workflows/__tests__/szkielet-buildera.test.mjs
 .claude/workflows/__tests__/tester-e2e.test.mjs
