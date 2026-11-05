@@ -15,3 +15,10 @@ data/
 
 # Kontekst firmowy AIBIZ — wewnetrzny, nie do publicznego repo (dystrybucja: hook pluginu aibiz, tylko vaulty)
 .claude/rules/aibiz-company-context.md
+
+# Pre-check Node przed restartem serwisu — generowany per maszyna przez
+# scripts/install-vps.sh (setup_auto_update -> write_cron_node_guard), nie wersjonowany.
+# Bez tej reguły każda instalacja VPS ma permanentnie brudne drzewo robocze, a gdyby
+# kiedyś pojawił się śledzony plik pod tą ścieżką, nocny `git pull` padłby na
+# "untracked working tree file would be overwritten" i auto-update stanąłby cicho.
+scripts/cron-node-guard.sh
